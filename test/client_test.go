@@ -11,37 +11,27 @@ import (
 	"time"
 )
 
-func TestClientSendMsg_1s(t *testing.T) {
-	client, err := node.NewClient("127.0.0.1:2023")
+func getMustConn() *node.ClientConnect {
+	testClient, err := node.NewClient("127.0.0.1:2023")
+	if err != nil {
+		log.Fatalln(err)
+	}
+	testClientConn, err := testClient.Connect()
+	if err != nil {
+		log.Fatalln(err)
+	}
+	return testClientConn
+}
+
+func TestClientSend(t *testing.T) {
+	err := getMustConn().Send(1, []byte("hello word"))
 	if err != nil {
 		t.Error(err)
 		return
-	}
-	conn, err := client.Connect()
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	var c node.Counter
-	ctx, _ := context.WithTimeout(context.Background(), time.Second)
-	for {
-		c.AddRequestNum()
-		select {
-		case <-ctx.Done():
-			c.Debug()
-			return
-		default:
-			err = conn.Send(1, []byte("hello word"))
-			if err != nil {
-				c.Debug()
-				return
-			}
-			c.AddReplyNum()
-		}
 	}
 }
 
-func TestClientRequestMsg_1s(t *testing.T) {
+func TestNodeClientRequest(t *testing.T) {
 	client, err := node.NewClient("127.0.0.1:2023")
 	if err != nil {
 		t.Error(err)
@@ -52,30 +42,37 @@ func TestClientRequestMsg_1s(t *testing.T) {
 		t.Error(err)
 		return
 	}
-
-	var count node.Counter
+	defer conn.Close()
 	ctx, _ := context.WithTimeout(context.Background(), time.Second)
-	for {
-		count.AddRequestNum()
-		select {
-		case <-ctx.Done():
-			count.Debug()
-			return
-		default:
-			go func() {
-				reply, err := conn.Request(ctx, 1, []byte("request"))
-				if err != nil {
-					count.Debug()
-					fmt.Println(reply.String())
-					return
-				}
-				count.AddReplyNum()
-			}()
-		}
+	reply, err := conn.Request(ctx, 2, []byte("request"))
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Println(reply.String())
+}
+
+func TestClientTick(t *testing.T) {
+	cli, err := node.NewClient(node.DEFAULT_ServerAddress)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	cli.DetectionKeepAlive = time.Second
+	cli.KeepAlive = time.Second * 3
+	conn, err := cli.Connect()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer conn.Close()
+
+	for i := 0; i < 20; i++ {
+		time.Sleep(time.Second)
 	}
 }
 
-func TestClientRequestMsgNum(t *testing.T) {
+func TestClientSend_100W(t *testing.T) {
 	client, err := node.NewClient("127.0.0.1:2023")
 	if err != nil {
 		t.Error(err)
@@ -86,45 +83,44 @@ func TestClientRequestMsgNum(t *testing.T) {
 		t.Error(err)
 		return
 	}
-
-	var count = node.NewCounter()
-
-	ctx, _ := context.WithTimeout(context.Background(), time.Second)
-
-	for i := 0; i < 100000; i++ {
-
-		reply, err := conn.Request(ctx, 1, []byte("request"))
-		if err != nil {
-			count.Debug()
-			fmt.Println(reply.String())
-			return
-		}
-		count.AddReplyNum()
-	}
-	count.Debug()
-}
-
-func TestClient100WSend(t *testing.T) {
-	client, err := node.NewClient("127.0.0.1:2023")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	conn, err := client.Connect()
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	n := 100000
-	t1 := time.Now()
-	for i := 0; i < n; i++ {
-		err := conn.Send(1, []byte("hello server !"))
+	var c = node.NewCounter()
+	for i := 0; i < 1000000; i++ {
+		err = conn.Send(1, []byte("hello server !"))
 		if err != nil {
 			t.Error(err)
-			return
+			break
 		}
+		c.AddReplyNum()
 	}
-	fmt.Printf("执行次数 [%v] 耗时 [%v]", n, time.Since(t1))
+	c.Debug()
+}
+
+// 耗时 11.7215171s 效率 request num:[0],reply num:[100000]
+// 耗时 11.7950453s 效率 request num:[0],reply num:[100000]
+// 耗时 35.3810592s 效率 request num:[0],reply num:[300000]
+func TestClientRequest_10W(t *testing.T) {
+	client, err := node.NewClient("127.0.0.1:2023")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	conn, err := client.Connect()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	ctx, _ := context.WithTimeout(context.Background(), time.Second*40)
+	var c = node.NewCounter()
+	for i := 0; i < 1000000; i++ {
+		_, err = conn.Request(ctx, 2, []byte("hello server !"))
+		if err != nil {
+			t.Error(err)
+			break
+		}
+		c.AddReplyNum()
+	}
+	c.Debug()
+
 }
 
 // go test -bench=BenchmarkBaseTypeToBytes$   -benchtime=3s .\ -cpuprofile="BenchmarkBaseTypeToBytes_CPUV1.out"

@@ -34,7 +34,7 @@ type TestRequester struct {
 }
 
 func (s *TestRequester) GetApi() uint32 {
-	return 1
+	return 2
 }
 
 func (s *TestRequester) GetHandler() node.HandlerFunc {
@@ -47,16 +47,16 @@ func (s *TestRequester) GetHandler() node.HandlerFunc {
 	}
 }
 
-func TestServer(t *testing.T) {
+func TestNodeServer(t *testing.T) {
 	srv := node.NewServer(node.DEFAULT_ServerAddress)
-	srv.AddRouterHandler(&TestRequester{})
+	srv.AddRouterHandler(&TestRequester{}, &TestSender{})
 	err := srv.ListenAndServer()
 	if err != nil {
 		fmt.Println(err)
 	}
 }
 
-func TestServer2(t *testing.T) {
+func TestServer(t *testing.T) {
 	listen, err := net.Listen("tcp", "127.0.0.1:2024")
 	if err != nil {
 		log.Fatalln(err)

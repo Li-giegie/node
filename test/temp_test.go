@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
-	"github.com/Li-giegie/node"
 	"runtime"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestPack(t *testing.T) {
@@ -36,9 +34,35 @@ func TestGetCPUCore(t *testing.T) {
 }
 
 func TestWorkerProcess(t *testing.T) {
-	w := node.NewWorkerProcess(6)
-	w.Start()
 
-	time.Sleep(time.Second * 2)
-	w.Stop()
+}
+
+type F interface {
+	Say()
+}
+
+type Father struct {
+	c Child
+}
+
+func (a Father) Say() {
+	fmt.Println("father")
+}
+
+type Child struct {
+	F
+}
+
+func (b Child) Run() {
+	fmt.Println("child")
+	b.Say()
+}
+
+func TestAB(t *testing.T) {
+	var f Father
+	c := f.c
+
+	c.F = f
+
+	c.Run()
 }

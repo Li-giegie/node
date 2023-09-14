@@ -2,25 +2,31 @@ package node
 
 import (
 	"context"
+	"errors"
 	jeans "github.com/Li-giegie/go-jeans"
 	"log"
 	"net"
 	"sync"
+	"time"
 )
 
 type Client struct {
 	localAddr  *net.TCPAddr
 	remoteAddr *net.TCPAddr
-	conn       *Conn
+	conn       *ClientConnect
+	//连接保活：在一段时间没有发送消息后会发送消息维持连接状态的休眠时间 默认值30s
+	KeepAlive time.Duration
+	//检测连接保活的休眠时间 默认值2秒
+	DetectionKeepAlive time.Duration
 }
 
-type Conn struct {
-	conn *net.TCPConn
-	m    map[uint32]chan struct{}
-	sm   sync.Map
+type ClientConnect struct {
+	conn     *net.TCPConn
+	response sync.Map
+	activate time.Time
 }
 
-func (c *Conn) read() {
+func (c *ClientConnect) read() {
 	defer c.conn.Close()
 	for {
 		buf, err := jeans.Unpack(c.conn)
@@ -33,43 +39,45 @@ func (c *Conn) read() {
 			continue
 		}
 
-		v2, ok := c.sm.Load(msg.Id)
+		res, ok := c.response.Load(msg.Id)
 		if !ok {
 			log.Println("收到推送消息：", msg.String())
 			continue
 		}
-
-		go func() { v2.(chan struct{}) <- struct{}{} }()
+		res.(chan *MessageBase) <- msg
+		//go func(_res chan *MessageBase, _msg *MessageBase) {
+		//	_res <- _msg
+		//	c.response.Delete(_msg.Id)
+		//}(res.(chan *MessageBase), msg)
 
 	}
 
 }
 
-func (c *Conn) write(api uint32, _type uint8, data []byte) (*MessageBase, error) {
-
+func (c *ClientConnect) write(api uint32, _type uint8, data []byte) (*MessageBase, error) {
 	msg := NewMessageBase(api, _type, data)
 	buf, err := msg.Marshal()
 	if err != nil {
 		return nil, err
 	}
+	if _type == MessageBaseType_Request || _type == MessageBaseType_RequestTranspond || _type == MessageBaseType_Tick {
+		c.response.Store(msg.Id, msg.handleStatus)
+	}
 
-	c.sm.Store(msg.Id, msg.handleStatus)
-	//rwl.RLock()
-	//c.m[msg.Id] = msg.handleStatus
-	//rwl.RUnlock()
+	if _, err = c.conn.Write(jeans.Pack(buf)); err != nil {
+		return nil, err
+	}
+	c.activate = time.Now()
 
-	_, err = c.conn.Write(jeans.Pack(buf))
-	return msg, err
+	return msg, nil
 }
 
-func (c *Conn) Send(api uint32, data []byte) error {
+func (c *ClientConnect) Send(api uint32, data []byte) error {
 	_, err := c.write(api, MessageBaseType_Single, data)
 	return err
 }
 
-var rwl sync.RWMutex
-
-func (c *Conn) Request(ctx context.Context, api uint32, data []byte) (*MessageBase, error) {
+func (c *ClientConnect) Request(ctx context.Context, api uint32, data []byte) (*MessageBase, error) {
 	msg, err := c.write(api, MessageBaseType_Request, data)
 	if err != nil {
 		return nil, err
@@ -77,10 +85,14 @@ func (c *Conn) Request(ctx context.Context, api uint32, data []byte) (*MessageBa
 
 	select {
 	case <-ctx.Done():
-		return nil, err
-	case <-msg.handleStatus:
-		return msg, err
+		return nil, errors.New("request err :time out")
+	case reply := <-msg.handleStatus:
+		return reply, err
 	}
+}
+
+func (c *ClientConnect) Close() {
+	c.conn.Close()
 }
 
 func NewClient(remoteAddr string) (*Client, error) {
@@ -89,15 +101,44 @@ func NewClient(remoteAddr string) (*Client, error) {
 	c := new(Client)
 	c.localAddr = lAddr
 	c.remoteAddr = rAddr
+	c.KeepAlive = time.Second * 30
+	c.DetectionKeepAlive = time.Second * 2
 	return c, err
 }
 
-func (c *Client) Connect() (*Conn, error) {
+func (c *Client) Connect() (*ClientConnect, error) {
 	conn, err := net.DialTCP("tcp", c.localAddr, c.remoteAddr)
 	if err != nil {
 		return nil, err
 	}
-	c.conn = &Conn{conn: conn, m: map[uint32]chan struct{}{}}
+	c.conn = &ClientConnect{conn: conn}
 	go c.conn.read()
+	go c.tick()
 	return c.conn, nil
+}
+
+func (c *Client) tick() {
+	for {
+		time.Sleep(c.DetectionKeepAlive)
+		if time.Since(c.conn.activate) > c.KeepAlive {
+			msg, err := c.conn.write(0, MessageBaseType_Tick, nil)
+			if err != nil {
+				log.Fatalln("client tick fail 连接失败", err)
+			}
+			select {
+			case reply := <-msg.handleStatus:
+				c.conn.activate = time.Now()
+				reply.debug()
+				if len(reply.GetData()) == 1 && reply.GetData()[0] == 1 {
+					log.Println("client tick success")
+				} else {
+					log.Println("client tick abnormal")
+				}
+				close(msg.handleStatus)
+			case <-time.After(time.Second * 30):
+				close(msg.handleStatus)
+				log.Fatalln("tick tick fail 超时")
+			}
+		}
+	}
 }

@@ -3,9 +3,11 @@ package node
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
 	"log"
 	"sync"
+	"time"
 )
 
 var workProcess *workerProcess
@@ -82,7 +84,10 @@ func (w *workerProcess) process(i int) {
 	for {
 		select {
 		case ctx := <-w.in:
+			//更新激活时间，防止连接被释放
+			ctx.srvConn.activate = time.Now().UnixNano()
 			if ctx.GetType() == MessageBaseType_Tick {
+				fmt.Println("receive:", ctx.String())
 				(*w.tickHandle)(ctx)
 				continue
 			}
@@ -100,7 +105,7 @@ func (w *workerProcess) process(i int) {
 	}
 }
 
-func NewWorkerProcess(num int) *workerProcess {
+func newWorkerProcess(num int) *workerProcess {
 	workProcess = new(workerProcess)
 	workProcess.in = make(chan *Context, num)
 	workProcess.close = make(chan struct{})
@@ -109,7 +114,7 @@ func NewWorkerProcess(num int) *workerProcess {
 }
 
 func startWorkerProcess(num int, sm *sync.Map, noRouteHandle *HandlerFunc, tickHandle *HandlerFunc) {
-	NewWorkerProcess(num)
+	newWorkerProcess(num)
 	workProcess.handlerMap = sm
 	workProcess.noRouteHandle = noRouteHandle
 	workProcess.tickHandle = tickHandle

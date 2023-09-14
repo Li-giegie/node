@@ -34,11 +34,17 @@ var MessageBaseTypeMap = map[uint8]string{
 	MessageBaseType_Request:          "Request",
 	MessageBaseType_SingleTranspond:  "SingleTranspond",
 	MessageBaseType_RequestTranspond: "RequestTranspond",
+	MessageBaseType_Tick:             "Tick",
 }
 
 func defaultTickHandle() HandlerFunc {
 	return func(ctx *Context) {
-		log.Println("NoRouteHandle Action ", ctx.String())
+		log.Println("TickHandle activate ", ctx.String())
+		err := ctx.Reply([]byte{1})
+		if err != nil {
+			log.Println("TickHandle activate reply fail ", ctx.String())
+			return
+		}
 	}
 }
 

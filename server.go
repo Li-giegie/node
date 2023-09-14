@@ -27,8 +27,10 @@ func (s *Server) AddRouter(api uint32, handler HandlerFunc) {
 }
 
 // 添加具有路由功能的函数
-func (s *Server) AddRouterHandler(h RouterHandlerI) {
-	s.router.Store(h.GetApi(), h.GetHandler())
+func (s *Server) AddRouterHandler(rhs ...RouterHandlerI) {
+	for _, rh := range rhs {
+		s.router.Store(rh.GetApi(), rh.GetHandler())
+	}
 }
 
 // 开启服务
@@ -55,7 +57,7 @@ func (s *Server) ListenAndServer() error {
 		}
 
 		//接受管理一个连接
-		srvConnMgmt.conn = append(srvConnMgmt.conn, newServerConnect(conn))
+		srvConnMgmt.addConn(conn)
 	}
 
 }
@@ -70,9 +72,10 @@ func NewServer(address string) *Server {
 }
 
 type serverConnect struct {
-	conn  *net.TCPConn
-	state bool
-	close chan struct{}
+	conn     *net.TCPConn
+	state    bool
+	activate int64
+	close    chan struct{}
 }
 
 func newServerConnect(conn *net.TCPConn) *serverConnect {
@@ -105,6 +108,7 @@ func (c *serverConnect) process() {
 				continue
 			}
 			workProcess.in <- NewContext(c, msg)
+
 			//fmt.Println("write worker success ---", len(workProcess.in), cap(workProcess.in))
 		}
 	}

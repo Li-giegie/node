@@ -21,7 +21,8 @@ type MessageBase struct {
 	API          uint32
 	Data         []byte
 	Type         uint8
-	handleStatus chan struct{}
+	handleStatus chan *MessageBase
+	buf          []byte
 }
 
 func (m *MessageBase) GetId() uint32 {
@@ -41,18 +42,18 @@ func (m *MessageBase) GetType() uint8 {
 }
 
 func (m *MessageBase) String() string {
-	return fmt.Sprintf("id [%v] api [%v] data [%s] type [%v]", m.Id, m.API, m.Data, MessageBaseTypeMap[m.Type])
+	return fmt.Sprintf("message >> id [%v] api [%v] data %v type [%v]", m.Id, m.API, m.Data, MessageBaseTypeMap[m.Type])
 }
 
 func (m *MessageBase) debug() {
-	fmt.Println("message: ", m.String())
+	fmt.Println(m.String())
 }
 func (m *MessageBase) Marshal() ([]byte, error) {
 	return jeans.BaseTypeToBytes(m.Id, m.API, m.Type, m.Data)
 }
 
 func (m *MessageBase) Unmarshal(b []byte) error {
-	m.handleStatus = make(chan struct{})
+	m.buf = b
 	return jeans.BytesToBaseType(b, &m.Id, &m.API, &m.Type, &m.Data)
 }
 
@@ -68,7 +69,7 @@ func newMessageBase(id, api uint32, _type uint8, data []byte) *MessageBase {
 		API:          api,
 		Type:         _type,
 		Data:         data,
-		handleStatus: make(chan struct{}),
+		handleStatus: make(chan *MessageBase),
 	}
 }
 
@@ -88,6 +89,7 @@ func NewMessageBaseWithDataStr(api uint32, _type uint8, data string) *MessageBas
 
 func NewMessageBaseWithUnmarshal(b []byte) (*MessageBase, error) {
 	msg := new(MessageBase)
+	msg.handleStatus = make(chan *MessageBase)
 	err := msg.Unmarshal(b)
 	return msg, err
 }

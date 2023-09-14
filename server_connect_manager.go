@@ -1,5 +1,7 @@
 package node
 
+import "net"
+
 type ServerConnectManager struct {
 	conn []*serverConnect
 }
@@ -13,6 +15,13 @@ func newSrvConnMgmt() *ServerConnectManager {
 	return srvConnMgmt
 }
 
+func (m *ServerConnectManager) addConn(conn *net.TCPConn) {
+	m.conn = append(m.conn, newServerConnect(conn))
+}
+
+func (m *ServerConnectManager) delConn() {
+
+}
 func startServerConnectManager() *ServerConnectManager {
 	return newSrvConnMgmt()
 }
