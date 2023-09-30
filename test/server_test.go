@@ -13,19 +13,6 @@ import (
 	"testing"
 )
 
-type TestSender struct {
-}
-
-func (s *TestSender) Api() uint32 {
-	return 1
-}
-
-func (s *TestSender) Handler() node.HandlerFunc {
-	return func(ctx *node.Context) {
-		fmt.Println("message: ", ctx.String())
-	}
-}
-
 type TestRequester struct {
 }
 
@@ -35,7 +22,7 @@ func (s *TestRequester) Api() uint32 {
 
 func (s *TestRequester) Handler() node.HandlerFunc {
 	return func(ctx *node.Context) {
-		fmt.Println("receive: ", ctx.String())
+		//fmt.Println("receive: ", ctx.String())
 		err := ctx.Write([]byte("收到"))
 		if err != nil {
 			fmt.Println(err)
@@ -45,8 +32,9 @@ func (s *TestRequester) Handler() node.HandlerFunc {
 
 func TestNodeServer(t *testing.T) {
 	srv := node.NewServer(node.DEFAULT_ServerAddress)
-	srv.AddRouterI(&TestRequester{}, &TestSender{})
+	srv.AddRouterI(&TestRequester{})
 	srv.AddRouterI()
+	srv.Id = node.DEFAULT_ServerID
 	srv.AuthenticationFunc = func(id string, data []byte) (ok bool, reply []byte) {
 		return true, []byte("服务器测试认证")
 	}

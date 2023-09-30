@@ -3,6 +3,7 @@ package node
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
 	"log"
 	"net"
@@ -14,54 +15,53 @@ import (
 type AuthenticationFunc func(id string, data []byte) (ok bool, reply []byte)
 
 type Server struct {
-	Id                  string
-	Key                 string
-	Address             string
-	WorkerProcessNum    int
-	Running             bool
-	connectIOHandleChan chan *Context
+	Id               string
+	Key              string
+	Address          *net.TCPAddr
+	WorkerProcessNum int
+	Running          bool
+	ctxChan          chan *Context
 	*ServerConnectManager
 	AuthenticationFunc
 	*RouteManager
-	*goroutineManager
+	*GoroutineManager
 }
 
 func NewServer(address string) *Server {
 	var srv = new(Server)
 	srv.Id = strconv.Itoa(int(time.Now().UnixNano()))
-	srv.Address = address
+	srv.Address = mustAddress("tcp", address)[0]
 	srv.WorkerProcessNum = runtime.NumCPU()
 	srv.RouteManager = newRouter()
-	srv.connectIOHandleChan = make(chan *Context, srv.WorkerProcessNum*2)
 	return srv
 }
 
-// 开启服务
-func (s *Server) ListenAndServer() error {
+// 初始化管理器
+func (s *Server) initManager() {
+	s.ctxChan = make(chan *Context, s.WorkerProcessNum*2)
 	//连接管理器初始化
-	s.ServerConnectManager = newServerConnectManager(s.AuthenticationFunc, s.connectIOHandleChan)
+	s.ServerConnectManager = newServerConnectManager(s.ctxChan)
 	//开启工作协程池
-	s.goroutineManager = newGoroutineManager(s.WorkerProcessNum, s.RouteManager, s.connectIOHandleChan, s.ServerConnectManager)
-	s.goroutineManager.start()
+	s.GoroutineManager = newGoroutineManager(s.WorkerProcessNum, s.RouteManager, s.ctxChan, s.ServerConnectManager)
+	s.GoroutineManager.start()
+}
 
-	addr, err := net.ResolveTCPAddr("tcp", s.Address)
-	if err != nil {
-		return err
-	}
-	listen, lErr := net.ListenTCP("tcp", addr)
+// ListenAndServer 开启服务
+func (s *Server) ListenAndServer() error {
+	s.initManager()
+	listen, lErr := net.ListenTCP("tcp", s.Address)
 	if lErr != nil {
 		return lErr
 	}
-	var conn *net.TCPConn
+	defer listen.Close()
 	for {
-		conn, err = listen.AcceptTCP()
+		conn, err := listen.AcceptTCP()
 		if err != nil {
-			break
+			fmt.Println("exit listen")
+			return err
 		}
 		s.initializeConnection(conn)
 	}
-	_ = listen.Close()
-	return err
 }
 
 // 初始化一个连接

@@ -8,18 +8,12 @@ type SetRouterI interface {
 }
 
 type RouteManager struct {
-	api         map[uint32]HandlerFunc
-	NoApi       HandlerFunc
-	TickApi     HandlerFunc
-	AbnormalApi HandlerFunc
+	api map[uint32]HandlerFunc
 }
 
 func newRouter() *RouteManager {
 	r := new(RouteManager)
 	r.api = make(map[uint32]HandlerFunc)
-	r.NoApi = defaultNoRouteHandle()
-	r.TickApi = defaultTickHandle()
-	r.AbnormalApi = defaultAbnormalApiHandle()
 	return r
 }
 

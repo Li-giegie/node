@@ -51,13 +51,12 @@ func (c *Counter) Debug() {
 	fmt.Printf("耗时 %v 效率 %v\n", time.Since(c.t), c.String())
 }
 
-func readMessage(conn *net.TCPConn) (*MessageBase, error) {
+func readMessage(conn *net.TCPConn) (*Message, error) {
 	buf, err := jeans.Unpack(conn)
 	if err != nil {
 		return nil, err
 	}
-	msg := NewMessageBaseWithUnmarshal(buf)
-	return msg, nil
+	return NewMsgWithUnmarshal(buf), nil
 }
 
 func write(conn *net.TCPConn, buf []byte) error {

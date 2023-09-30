@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
-	"github.com/Li-giegie/node"
 	"runtime"
 	"sync"
 	"testing"
@@ -42,22 +41,4 @@ func TestWorkerProcess(t *testing.T) {
 	var b byte = '0'
 	var c byte = 0
 	fmt.Println(b, c, b == c)
-}
-
-func TestMsgForwardMarshal(t *testing.T) {
-	m1 := new(node.MessageForward)
-	m1.Data = []byte("123-a")
-	m1.DestId = "dest-id"
-	m1.SrcId = "src-id"
-	m2 := new(node.MessageForward)
-	m2.Unmarshal(m1.Marshal())
-	fmt.Println(m2)
-}
-
-func TestMsgForwardMarshalScene(t *testing.T) {
-	m1 := node.NewMessageForward("1", "2", []byte("forward"))
-	fmt.Println(m1.Marshal())
-	m2 := new(node.MessageForward)
-	m2.Unmarshal(m1.Marshal())
-	fmt.Println(m2)
 }

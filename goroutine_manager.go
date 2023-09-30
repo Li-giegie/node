@@ -10,173 +10,155 @@ import (
 type GoroutineState uint8
 
 const (
-	GoroutineState_Stop GoroutineState = iota
-	GoroutineState_Running
-	GoroutineState_abnormal
+	GoroutineStateStop GoroutineState = iota
+	GoroutineStateRunning
+	//GoroutineState_abnormal
 )
 
-type goroutine struct {
-	Id        uint32
-	State     GoroutineState
-	InputChan <-chan *Context
-	Running   bool
-	gmi       GoroutineManagerI
+type Goroutine struct {
+	Id      uint32
+	State   GoroutineState
+	ctxChan <-chan *Context
+	Running bool
+	GoroutineManagerI
 }
 
-func newGoroutine(id uint32, inputChan <-chan *Context, gmi GoroutineManagerI, isRun ...bool) *goroutine {
-	gr := new(goroutine)
+func newGoroutine(id uint32, ctxChan <-chan *Context, gmi GoroutineManagerI) *Goroutine {
+	gr := new(Goroutine)
 	gr.Id = id
-	gr.State = GoroutineState_Running
+	gr.State = GoroutineStateRunning
 	gr.Running = true
-	gr.InputChan = inputChan
-	gr.gmi = gmi
-	if len(isRun) > 0 && isRun[0] == true {
-		go gr.Start()
-	}
-
+	gr.ctxChan = ctxChan
+	gr.GoroutineManagerI = gmi
 	return gr
 }
 
-func (g *goroutine) Start() {
+func (g *Goroutine) Start() {
 	log.Printf("worker process start --- id[%v]\n", g.Id)
+	route := g.getRoutes()
 	for g.Running {
-		ctx := <-g.InputChan
-		switch ctx.GetType() {
-		case MessageBaseType_Single, MessageBaseType_Request:
-			handler, ok := g.gmi.getHandler(ctx.GetAPI())
+		ctx := <-g.ctxChan
+		switch ctx.Message._type {
+		case MsgType_Req:
+			handler, ok := route.api[ctx.Message.API]
 			if !ok {
-				g.gmi.getNoRouteHandle()(ctx)
+				ctx._type = MsgType_ReqFail
+				ctx.Data = []byte("err: no api")
+				_ = ctx.write(ctx.Message)
 				continue
 			}
 			handler(ctx)
-		case MessageBaseType_Tick:
-			g.gmi.getTickHandle()(ctx)
-		case MessageBaseType_RequestForward, MessageBaseType_SingleForward, MessageBaseType_ResponseForward:
-			msg := ctx.get()
-			forwardMsg := NewMessageForwardWithUnmarshal(msg.Data)
-			err := g.gmi.forward(forwardMsg.DestId, msg)
+		case MsgType_ReqForward, MsgType_RespForward, MsgType_RespForwardFail:
+			err := g.forward(ctx.Message)
 			if err != nil {
-				forwardMsg.Data = []byte("forward err:" + err.Error())
-				msg.Data = forwardMsg.Marshal()
-				if err = ctx.write(msg); err != nil {
-					ctx.Close()
-				}
+				ctx._type = MsgType_ReqForwardFail
+				ctx.Data = []byte("forward err:" + err.Error())
+				_ = ctx.write(ctx.Message)
 			}
+		case MsgType_Tick:
+			ctx._type = MsgType_TickResp
+			_ = ctx.write(ctx.Message)
 		default:
-			g.gmi.getAbnormalApi()(ctx)
+			fmt.Println("default handle:", ctx.Message.String())
 		}
 	}
 	log.Printf("worker process exit --- id[%v]\n", g.Id)
 }
-func (g *goroutine) Stop() {
+func (g *Goroutine) Stop() {
 	g.Running = false
 }
 
 type GoroutineManagerI interface {
-	getTickHandle() HandlerFunc
-	getNoRouteHandle() HandlerFunc
-	getHandler(id uint32) (HandlerFunc, bool)
-	getAbnormalApi() HandlerFunc
-	forward(id string, m *MessageBase) error
+	getRoutes() *RouteManager
+	forward(m *Message) error
 }
 
-type goroutineManager struct {
+type GoroutineManager struct {
 	num        int
 	routes     *RouteManager
 	count      uint32
-	inputChan  chan *Context
-	goroutines []*goroutine
+	ctxChan    chan *Context
+	Goroutines []*Goroutine
 	*ServerConnectManager
 }
 
 // 创建一个协程管理器
-func newGoroutineManager(num int, routes *RouteManager, inputChan chan *Context, scm *ServerConnectManager) *goroutineManager {
-	gm := new(goroutineManager)
-	gm.goroutines = make([]*goroutine, 0, num)
+func newGoroutineManager(num int, routes *RouteManager, ctxChan chan *Context, scm *ServerConnectManager) *GoroutineManager {
+	gm := new(GoroutineManager)
+	gm.Goroutines = make([]*Goroutine, 0, num)
 	gm.count = uint32(num)
-	gm.inputChan = inputChan
+	gm.ctxChan = ctxChan
 	gm.routes = routes
 	gm.num = num
 	gm.ServerConnectManager = scm
 	return gm
 }
 
-func (g *goroutineManager) getTickHandle() HandlerFunc {
-	return g.routes.TickApi
+func (gr *GoroutineManager) getRoutes() *RouteManager {
+	return gr.routes
 }
 
-func (g *goroutineManager) getNoRouteHandle() HandlerFunc {
-	return g.routes.NoApi
+func (gr *GoroutineManager) forward(m *Message) error {
+	return gr.ServerConnectManager.write(m)
 }
 
-func (g *goroutineManager) getAbnormalApi() HandlerFunc {
-	return g.routes.AbnormalApi
-}
+func (gr *GoroutineManager) start() {
+	for i := 0; i < gr.num; i++ {
+		g := newGoroutine(uint32(i+1), gr.ctxChan, gr)
+		gr.Goroutines = append(gr.Goroutines, g)
+		go g.Start()
 
-func (g *goroutineManager) getHandler(id uint32) (HandlerFunc, bool) {
-	h, ok := g.routes.api[id]
-	return h, ok
-}
-
-func (g *goroutineManager) forward(id string, m *MessageBase) error {
-	return g.ServerConnectManager.write(id, m)
-}
-
-func (g *goroutineManager) start() {
-	for i := 0; i < g.num; i++ {
-		gr := newGoroutine(uint32(i+1), g.inputChan, g, true)
-		g.goroutines = append(g.goroutines, gr)
 	}
-	g.goroutineDebug()
+	gr.GoroutineDebug()
 }
 
-// 添加一个协程
-func (g *goroutineManager) AddGoroutine() {
-	for i, g2 := range g.goroutines {
+// AddGoroutine 添加一个协程
+func (gr *GoroutineManager) AddGoroutine() {
+	for i, g2 := range gr.Goroutines {
 		if g2.Running == false {
-			g.goroutines[i].Running = true
-			g.goroutines[i].State = GoroutineState_Running
-			go g.goroutines[i].Start()
-			log.Println("GoroutineManager add [restart] goroutine :", g2.Id)
+			gr.Goroutines[i].Running = true
+			gr.Goroutines[i].State = GoroutineStateRunning
+			go gr.Goroutines[i].Start()
+			log.Println("GoroutineManager add [restart] Goroutine :", g2.Id)
 			return
 		}
 	}
 
-	id := atomic.AddUint32(&g.count, 1)
-	gr := newGoroutine(id, g.inputChan, g, true)
-	g.goroutines = append(g.goroutines, gr)
-	log.Println("GoroutineManager add goroutine :", id)
+	id := atomic.AddUint32(&gr.count, 1)
+	g := newGoroutine(id, gr.ctxChan, gr)
+	gr.Goroutines = append(gr.Goroutines, g)
+	log.Println("GoroutineManager add Goroutine :", id)
 }
 
-// 减少一个协程
-func (g *goroutineManager) SubGoroutine() bool {
+// SubGoroutine 减少一个协程
+func (gr *GoroutineManager) SubGoroutine() bool {
 	var ok bool
-	for _, g2 := range g.goroutines {
+	for _, g2 := range gr.Goroutines {
 		if g2.Running {
 			g2.Running = false
-			g2.State = GoroutineState_Stop
+			g2.State = GoroutineStateStop
 			ok = true
-			log.Println("GoroutineManager exit goroutine :", g2.Id)
+			log.Println("GoroutineManager exit Goroutine :", g2.Id)
 			break
 		}
 	}
 	return ok
 }
 
-func (g *goroutineManager) GoroutineAllClose() {
-	for _, g2 := range g.goroutines {
+func (gr *GoroutineManager) GoroutineAllClose() {
+	for _, g2 := range gr.Goroutines {
 		g2.Running = false
-		g2.State = GoroutineState_Stop
+		g2.State = GoroutineStateStop
 	}
 }
 
-func (g *goroutineManager) goroutineDebug() {
+func (gr *GoroutineManager) GoroutineDebug() {
 	go func() {
-		var old int = -1
+		var old = -1
 		for {
 			time.Sleep(time.Second)
-			var tmp = make([]uint32, 0, len(g.goroutines))
-			for _, connect := range g.goroutines {
+			var tmp = make([]uint32, 0, len(gr.Goroutines))
+			for _, connect := range gr.Goroutines {
 				if connect.Running {
 					tmp = append(tmp, connect.Id)
 				}

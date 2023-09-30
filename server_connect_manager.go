@@ -2,34 +2,22 @@ package node
 
 import (
 	"errors"
-	"log"
 	"net"
 	"sync"
 	"time"
 )
 
-type ServerConnectManagerI interface {
-	getConnect(id string) (*serverConnect, bool)
-
-	setResponse(clientId string, msgId uint32, c chan *MessageBase)
-	getResponse(clientId string, msgId uint32) (chan *MessageBase, bool)
-	deleteResponse(clientId string, msgId uint32)
-}
-
 type ServerConnectManager struct {
-	lock       sync.RWMutex
-	connList   map[string]*serverConnect
-	handleChan chan *Context
-	authFunc   AuthenticationFunc
-	response   sync.Map
+	lock     sync.RWMutex
+	connList map[string]*ServerConnect
+	ctxChan  chan *Context
+	response sync.Map
 }
 
-func newServerConnectManager(auth AuthenticationFunc, handleChan chan *Context) *ServerConnectManager {
+func newServerConnectManager(ctxChan chan *Context) *ServerConnectManager {
 	conn := new(ServerConnectManager)
-	conn.connList = make(map[string]*serverConnect)
-	conn.authFunc = auth
-	conn.handleChan = handleChan
-	log.Println("初始化server connect manager ------")
+	conn.connList = make(map[string]*ServerConnect)
+	conn.ctxChan = ctxChan
 	return conn
 }
 
@@ -38,27 +26,27 @@ func (s *ServerConnectManager) addConnect(id string, conn *net.TCPConn) error {
 	s.lock.RLock()
 	s.connList[id] = srvConn
 	s.lock.RUnlock()
-	go srvConn.Read(s.handleChan)
+	go srvConn.Read(s.ctxChan)
 	return nil
 }
 
-func (s *ServerConnectManager) write(id string, msg *MessageBase) error {
-	conn, ok := s.connList[id]
+func (s *ServerConnectManager) write(msg *Message) error {
+	conn, ok := s.connList[msg.remoteId]
 	if !ok || !conn.state {
 		return errors.New("client not exist or offline")
 	}
 	return conn.write(msg)
 }
 
-type serverConnect struct {
+type ServerConnect struct {
 	id string
 	*net.TCPConn
 	activate int64
 	state    bool
 }
 
-func newServerConnect(id string, conn *net.TCPConn) *serverConnect {
-	srvConn := new(serverConnect)
+func newServerConnect(id string, conn *net.TCPConn) *ServerConnect {
+	srvConn := new(ServerConnect)
 	srvConn.TCPConn = conn
 	srvConn.activate = time.Now().UnixNano()
 	srvConn.id = id
@@ -66,7 +54,7 @@ func newServerConnect(id string, conn *net.TCPConn) *serverConnect {
 	return srvConn
 }
 
-func (c *serverConnect) Read(handleChan chan *Context) {
+func (c *ServerConnect) Read(ctxChan chan *Context) {
 	defer c.Close()
 	for c.state {
 		msg, err := readMessage(c.TCPConn)
@@ -74,19 +62,23 @@ func (c *serverConnect) Read(handleChan chan *Context) {
 			c.state = false
 			break
 		}
-		handleChan <- NewContext(c, msg)
 		c.activate = time.Now().UnixNano()
+		ctxChan <- NewContext(msg, c.write)
 	}
 }
 
-func (c *serverConnect) write(m *MessageBase) error {
+func (c *ServerConnect) write(m *Message) error {
 	if !c.state {
-		return nil
+		return errors.New("connect state offline")
 	}
-	return write(c.TCPConn, m.Marshal())
+	if err := write(c.TCPConn, m.Marshal()); err != nil {
+		c.Close()
+		return err
+	}
+	return nil
 }
 
-func (c *serverConnect) Close() {
+func (c *ServerConnect) Close() {
 	c.state = false
 	_ = c.TCPConn.Close()
 }
