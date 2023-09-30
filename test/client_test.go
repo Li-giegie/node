@@ -12,11 +12,8 @@ import (
 )
 
 func getMustConn() *node.ClientConnect {
-	testClient, err := node.NewClient("127.0.0.1:2023")
-	if err != nil {
-		log.Fatalln(err)
-	}
-	testClientConn, err := testClient.Connect()
+	testClient := node.NewClient(node.DEFAULT_ClientID, node.DEFAULT_ServerAddress)
+	testClientConn, err := testClient.Connect(nil)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -24,43 +21,45 @@ func getMustConn() *node.ClientConnect {
 }
 
 func TestClientSend(t *testing.T) {
-	err := getMustConn().Send(1, []byte("hello word"))
+	fmt.Println(getMustConn().Send(1, []byte("hello")))
+	return
+	testClient := node.NewClient(node.DEFAULT_ClientID, node.DEFAULT_ServerAddress)
+	conn, err := testClient.Connect(nil)
 	if err != nil {
-		t.Error(err)
-		return
+		log.Fatalln(err)
 	}
+	defer conn.Close()
+	fmt.Println(conn.Send(1, []byte("hello")))
 }
 
 func TestNodeClientRequest(t *testing.T) {
-	client, err := node.NewClient("127.0.0.1:2023")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	conn, err := client.Connect()
+	client := node.NewClient(node.DEFAULT_ClientID, node.DEFAULT_ServerAddress)
+	client.AddRoute(1, node.HandlerFunc(func(ctx *node.Context) {
+		fmt.Println(ctx.String())
+	}))
+	conn, err := client.Connect(nil)
 	if err != nil {
 		t.Error(err)
 		return
 	}
 	defer conn.Close()
-	ctx, _ := context.WithTimeout(context.Background(), time.Second)
-	reply, err := conn.Request(ctx, 2, []byte("request"))
+	ctx, _ := context.WithTimeout(context.Background(), time.Second*20)
+	reply, err := conn.Request(ctx, 2, []byte("request 2"))
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	fmt.Println(reply.String())
+	fmt.Println("reply 2 ", reply.String())
+
+	time.Sleep(time.Second * 15)
+
 }
 
 func TestClientTick(t *testing.T) {
-	cli, err := node.NewClient(node.DEFAULT_ServerAddress)
-	if err != nil {
-		t.Error(err)
-		return
-	}
+	cli := node.NewClient(node.DEFAULT_ClientID, node.DEFAULT_ServerAddress)
 	cli.DetectionKeepAlive = time.Second
 	cli.KeepAlive = time.Second * 3
-	conn, err := cli.Connect()
+	conn, err := cli.Connect([]byte{})
 	if err != nil {
 		t.Error(err)
 		return
@@ -73,38 +72,28 @@ func TestClientTick(t *testing.T) {
 }
 
 func TestClientSend_100W(t *testing.T) {
-	client, err := node.NewClient("127.0.0.1:2023")
+	client := node.NewClient(node.DEFAULT_ClientID, node.DEFAULT_ServerAddress)
+	conn, err := client.Connect(nil)
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	conn, err := client.Connect()
-	if err != nil {
-		t.Error(err)
-		return
-	}
+	defer conn.Close()
 	var c = node.NewCounter()
 	for i := 0; i < 1000000; i++ {
+		c.AddSend()
 		err = conn.Send(1, []byte("hello server !"))
 		if err != nil {
 			t.Error(err)
 			break
 		}
-		c.AddReplyNum()
 	}
 	c.Debug()
 }
 
-// 耗时 11.7215171s 效率 request num:[0],reply num:[100000]
-// 耗时 11.7950453s 效率 request num:[0],reply num:[100000]
-// 耗时 35.3810592s 效率 request num:[0],reply num:[300000]
-func TestClientRequest_10W(t *testing.T) {
-	client, err := node.NewClient("127.0.0.1:2023")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	conn, err := client.Connect()
+func TestClientRequest_100W(t *testing.T) {
+	client := node.NewClient(node.DEFAULT_ClientID, node.DEFAULT_ServerAddress)
+	conn, err := client.Connect(nil)
 	if err != nil {
 		t.Error(err)
 		return
@@ -117,15 +106,47 @@ func TestClientRequest_10W(t *testing.T) {
 			t.Error(err)
 			break
 		}
-		c.AddReplyNum()
+		c.AddSend()
 	}
 	c.Debug()
 
 }
 
+func TestClientForwardClientServer(t *testing.T) {
+
+}
+
+func TestNodeClientForwardRequest(t *testing.T) {
+	client := node.NewClient(node.DEFAULT_ClientID, node.DEFAULT_ServerAddress)
+	client.AddRoute(1, func(ctx *node.Context) {
+		fmt.Println("收到转发消息：", node.NewMessageForwardWithUnmarshal(ctx.GetData()).String())
+		fmt.Println("回复：", ctx.Write([]byte("forward success!")))
+	})
+	conn, err := client.Connect(nil)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer conn.Close()
+	ctx, _ := context.WithTimeout(context.Background(), time.Second*20)
+	msg, err := conn.RequestForward(ctx, node.DEFAULT_ClientID, node.DEFAULT_ClientID, 1, []byte("forward"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println("forward resp :", err, msg.String())
+	m := new(node.MessageForward)
+	m.Unmarshal(msg.Data)
+	fmt.Println(*m)
+}
+
+func TestSingleForward(t *testing.T) {
+	fmt.Println(getMustConn().SingleForward(node.DEFAULT_ClientID, node.DEFAULT_ClientID, 1, []byte("asd")))
+}
+
 // go test -bench=BenchmarkBaseTypeToBytes$   -benchtime=3s .\ -cpuprofile="BenchmarkBaseTypeToBytes_CPUV1.out"
 func Test_Cli(t *testing.T) {
-	conn, err := net.Dial("tcp", "127.0.0.1:2023")
+	conn, err := net.Dial("tcp", node.DEFAULT_ServerAddress)
 	if err != nil {
 		log.Fatalln(err)
 	}

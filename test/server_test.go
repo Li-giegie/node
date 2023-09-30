@@ -14,33 +14,29 @@ import (
 )
 
 type TestSender struct {
-	Api    uint32
-	Handle node.HandlerFunc
 }
 
-func (s *TestSender) GetApi() uint32 {
+func (s *TestSender) Api() uint32 {
 	return 1
 }
 
-func (s *TestSender) GetHandler() node.HandlerFunc {
+func (s *TestSender) Handler() node.HandlerFunc {
 	return func(ctx *node.Context) {
 		fmt.Println("message: ", ctx.String())
 	}
 }
 
 type TestRequester struct {
-	Api    uint32
-	Handle node.HandlerFunc
 }
 
-func (s *TestRequester) GetApi() uint32 {
+func (s *TestRequester) Api() uint32 {
 	return 2
 }
 
-func (s *TestRequester) GetHandler() node.HandlerFunc {
+func (s *TestRequester) Handler() node.HandlerFunc {
 	return func(ctx *node.Context) {
-		fmt.Println("message: ", ctx.String())
-		err := ctx.ReplyString("收到！！！")
+		fmt.Println("receive: ", ctx.String())
+		err := ctx.Write([]byte("收到"))
 		if err != nil {
 			fmt.Println(err)
 		}
@@ -49,7 +45,12 @@ func (s *TestRequester) GetHandler() node.HandlerFunc {
 
 func TestNodeServer(t *testing.T) {
 	srv := node.NewServer(node.DEFAULT_ServerAddress)
-	srv.AddRouterHandler(&TestRequester{}, &TestSender{})
+	srv.AddRouterI(&TestRequester{}, &TestSender{})
+	srv.AddRouterI()
+	srv.AuthenticationFunc = func(id string, data []byte) (ok bool, reply []byte) {
+		return true, []byte("服务器测试认证")
+	}
+
 	err := srv.ListenAndServer()
 	if err != nil {
 		fmt.Println(err)
@@ -145,10 +146,10 @@ func TestReadN(t *testing.T) {
 			c.Debug()
 			log.Fatalln(err)
 		}
-		nn := c.AddReplyNum()
-		if nn == uint64(js) {
-			break
-		}
+		//nn := c.AddReplyNum()
+		//if nn == uint64(js) {
+		//	break
+		//}
 	}
 	c.Debug()
 	fmt.Println("-----------")
@@ -177,10 +178,10 @@ func TestReadFull(t *testing.T) {
 			c.Debug()
 			log.Fatalln(err)
 		}
-		nn := c.AddReplyNum()
-		if nn == uint64(js) {
-			break
-		}
+		//nn := c.AddReplyNum()
+		//if nn == uint64(js) {
+		//	break
+		//}
 	}
 	c.Debug()
 	fmt.Println("-----------")

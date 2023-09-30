@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
+	"github.com/Li-giegie/node"
 	"runtime"
 	"sync"
 	"testing"
@@ -34,35 +35,29 @@ func TestGetCPUCore(t *testing.T) {
 }
 
 func TestWorkerProcess(t *testing.T) {
+	var m = map[int]int{}
 
+	fmt.Println(m[1])
+
+	var b byte = '0'
+	var c byte = 0
+	fmt.Println(b, c, b == c)
 }
 
-type F interface {
-	Say()
+func TestMsgForwardMarshal(t *testing.T) {
+	m1 := new(node.MessageForward)
+	m1.Data = []byte("123-a")
+	m1.DestId = "dest-id"
+	m1.SrcId = "src-id"
+	m2 := new(node.MessageForward)
+	m2.Unmarshal(m1.Marshal())
+	fmt.Println(m2)
 }
 
-type Father struct {
-	c Child
-}
-
-func (a Father) Say() {
-	fmt.Println("father")
-}
-
-type Child struct {
-	F
-}
-
-func (b Child) Run() {
-	fmt.Println("child")
-	b.Say()
-}
-
-func TestAB(t *testing.T) {
-	var f Father
-	c := f.c
-
-	c.F = f
-
-	c.Run()
+func TestMsgForwardMarshalScene(t *testing.T) {
+	m1 := node.NewMessageForward("1", "2", []byte("forward"))
+	fmt.Println(m1.Marshal())
+	m2 := new(node.MessageForward)
+	m2.Unmarshal(m1.Marshal())
+	fmt.Println(m2)
 }
