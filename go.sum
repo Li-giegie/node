@@ -2,6 +2,10 @@ github.com/BurntSushi/toml v0.3.1 h1:WXkYYl6Yr3qBf1K79EBnL4mak0OimBfB0XUf9Vl28OQ
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/Li-giegie/go-jeans v1.0.1-0.20230822005251-0185510199ac h1:f7aUyiDe1BKl5hY8uBQxFkrc7H/2vP4VYG0KB+5RXIk=
 github.com/Li-giegie/go-jeans v1.0.1-0.20230822005251-0185510199ac/go.mod h1:HiT6CPCKwYQT1YQj55vvAQ+PXPLg2+by6PlAu8duiuU=
+github.com/Li-giegie/go-jeans v1.0.1-0.20230930082942-e3ae9a129b41 h1:rRQP93MWAZw3/kJp11Ob/1Ht1zwSgMhWIQcR0XcmajE=
+github.com/Li-giegie/go-jeans v1.0.1-0.20230930082942-e3ae9a129b41/go.mod h1:HiT6CPCKwYQT1YQj55vvAQ+PXPLg2+by6PlAu8duiuU=
+github.com/Li-giegie/go-jeans v1.0.1-0.20230930084100-9f1a5177ad89 h1:d0Agw0PVx2esGCMSopjhDYX2TIawISABJPQ0SF1yulg=
+github.com/Li-giegie/go-jeans v1.0.1-0.20230930084100-9f1a5177ad89/go.mod h1:HiT6CPCKwYQT1YQj55vvAQ+PXPLg2+by6PlAu8duiuU=
 github.com/benbjohnson/clock v1.1.0 h1:Q92kusRqC1XV2MjkWETPvjJVqKetz1OzxZB7mHJLju8=
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

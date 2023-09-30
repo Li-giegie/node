@@ -42,19 +42,26 @@ func (m *MessageBase) GetType() uint8 {
 }
 
 func (m *MessageBase) String() string {
-	return fmt.Sprintf("message >> id [%v] api [%v] data %v type [%v]", m.Id, m.API, m.Data, MessageBaseTypeMap[m.Type])
+	return fmt.Sprintf("message >> id [%d] api [%d] data %v type [%s]", m.Id, m.API, m.Data, MessageBaseTypeMap[m.Type])
 }
 
 func (m *MessageBase) debug() {
 	fmt.Println(m.String())
 }
-func (m *MessageBase) Marshal() ([]byte, error) {
-	return jeans.BaseTypeToBytes(m.Id, m.API, m.Type, m.Data)
+func (m *MessageBase) Marshal() []byte {
+	buf, err := jeans.BaseTypeToBytes(m.Id, m.API, m.Type, m.Data)
+	if err != nil {
+		panic(any(err))
+	}
+	return buf
 }
 
-func (m *MessageBase) Unmarshal(b []byte) error {
+func (m *MessageBase) Unmarshal(b []byte) {
 	m.buf = b
-	return jeans.BytesToBaseType(b, &m.Id, &m.API, &m.Type, &m.Data)
+	err := jeans.BytesToBaseType(b, &m.Id, &m.API, &m.Type, &m.Data)
+	if err != nil {
+		panic(any(err))
+	}
 }
 
 func (m *MessageBase) get() *MessageBase {
@@ -63,9 +70,9 @@ func (m *MessageBase) get() *MessageBase {
 
 var messageBaseId uint32
 
-func newMessageBase(id, api uint32, _type uint8, data []byte) *MessageBase {
+func newMessageBase(api uint32, _type uint8, data []byte) *MessageBase {
 	return &MessageBase{
-		Id:           id,
+		Id:           atomic.AddUint32(&messageBaseId, DEFAULT_messageBaseIdStep),
 		API:          api,
 		Type:         _type,
 		Data:         data,
@@ -74,22 +81,51 @@ func newMessageBase(id, api uint32, _type uint8, data []byte) *MessageBase {
 }
 
 func NewMessageBase(api uint32, _type uint8, data []byte) *MessageBase {
-	id := atomic.AddUint32(&messageBaseId, DEFAULT_messageBaseIdStep)
-	return newMessageBase(id, api, _type, data)
+	return newMessageBase(api, _type, data)
 }
 
-func NewMessageBaseWithId(id uint32, api uint32, _type uint8, data []byte) *MessageBase {
-	return newMessageBase(id, api, _type, data)
-}
-
-func NewMessageBaseWithDataStr(api uint32, _type uint8, data string) *MessageBase {
-	id := atomic.AddUint32(&messageBaseId, DEFAULT_messageBaseIdStep)
-	return newMessageBase(id, api, _type, []byte(data))
-}
-
-func NewMessageBaseWithUnmarshal(b []byte) (*MessageBase, error) {
+func NewMessageBaseWithUnmarshal(b []byte) *MessageBase {
 	msg := new(MessageBase)
 	msg.handleStatus = make(chan *MessageBase)
-	err := msg.Unmarshal(b)
-	return msg, err
+	msg.Unmarshal(b)
+	return msg
+}
+
+type MessageForward struct {
+	SrcId  string
+	DestId string
+	Data   []byte
+}
+
+func NewMessageForward(srcId, destId string, data []byte) *MessageForward {
+	msg := new(MessageForward)
+	msg.SrcId = srcId
+	msg.DestId = destId
+	msg.Data = data
+	return msg
+}
+
+func (m *MessageForward) Marshal() []byte {
+	buf, err := jeans.BaseTypeToBytes(m.SrcId, m.DestId, m.Data)
+	if err != nil {
+		panic(any(err))
+	}
+	return buf
+}
+
+func (m *MessageForward) Unmarshal(buf []byte) {
+	err := jeans.BytesToBaseType(buf, &m.SrcId, &m.DestId, &m.Data)
+	if err != nil {
+		panic(any(err))
+	}
+}
+
+func (m *MessageForward) String() string {
+	return fmt.Sprintf("srcid :%s distid: %s data: %s", m.SrcId, m.DestId, m.Data)
+}
+
+func NewMessageForwardWithUnmarshal(b []byte) *MessageForward {
+	msg := new(MessageForward)
+	msg.Unmarshal(b)
+	return msg
 }

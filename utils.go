@@ -2,7 +2,10 @@ package node
 
 import (
 	"fmt"
+	jeans "github.com/Li-giegie/go-jeans"
 	"math/rand"
+	"net"
+	"os"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -22,16 +25,16 @@ func getPort() string {
 // 测试用：原子计数器
 type Counter struct {
 	requestNum uint64
-	replyNum   uint64
+	sendNum    uint64
 	t          time.Time
 }
 
-func (c *Counter) AddRequestNum() uint64 {
+func (c *Counter) AddRequest() uint64 {
 	return atomic.AddUint64(&c.requestNum, 1)
 }
 
-func (c *Counter) AddReplyNum() uint64 {
-	return atomic.AddUint64(&c.replyNum, 1)
+func (c *Counter) AddSend() uint64 {
+	return atomic.AddUint64(&c.sendNum, 1)
 }
 
 func NewCounter() *Counter {
@@ -41,9 +44,36 @@ func NewCounter() *Counter {
 }
 
 func (c *Counter) String() string {
-	return fmt.Sprintf("request num:[%v],reply num:[%v]", c.requestNum, c.replyNum)
+	return fmt.Sprintf("request num:[%v],send num:[%v]", c.requestNum, c.sendNum)
 }
 
 func (c *Counter) Debug() {
 	fmt.Printf("耗时 %v 效率 %v\n", time.Since(c.t), c.String())
+}
+
+func readMessage(conn *net.TCPConn) (*MessageBase, error) {
+	buf, err := jeans.Unpack(conn)
+	if err != nil {
+		return nil, err
+	}
+	msg := NewMessageBaseWithUnmarshal(buf)
+	return msg, nil
+}
+
+func write(conn *net.TCPConn, buf []byte) error {
+	_, err := conn.Write(jeans.Pack(buf))
+	return err
+}
+
+func mustAddress(protocol string, addrs ...string) []*net.TCPAddr {
+	var addr = make([]*net.TCPAddr, 0, len(addrs))
+	for _, item := range addrs {
+		tmp, err := net.ResolveTCPAddr(protocol, item)
+		if err != nil {
+			fmt.Printf("address or protocol format error %v", err)
+			os.Exit(0)
+		}
+		addr = append(addr, tmp)
+	}
+	return addr
 }

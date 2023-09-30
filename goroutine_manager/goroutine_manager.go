@@ -1,5 +1,7 @@
 package goroutine_manager
 
+import "log"
+
 type GoroutineState uint8
 
 const (
@@ -8,28 +10,60 @@ const (
 	GoroutineState_Stop
 )
 
+type GoroutineManagerHandleFunc func(arg interface{})
+
 type GoroutineManager struct {
-	inputChan  chan interface{}
-	handleFunc func(arg interface{})
+	inputChan      chan interface{}
+	handleFunc     GoroutineManagerHandleFunc
+	goroutineIndex int
+	state          []GoroutineState
 }
 
-func NewGoroutineManager(inputChan chan interface{}) *GoroutineManager {
+func NewGoroutineManager(inputChan chan interface{}, handleFunc GoroutineManagerHandleFunc) *GoroutineManager {
 	g := new(GoroutineManager)
 	g.inputChan = inputChan
-
+	g.handleFunc = handleFunc
+	g.state = make([]GoroutineState, 0, cap(inputChan))
 	return g
 }
 
-func (g *GoroutineManager) Start() {
-	n := len(g.inputChan)
-	for i := 0; i < n; i++ {
-		go func() {
-			for {
-				val := <-g.inputChan
-				g.handleFunc(val)
-			}
-		}()
+func (g *GoroutineManager) Run() {
+	log.Println("start Goroutine ")
+	for i := 0; i < cap(g.inputChan); i++ {
+		go g.AddGoroutine()
 	}
+}
+
+func (g *GoroutineManager) AddGoroutine() {
+	id := g.goroutineIndex
+	g.goroutineIndex++
+	g.state = append(g.state, GoroutineState_Start)
+	log.Printf("goroutine id [%d] start \n", id)
+	defer func() {
+		if err := recover(); any(err) != nil {
+			log.Printf("goroutine id [%d] painc [restarted] error: %v  \n", id, err)
+		}
+	}()
+	for {
+		switch g.state[id] {
+		case GoroutineState_Start:
+			val := <-g.inputChan
+			g.handleFunc(val)
+		case GoroutineState_Stop:
+			continue
+		case GoroutineState_End:
+			return
+		}
+	}
+
+}
+
+func (g *GoroutineManager) Stop(id int) {
+
+}
+
+func (g *GoroutineManager) End(id int) {
+
 }
 
 //

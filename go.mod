@@ -3,7 +3,7 @@ module github.com/Li-giegie/node
 go 1.19
 
 require (
-	github.com/Li-giegie/go-jeans v1.0.1-0.20230822005251-0185510199ac
+	github.com/Li-giegie/go-jeans v1.0.1-0.20230930084100-9f1a5177ad89
 	github.com/panjf2000/gnet v1.6.7
 )
 

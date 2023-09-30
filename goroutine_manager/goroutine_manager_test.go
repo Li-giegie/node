@@ -1,11 +1,17 @@
-package node
+package goroutine_manager
 
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestGoroutineManager(t *testing.T) {
 	a := make(chan interface{}, 5)
-	fmt.Println(len(a), cap(a))
+	NewGoroutineManager(a, func(arg interface{}) {
+		panic(any("asd"))
+	}).Run()
+
+	time.Sleep(time.Second * 5)
+	fmt.Println("end -----")
 }

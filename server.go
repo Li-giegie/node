@@ -1,44 +1,48 @@
 package node
 
 import (
+	"bytes"
+	"errors"
 	jeans "github.com/Li-giegie/go-jeans"
 	"log"
 	"net"
 	"runtime"
-	"sync"
+	"strconv"
+	"time"
 )
 
-type RouterHandlerI interface {
-	GetApi() uint32
-	GetHandler() HandlerFunc
-}
+type AuthenticationFunc func(id string, data []byte) (ok bool, reply []byte)
 
 type Server struct {
-	Address          string
-	WorkerProcessNum int
-	router           sync.Map
-	TickHandle       HandlerFunc
-	NoRouteHandle    HandlerFunc
+	Id                  string
+	Key                 string
+	Address             string
+	WorkerProcessNum    int
+	Running             bool
+	connectIOHandleChan chan *Context
+	*ServerConnectManager
+	AuthenticationFunc
+	*RouteManager
+	*goroutineManager
 }
 
-// 添加路由
-func (s *Server) AddRouter(api uint32, handler HandlerFunc) {
-	s.router.Store(api, handler)
-}
-
-// 添加具有路由功能的函数
-func (s *Server) AddRouterHandler(rhs ...RouterHandlerI) {
-	for _, rh := range rhs {
-		s.router.Store(rh.GetApi(), rh.GetHandler())
-	}
+func NewServer(address string) *Server {
+	var srv = new(Server)
+	srv.Id = strconv.Itoa(int(time.Now().UnixNano()))
+	srv.Address = address
+	srv.WorkerProcessNum = runtime.NumCPU()
+	srv.RouteManager = newRouter()
+	srv.connectIOHandleChan = make(chan *Context, srv.WorkerProcessNum*2)
+	return srv
 }
 
 // 开启服务
 func (s *Server) ListenAndServer() error {
+	//连接管理器初始化
+	s.ServerConnectManager = newServerConnectManager(s.AuthenticationFunc, s.connectIOHandleChan)
 	//开启工作协程池
-	startWorkerProcess(s.WorkerProcessNum, &s.router, &s.NoRouteHandle, &s.TickHandle)
-	//开启连接管理器
-	startServerConnectManager()
+	s.goroutineManager = newGoroutineManager(s.WorkerProcessNum, s.RouteManager, s.connectIOHandleChan, s.ServerConnectManager)
+	s.goroutineManager.start()
 
 	addr, err := net.ResolveTCPAddr("tcp", s.Address)
 	if err != nil {
@@ -48,74 +52,71 @@ func (s *Server) ListenAndServer() error {
 	if lErr != nil {
 		return lErr
 	}
-	defer listen.Close()
-
+	var conn *net.TCPConn
 	for {
-		conn, cErr := listen.AcceptTCP()
-		if cErr != nil {
-			return cErr
+		conn, err = listen.AcceptTCP()
+		if err != nil {
+			break
 		}
-
-		//接受管理一个连接
-		srvConnMgmt.addConn(conn)
+		s.initializeConnection(conn)
 	}
-
+	_ = listen.Close()
+	return err
 }
 
-func NewServer(address string) *Server {
-	var srv = new(Server)
-	srv.Address = address
-	srv.WorkerProcessNum = runtime.NumCPU()
-	srv.TickHandle = defaultTickHandle()
-	srv.NoRouteHandle = defaultNoRouteHandle()
-	return srv
-}
-
-type serverConnect struct {
-	conn     *net.TCPConn
-	state    bool
-	activate int64
-	close    chan struct{}
-}
-
-func newServerConnect(conn *net.TCPConn) *serverConnect {
-	srvConn := new(serverConnect)
-	srvConn.conn = conn
-	srvConn.state = true
-	srvConn.close = make(chan struct{})
-	go srvConn.process()
-	return srvConn
-}
-
-func (c *serverConnect) process() {
-	for {
-		select {
-		case <-c.close:
-			c.Close()
-			log.Println("node read exit ---")
+// 初始化一个连接
+func (s *Server) initializeConnection(conn *net.TCPConn) {
+	go func() {
+		id, err := s.authentication(conn)
+		if err != nil {
+			log.Printf("initializeConnection id[%v] err : -1 %v\n", id, err)
+			_ = conn.Close()
 			return
-		default:
-			buf, err := jeans.Unpack(c.conn)
-			if err != nil {
-				c.state = false
-				log.Printf("node read err :%v\n", err)
-				return
-			}
-			msg, err := NewMessageBaseWithUnmarshal(buf)
-			if err != nil {
-				c.state = false
-				log.Printf("node read -NewMessageBaseWithUnmarshal err :%v\n", err)
-				continue
-			}
-			workProcess.in <- NewContext(c, msg)
-
-			//fmt.Println("write worker success ---", len(workProcess.in), cap(workProcess.in))
 		}
-	}
+		if err = s.ServerConnectManager.addConnect(id, conn); err != nil {
+			log.Printf("initializeConnection id[%v] err : -2 %v\n", id, err)
+			_ = conn.Close()
+			return
+		}
+		log.Printf("initializeConnection id[%v] successfully\n", id)
+	}()
 }
 
-func (c *serverConnect) Close() {
-	c.state = false
-	_ = c.conn.Close()
-	close(c.close)
+// 认证现返回一个id和错误
+func (s *Server) authentication(conn *net.TCPConn) (string, error) {
+
+	buf, err := jeans.Unpack(conn)
+	if err != nil {
+		return "", err
+	}
+	n := bytes.IndexByte(buf, '\r')
+	if n == -1 {
+		_ = write(conn, []byte("0authentication fail : Illegal connection"))
+		return "", errors.New("authentication fail : Illegal connection")
+	}
+
+	id := string(buf[:n])
+	data := buf[:n+1]
+	if id == "" {
+		_ = write(conn, []byte("0authentication fail : id is null !"))
+		return "", nil
+	}
+	mgConn, ok := s.ServerConnectManager.connList[id]
+	if ok && mgConn.state {
+		_ = write(conn, []byte("0authentication fail :The user has established a connection"))
+		return id, errors.New("authentication fail :The user has established a connection")
+	}
+
+	if s.AuthenticationFunc == nil {
+		_ = write(conn, []byte("1"))
+		return id, nil
+	}
+	ok, b := s.AuthenticationFunc(id, data)
+	if !ok {
+		_ = write(conn, append([]byte("0"), b...))
+		return id, errors.New(string(b))
+	}
+
+	err = write(conn, append([]byte("1"), b...))
+	return id, err
 }
