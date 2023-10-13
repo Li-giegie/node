@@ -8,6 +8,10 @@ require (
 )
 
 require (
+	github.com/kavu/go_reuseport v1.5.0 // indirect
+	github.com/panjf2000/ants v1.3.0 // indirect
+	github.com/panjf2000/ants/v2 v2.8.2 // indirect
+	github.com/tidwall/evio v1.0.8 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.7.0 // indirect

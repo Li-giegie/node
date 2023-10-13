@@ -7,6 +7,7 @@ const (
 	DEFAULT_ClientID           = "node-client"
 	DEFAULT_ServerID           = "node-server"
 	authenticationSuccess byte = 49
+	DEFAULT_MAXCONNNUM         = 10 * 10000
 )
 
 const (
@@ -32,10 +33,11 @@ var MsgTypeMap = map[uint8]string{
 	MsgType_Resp:    "MsgType_Resp",
 	MsgType_ReqFail: "MsgType_ReqFail",
 
-	MsgType_ReqForward:      "MsgType_Req-Forward",
-	MsgType_ReqForwardFail:  "MsgType_Req-ForwardFail",
-	MsgType_RespForward:     "MsgType_Resp-Forward",
-	MsgType_RespForwardFail: "MsgType_Resp-ForwardFail",
+	MsgType_ReqForward: "MsgType_ReqForward",
+
+	MsgType_ReqForwardFail:  "MsgType_ReqForwardFail",
+	MsgType_RespForward:     "MsgType_RespForward",
+	MsgType_RespForwardFail: "MsgType_RespForwardFail",
 
 	MsgType_Tick:     "Tick",
 	MsgType_TickResp: "TickRespOk",

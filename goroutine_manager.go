@@ -3,6 +3,7 @@ package node
 import (
 	"fmt"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -33,13 +34,14 @@ func newGoroutine(id uint32, ctxChan <-chan *Context, gmi GoroutineManagerI) *Go
 	return gr
 }
 
+var l sync.Mutex
+
 func (g *Goroutine) Start() {
 	log.Printf("worker process start --- id[%v]\n", g.Id)
 	route := g.getRoutes()
 	for g.Running {
 		ctx := <-g.ctxChan
-		switch ctx.Message._type {
-		case MsgType_Req:
+		if ctx._type == MsgType_Req {
 			handler, ok := route.api[ctx.Message.API]
 			if !ok {
 				ctx._type = MsgType_ReqFail
@@ -48,17 +50,17 @@ func (g *Goroutine) Start() {
 				continue
 			}
 			handler(ctx)
-		case MsgType_ReqForward, MsgType_RespForward, MsgType_RespForwardFail:
+		} else if ctx.isForward() {
 			err := g.forward(ctx.Message)
-			if err != nil {
+			if err != nil && ctx._type == MsgType_ReqForward {
 				ctx._type = MsgType_ReqForwardFail
 				ctx.Data = []byte("forward err:" + err.Error())
 				_ = ctx.write(ctx.Message)
 			}
-		case MsgType_Tick:
+		} else if ctx._type == MsgType_Tick {
 			ctx._type = MsgType_TickResp
 			_ = ctx.write(ctx.Message)
-		default:
+		} else {
 			fmt.Println("default handle:", ctx.Message.String())
 		}
 	}

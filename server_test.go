@@ -1,40 +1,43 @@
-package test
+package node
 
 import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
-	"github.com/Li-giegie/node"
 	"io"
 	"log"
-	"net"
 	"strconv"
 	"testing"
+	"time"
 )
 
-type TestRequester struct {
+type ReqScene struct {
 }
 
-func (s *TestRequester) Api() uint32 {
-	return 2
+func (ReqScene) Hello() []byte {
+	return []byte("hello scene1")
 }
 
-func (s *TestRequester) Handler() node.HandlerFunc {
-	return func(ctx *node.Context) {
-		//fmt.Println("receive: ", ctx.String())
-		err := ctx.Write([]byte("收到"))
-		if err != nil {
-			fmt.Println(err)
+func (ReqScene) Api() uint32 {
+	return 1
+}
+
+func (ReqScene) Handler() HandlerFunc {
+	return func(ctx *Context) {
+		//log.Println("scene1:", ctx.String())
+		if len(ctx.Data) != 0 {
+			_ = ctx.Write([]byte("scene1 success"))
 		}
 	}
 }
 
 func TestNodeServer(t *testing.T) {
-	srv := node.NewServer(node.DEFAULT_ServerAddress)
-	srv.AddRouterI(&TestRequester{})
-	srv.AddRouterI()
-	srv.Id = node.DEFAULT_ServerID
+	srv := NewServer(DEFAULT_ServerID, DEFAULT_ServerAddress)
+	srv.AddRouterI(ReqScene{})
+	srv.Id = DEFAULT_ServerID
+	srv.MaxConnectNum = 100000
+	srv.ConnectionTimeout = time.Second * 6
 	srv.AuthenticationFunc = func(id string, data []byte) (ok bool, reply []byte) {
 		return true, []byte("服务器测试认证")
 	}
@@ -42,40 +45,6 @@ func TestNodeServer(t *testing.T) {
 	err := srv.ListenAndServer()
 	if err != nil {
 		fmt.Println(err)
-	}
-}
-
-func TestServer(t *testing.T) {
-	listen, err := net.Listen("tcp", "127.0.0.1:2024")
-	if err != nil {
-		log.Fatalln(err)
-	}
-	defer listen.Close()
-
-	fmt.Println("listen success ---")
-	for {
-		conn, err := listen.Accept()
-		if err != nil {
-			log.Fatalln(err)
-		}
-
-		go func() {
-			log.Println("connect ---")
-			for {
-				var buf = make([]byte, 100)
-				fmt.Println(len(buf), cap(buf))
-				buf, err := readN(conn, 4)
-				if err != nil {
-					log.Fatalln("read", err)
-				}
-				n := binary.LittleEndian.Uint32(buf)
-				buf, err = readN(conn, int(n))
-				if err != nil {
-					log.Fatalln("read err -2", err)
-				}
-				fmt.Println(string(buf))
-			}
-		}()
 	}
 }
 
@@ -121,7 +90,7 @@ func TestReadN(t *testing.T) {
 		}
 	}
 	fmt.Println("缓冲区完成！", b.Len())
-	var c = node.NewCounter()
+	var c = NewCounter()
 	for {
 		buf, err := readN(b, 4)
 		if err != nil {
@@ -151,7 +120,7 @@ func TestReadFull(t *testing.T) {
 		}
 	}
 	fmt.Println("缓冲区完成！", b.Len())
-	var c = node.NewCounter()
+	var c = NewCounter()
 	for {
 		var lb = make([]byte, 4)
 		_, err := io.ReadFull(b, lb)

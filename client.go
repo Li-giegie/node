@@ -76,7 +76,7 @@ type ClientConnect struct {
 	activate  int64
 	isRunning bool
 	localId   string
-	*RouteManager
+	r         *RouteManager
 }
 
 func newClientConnect(id string, _conn *net.TCPConn, keepAlive time.Duration, r *RouteManager) *ClientConnect {
@@ -85,7 +85,7 @@ func newClientConnect(id string, _conn *net.TCPConn, keepAlive time.Duration, r 
 	conn.isRunning = true
 	conn.conn = _conn
 	conn.activate = time.Now().Unix()
-	conn.RouteManager = r
+	conn.r = r
 	go conn.read()
 	go conn.tick(keepAlive)
 	return conn
@@ -102,21 +102,22 @@ func (c *ClientConnect) read() {
 		}
 		c.activate = time.Now().Unix()
 		switch msg._type {
-		case MsgType_Resp, MsgType_RespForward, MsgType_TickResp:
+		case MsgType_Resp, MsgType_ReqFail, MsgType_ReqForwardFail, MsgType_RespForward, MsgType_RespForwardFail, MsgType_TickResp:
 			res, ok := c.response.Load(msg.id)
 			if !ok {
-				log.Println("收到推送消息：", msg.String())
+				log.Println("收到超时消息或推送消息：", msg.String())
 				continue
 			}
 			res.(chan *Message) <- msg
 		case MsgType_ReqForward:
-			handle, ok := c.RouteManager.api[msg.API]
+			handle, ok := c.r.api[msg.API]
 			ctx := NewContext(msg, c.write)
 			if !ok {
-				ctx._type = MsgType_RespForwardFail
-				ctx.Data = []byte("remote err: no api")
-				ctx.localId, ctx.remoteId = ctx.remoteId, ctx.localId
-				_ = ctx.write(ctx.Message)
+				msg._type = MsgType_RespForwardFail
+				msg.Data = []byte("remote err: no api")
+				msg.localId, msg.remoteId = msg.remoteId, msg.localId
+				_ = c.write(msg)
+				//_ = ctx.write(ctx.Message)
 				continue
 			}
 			go handle(ctx)
@@ -134,7 +135,7 @@ func (c *ClientConnect) tick(keepAlive time.Duration) {
 		if time.Now().Unix()-c.activate > int64(keepAlive.Seconds()) {
 			ctx, cancel := context.WithTimeout(context.Background(), keepAlive)
 			msg, err := c.request(ctx, MsgType_Tick, 0, "", nil)
-			//log.Println("activate tick：", msg.String())
+			log.Println("activate tick：", msg.String())
 			if err != nil || msg._type != MsgType_TickResp {
 				cancel()
 				c.Close()
@@ -152,7 +153,7 @@ func (c *ClientConnect) write(m *Message) error {
 }
 
 func (c *ClientConnect) ListenAndServe() {
-	for u, _ := range c.RouteManager.api {
+	for u, _ := range c.r.api {
 		log.Printf("[api] %v\n", u)
 	}
 	log.Println("client listen ------")
@@ -182,7 +183,9 @@ func (c *ClientConnect) request(ctx context.Context, _type uint8, api uint32, re
 
 	select {
 	case reply = <-msg.reply:
-		break
+		if reply._type == MsgType_ReqFail || reply._type == MsgType_ReqForwardFail || reply._type == MsgType_RespForwardFail {
+			err = errors.New(string(reply.Data))
+		}
 	case <-ctx.Done():
 		err = errors.New("request err :time out")
 	}

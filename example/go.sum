@@ -1,0 +1,4 @@
+github.com/Li-giegie/go-jeans v1.0.1-0.20230930084100-9f1a5177ad89 h1:d0Agw0PVx2esGCMSopjhDYX2TIawISABJPQ0SF1yulg=
+github.com/Li-giegie/go-jeans v1.0.1-0.20230930084100-9f1a5177ad89/go.mod h1:HiT6CPCKwYQT1YQj55vvAQ+PXPLg2+by6PlAu8duiuU=
+github.com/kavu/go_reuseport v1.5.0 h1:UNuiY2OblcqAtVDE8Gsg1kZz8zbBWg907sP1ceBV+bk=
+github.com/tidwall/evio v1.0.8 h1:+M7lh83rL4KwEObDGtXP3J1wE5utH80LeaAhrKCGVfE=
