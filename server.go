@@ -1,64 +1,105 @@
 package node
 
 import (
-	"bytes"
+	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
 	"log"
 	"net"
-	"runtime"
+	"sync"
 	"time"
 )
 
-type AuthenticationFunc func(id string, data []byte) (ok bool, reply []byte)
+type AuthenticationFunc func(id uint64, data []byte) (ok bool, reply []byte)
 
 type Server struct {
-	Id                string
-	addr              *net.TCPAddr
-	WorkerProcessNum  int
-	MaxConnectNum     int
-	ConnectionTimeout time.Duration
-	state             bool
-	ctxChan           chan *Context
-	scm               *ServerConnectManager
+	id            uint64
+	addr          string
+	maxGoroutine  int
+	minGoroutine  int
+	maxConnectNum int
+	connTimeout   time.Duration
+	state         bool
+	connList      *ServerConnectList
+	l             sync.RWMutex
 	AuthenticationFunc
-	*RouteManager
-	g *GoroutineManager
+	*Handler
+	listen *net.TCPListener
 }
 
-func NewServer(id, address string) *Server {
+func NewServer(address string, options ...Option) (*Server, error) {
 	var srv = new(Server)
-	srv.Id = id
-	srv.addr = mustAddress("tcp", address)[0]
-	srv.WorkerProcessNum = runtime.NumCPU()
-	srv.RouteManager = newRouter()
-	srv.MaxConnectNum = DEFAULT_MAXCONNNUM
+	srv.addr = address
+	srv.id = DEFAULT_ServerID
+	srv.maxGoroutine = DEFAULT_MAX_GOROUTINE
+	srv.minGoroutine = DEFAULT_MIN_GOROUTINE
+	srv.maxConnectNum = DEFAULT_MAXCONNNUM
+	srv.connTimeout = DEFAULT_KeepAlive
 	srv.state = true
-	srv.ConnectionTimeout = time.Second * 90
-	return srv
+	for _, v := range options {
+		v.(func(srv *Server) *Server)(srv)
+	}
+	var err error
+	srv.Handler = newRouter()
+	srv.connList, err = newServerConnectManager(srv.connTimeout, srv.Handler, srv.maxConnectNum, srv.minGoroutine)
+	if err != nil {
+		return srv, err
+	}
+	return srv, nil
 }
 
-// 初始化管理器
-func (s *Server) initManager() {
-	s.ctxChan = make(chan *Context, s.WorkerProcessNum*2)
-	//连接管理器初始化
-	s.scm = newServerConnectManager(s.ctxChan, s.ConnectionTimeout)
-	//开启工作协程池
-	s.g = newGoroutineManager(s.WorkerProcessNum, s.RouteManager, s.ctxChan, s.scm)
-	s.g.start()
+type Option interface{}
+
+func WithSrvId(id uint64) Option {
+	return func(srv *Server) *Server {
+		srv.id = id
+		return srv
+	}
+}
+
+func WithSrvConnTimeout(t time.Duration) Option {
+	return func(srv *Server) *Server {
+		srv.connTimeout = t
+		return srv
+	}
+}
+
+func WithSrvGoroutine(min, max int) Option {
+	return func(srv *Server) *Server {
+		srv.maxGoroutine = max
+		srv.minGoroutine = min
+		return srv
+	}
+}
+
+// WithSrvMaxConnectNum <= 0 disable The number of connections is not limited
+func WithSrvMaxConnectNum(maxNum int) Option {
+	return func(srv *Server) *Server {
+		srv.maxConnectNum = maxNum
+		return srv
+	}
 }
 
 // ListenAndServer 开启服务
 func (s *Server) ListenAndServer() error {
-	s.initManager()
-	listen, lErr := net.ListenTCP("tcp", s.addr)
-	if lErr != nil {
-		return lErr
+	addr, err := parseAddress("tcp", s.addr)
+	if err != nil {
+		return err
 	}
-	defer listen.Close()
+	s.listen, err = net.ListenTCP("tcp", addr[0])
+	if err != nil {
+		return err
+	}
+	defer s.listen.Close()
+	log.Printf("server start success id：%v listen：%v\n", s.id, addr[0].String())
 	for s.state {
-		conn, err := listen.AcceptTCP()
+		conn, err := s.listen.AcceptTCP()
+		if !s.state {
+			log.Println("server shutdown ------")
+			return nil
+		}
 		if err != nil {
 			fmt.Println("exit listen")
 			return err
@@ -77,7 +118,7 @@ func (s *Server) initializeConnection(conn *net.TCPConn) {
 			_ = conn.Close()
 			return
 		}
-		if err = s.scm.addConnect(id, conn); err != nil {
+		if err = s.connList.addConnect(id, conn); err != nil {
 			log.Printf("initializeConnection id[%v] err : -2 %v\n", id, err)
 			_ = conn.Close()
 			return
@@ -87,49 +128,86 @@ func (s *Server) initializeConnection(conn *net.TCPConn) {
 }
 
 // 认证现返回一个id和错误
-func (s *Server) authentication(conn *net.TCPConn) (string, error) {
-	if s.scm.count >= uint32(s.MaxConnectNum) {
-		log.Printf("client connect Exceed the maximum quantity：now：[%v],max：[%v]\n", s.scm.count, s.MaxConnectNum)
-		_ = write(conn, []byte("The server is busy and try again later"))
-		return "", errors.New("client connect Exceed the maximum quantity")
+func (s *Server) authentication(conn *net.TCPConn) (uint64, error) {
+	nowNum := len(s.connList.connList)
+	if s.maxConnectNum > 0 && nowNum >= s.maxConnectNum {
+		_ = write(conn, []byte(auth_err_conn_supper_limit.Error()))
+		return 0, auth_err_conn_supper_limit
 	}
 	buf, err := jeans.Unpack(conn)
 	if err != nil {
-		return "", err
-	}
-	n := bytes.IndexByte(buf, '\r')
-	if n == -1 {
-		_ = write(conn, []byte("0authentication fail : Illegal connection"))
-		return "", errors.New("authentication fail : Illegal connection")
+		return 0, err
 	}
 
-	id := string(buf[:n])
-	data := buf[:n+1]
-	if id == "" {
-		_ = write(conn, []byte("0authentication fail : id is null !"))
-		return "", nil
+	if len(buf) < 8 {
+		_ = write(conn, []byte(auth_err_illegality.Error()))
+		return 0, auth_err_illegality
 	}
-	mgConn, ok := s.scm.connList[id]
+	id := binary.LittleEndian.Uint64(buf[:8])
+	var data []byte
+	if len(buf) > 8 {
+		data = buf[8:]
+	}
+
+	s.l.RLock()
+	mgConn, ok := s.connList.connList[id]
+	s.l.RUnlock()
 	if ok && mgConn.state {
-		_ = write(conn, []byte("0authentication fail :The user has established a connection"))
-		return id, errors.New("authentication fail :The user has established a connection")
+		_ = write(conn, []byte(auth_err_user_online.Error()))
+		return id, auth_err_user_online
 	}
 
 	if s.AuthenticationFunc == nil {
-		_ = write(conn, []byte("1"))
-		return id, nil
-	}
-	ok, b := s.AuthenticationFunc(id, data)
-	if !ok {
-		_ = write(conn, append([]byte("0"), b...))
-		return id, errors.New(string(b))
+		err = write(conn, []byte(auth_sucess))
+		return id, err
 	}
 
-	err = write(conn, append([]byte("1"), b...))
+	ok, b := s.AuthenticationFunc(id, data)
+	if !ok {
+		err = errors.New(auth_err_head + string(b))
+		_ = write(conn, append([]byte(auth_err_head), b...))
+		return id, err
+	}
+
+	err = write(conn, append([]byte(auth_sucess), b...))
 	return id, err
 }
 
-func (s *Server) Close() {
+func (s *Server) Request(ctx context.Context, id uint64, api uint32, data []byte) ([]byte, error) {
+	conn, ok := s.connList.connList[id]
+	if !ok {
+		return nil, ErrConnNotExist
+	}
+	return conn.request(ctx, api, data)
+}
+
+func (s *Server) Send(id uint64, api uint32, data []byte) error {
+	conn, ok := s.connList.connList[id]
+	if !ok {
+		return ErrConnNotExist
+	}
+	return conn.send(api, data)
+}
+
+func (s *Server) CloseConn(id uint64) {
+	v, ok := s.connList.connList[id]
+	if ok {
+		v.Close()
+	}
+}
+
+func (s *Server) OnLineConn() []uint64 {
+	s.connList.lock.RLock()
+	defer s.connList.lock.Unlock()
+	conn := make([]uint64, 0, len(s.connList.connList))
+	for k, _ := range s.connList.connList {
+		conn = append(conn, k)
+	}
+	return conn
+}
+
+func (s *Server) Shutdown() {
 	s.state = false
-	s.scm.closeAllConn()
+	s.connList.closeAllConn()
+	_ = s.listen.Close()
 }

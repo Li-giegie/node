@@ -4,6 +4,10 @@ go 1.19
 
 require github.com/Li-giegie/node v1.0.0
 
-require github.com/Li-giegie/go-jeans v1.0.1-0.20230930084100-9f1a5177ad89 // indirect
+require (
+	github.com/Li-giegie/go-jeans v1.1.0 // indirect
+	github.com/panjf2000/ants/v2 v2.8.2 // indirect
+	google.golang.org/protobuf v1.31.0 // indirect
+)
 
 replace github.com/Li-giegie/node v1.0.0 => ../../node

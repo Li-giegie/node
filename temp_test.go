@@ -7,11 +7,9 @@ import (
 	"github.com/tidwall/evio"
 	"net"
 	"runtime"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func TestPack(t *testing.T) {
@@ -72,10 +70,10 @@ func BenchmarkSetData_Msg(b *testing.B) {
 
 // BenchmarkMarshal_Msg-12    	18630300	        58.44 ns/op
 func BenchmarkMarshal_Msg(b *testing.B) {
-	m := NewMsg()
-	for i := 0; i < b.N; i++ {
-		m.Marshal()
-	}
+	//m := newMsg()
+	//for i := 0; i < b.N; i++ {
+	//	m.marshalV1()
+	//}
 }
 
 func TestServer(t *testing.T) {
@@ -114,62 +112,6 @@ func TestServer(t *testing.T) {
 	}
 }
 
-func TestClientConnectCount(t *testing.T) {
-	n := 10 * 10000
-	var conns = make([]net.Conn, 0, n)
-	for i := 0; i < n; i++ {
-		conn, err := net.Dial("tcp", DEFAULT_ServerAddress)
-		if err != nil {
-			t.Error(i, err)
-			return
-		}
-		conns = append(conns, conn)
-	}
-
-	for _, conn := range conns {
-		_ = conn.Close()
-	}
-}
-
-var w sync.WaitGroup
-
-func TestClient(t *testing.T) {
-	conn, err := net.Dial("tcp", "127.0.0.1:2024")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	defer conn.Close()
-	var reqN = 10
-	t1 := time.Now()
-	go func() {
-		w.Add(1)
-		var i = 0
-		for {
-			buf, err := jeans.Unpack(conn)
-			if err != nil {
-				t.Error(err, buf)
-				return
-			}
-			i++
-			if i == reqN {
-				w.Done()
-				break
-			}
-		}
-	}()
-	for i := 0; i < reqN; i++ {
-		go func() {
-			if _, err = conn.Write(jeans.Pack([]byte(strconv.Itoa(i) + "ping"))); err != nil {
-				t.Error(err)
-				return
-			}
-		}()
-	}
-	w.Wait()
-	fmt.Println(reqN, time.Since(t1))
-}
-
 func TestEVIO(t *testing.T) {
 	var events evio.Events
 	events.NumLoops = 4
@@ -181,4 +123,14 @@ func TestEVIO(t *testing.T) {
 	if err := evio.Serve(events, "tcp://localhost:2023"); err != nil {
 		t.Error(err)
 	}
+}
+
+func TestAAAA(t *testing.T) {
+	var c = make(chan *int)
+	var i interface{} = c
+	close(c)
+	v, ok := i.(chan *int)
+	fmt.Println(6, v, ok, v == nil, c == nil, c)
+	v <- new(int)
+
 }

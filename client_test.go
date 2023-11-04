@@ -3,280 +3,269 @@ package node
 import (
 	"context"
 	"fmt"
+	jeans "github.com/Li-giegie/go-jeans"
 	"log"
-	"strconv"
-	"sync"
+	"strings"
 	"testing"
 	"time"
 )
 
-// 测试场景一：请求成功
-func TestClientScene1(t *testing.T) {
-	c := NewClient(DEFAULT_ClientID, DEFAULT_ServerAddress)
-	conn, err := c.Connect(nil)
+func newClient() *Client {
+	cli := NewClient(DEFAULT_ServerAddress)
+	cli.localAddr = "127.0.0.1:8919"
+	_, err := cli.Connect([]byte(permit))
 	if err != nil {
-		t.Error(err)
-		return
+		log.Fatalln(err)
 	}
-	var req ReqScene
-	resq, err := conn.Request(context.Background(), req.Api(), req.Hello())
-	if err != nil {
-		t.Error(err, resq)
-		return
-	}
-	fmt.Println(resq.String())
-	conn.Close()
+	return cli
 }
 
-// 测试场景二：请求失败，目的api不存在
+// 测试场景一：认证成功后结束
+func TestClientAuthScene1(t *testing.T) {
+	cli := NewClient(DEFAULT_ServerAddress)
+	authReply, err := cli.Connect([]byte(deny))
+	defer cli.CloseImmediately()
+	if err == nil {
+		t.Error("scene 1 err:", string(authReply), err)
+		return
+	}
+	cli.CloseImmediately()
+	time.Sleep(time.Second)
+	fmt.Println("scene 1:", string(authReply), err)
+	authReply, err = cli.Connect([]byte(permit))
+	if err != nil {
+		t.Error("scene 2 err:", string(authReply), err)
+		return
+	}
+	fmt.Println("scene 2:", string(authReply))
+}
+
+// 测试场景二：认证用户在线，认证失败
+func TestClientAuthScene2(t *testing.T) {
+	go func() {
+		cli := NewClient(DEFAULT_ServerAddress)
+		cli.localAddr = "127.0.0.1:8919"
+		authReply, err := cli.Connect([]byte(permit))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		fmt.Println(string(authReply))
+		time.Sleep(time.Second * 10)
+		defer cli.CloseImmediately()
+
+	}()
+	time.Sleep(time.Second * 2)
+	cli := NewClient(DEFAULT_ServerAddress)
+	authReply, err := cli.Connect([]byte(permit))
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer cli.CloseImmediately()
+	fmt.Println(string(authReply))
+}
+
+// 测试场景一：请求成功
+func TestClientScene1(t *testing.T) {
+	cli := newClient()
+	defer cli.CloseImmediately()
+	data, _ := jeans.Encode(MsgType_Req, uint64(forwardClientListenId), forwardClientHandleApi, []byte("asdasdas 10 req client"))
+	resp, err := cli.Request(context.Background(), reqApi, data)
+	if err != nil {
+		t.Error(err == nil, err, resp)
+		return
+	}
+	fmt.Println(string(resp))
+}
+
+// 测试场景二：请求失败，目的处理函数不存在
 func TestClientScene2(t *testing.T) {
-	c := NewClient(DEFAULT_ClientID, DEFAULT_ServerAddress)
-	conn, err := c.Connect(nil)
-	if err != nil {
-		t.Error(err)
-		return
-	}
+	cli := newClient()
+	defer cli.CloseImmediately()
 	var req ReqScene
-	resq, err := conn.Request(context.Background(), 0, req.Hello())
+	resp, err := cli.Request(context.Background(), 100000, req.Hello())
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	fmt.Println(err, resq.String())
-	conn.Close()
+	fmt.Println(err, string(resp))
 }
 
 // 测试场景三：请求失败，请求超时
 func TestClientScene3(t *testing.T) {
-	c := NewClient(DEFAULT_ClientID, DEFAULT_ServerAddress)
-	conn, err := c.Connect(nil)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	//var req ReqScene
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	cli := newClient()
+	defer cli.CloseImmediately()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
 	defer cancel()
-	resq, err := conn.Request(ctx, ReqScene{}.Api(), nil)
+	data := []byte{100}
+	resp, err := cli.Request(ctx, reqApi, data)
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	fmt.Println(err, resq.String())
-	conn.Close()
+	fmt.Println(err, string(resp))
+
 }
 
-type ForwardScene struct {
-}
-
-func (ForwardScene) Name() string {
-	return "ForwardScene-serve"
-}
-
-func (ForwardScene) Hello() []byte {
-	return []byte("hello ForwardScene-serve")
-}
-
-func (ForwardScene) Api() uint32 {
-	return 1
-}
-
-func (ForwardScene) Handler() HandlerFunc {
-	return func(ctx *Context) {
-		log.Println("ForwardScene Handler:", ctx.String())
-		if len(ctx.Data) != 0 {
-			_ = ctx.Write([]byte("ForwardScene success"))
-		} else {
-			time.Sleep(time.Second * 2)
-			_ = ctx.Write([]byte("ForwardScene success"))
-		}
-	}
-}
+var forwardClientListenId uint64 = 64
+var forwardClientHandleApi uint32 = 1
+var forwardClientHandleperFormanceTestApi uint32 = 2
 
 // 测试客户端转发服务
 func TestClientForwardServe(t *testing.T) {
-	var service ForwardScene
-	client := NewClient(service.Name(), DEFAULT_ServerAddress)
-	client.AddRouterI(service)
-	conn, err := client.Connect(nil)
+	cli := NewClient(DEFAULT_ServerAddress, WithClientLocalIpAddr("0.0.0.0:7890"), WithClientId(forwardClientListenId))
+	cli.HandleFunc(forwardClientHandleApi, func(id uint64, data []byte) (out []byte, err error) {
+		fmt.Println(id, string(data))
+		if strings.Contains(string(data), "wait") {
+			time.Sleep(time.Second * 3)
+		}
+		return append([]byte("client handle success reply src data: "), data...), err
+	})
+	cli.HandleFunc(forwardClientHandleperFormanceTestApi, func(id uint64, data []byte) (out []byte, err error) {
+		return data, nil
+	})
+	_, err := cli.Connect([]byte(permit))
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	conn.ListenAndServe()
+	cli.Run()
 }
 
 // 测试正常流程
 func TestClientForwardScene1(t *testing.T) {
-	c := NewClient("forward-client", DEFAULT_ServerAddress)
-	conn, err := c.Connect(nil)
+	cli := newClient()
+	//cli.id = "request-node-client"
+	defer cli.CloseImmediately()
+
+	resp, err := cli.RequestForward(context.Background(), forwardClientListenId, forwardClientHandleApi, []byte("hello"))
 	if err != nil {
-		t.Error(err)
+		t.Error(err, resp)
 		return
 	}
-	var service ForwardScene
-	resq, err := conn.RequestForward(context.Background(), service.Name(), service.Api(), service.Hello())
-	if err != nil {
-		t.Error(err, resq)
-		return
-	}
-	fmt.Println(resq.String())
+	fmt.Println(string(resp))
 }
 
 // 测试客户端服务不存在
 func TestClientForwardScene2(t *testing.T) {
-	c := NewClient("forward-client", DEFAULT_ServerAddress)
-	conn, err := c.Connect(nil)
+	cli := newClient()
+	defer cli.CloseImmediately()
+	resp, err := cli.RequestForward(context.Background(), 10000, 1, nil)
 	if err != nil {
-		t.Error(err)
+		fmt.Println(string(resp), err)
 		return
 	}
-	var service ForwardScene
-	resq, err := conn.RequestForward(context.Background(), "1forward-client", service.Api(), service.Hello())
-	if err != nil {
-		t.Error(err, resq)
-		return
-	}
-	fmt.Println(resq.String())
+	t.Error("err:")
+	fmt.Println(string(resp))
 }
 
 // 测试客户端服务不回复
 func TestClientForwardScene3(t *testing.T) {
-	c := NewClient("forward-client", DEFAULT_ServerAddress)
-	conn, err := c.Connect(nil)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	var service ForwardScene
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	cli := newClient()
+	defer cli.CloseImmediately()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
 	defer cancel()
-	resq, err := conn.RequestForward(ctx, service.Name(), service.Api(), nil)
+	resp, err := cli.RequestForward(ctx, forwardClientListenId, forwardClientHandleApi, []byte("wait"))
 	if err != nil {
-		t.Error(err, resq)
+		t.Error(err, resp)
 		return
 	}
-	fmt.Println(resq.String())
+	fmt.Println("resp :", string(resp))
+	time.Sleep(time.Second * 3)
 }
 
 // 测试客户端服务回复超时
 func TestClientForwardScene4(t *testing.T) {
-	c := NewClient("forward-client", DEFAULT_ServerAddress)
-	conn, err := c.Connect(nil)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	var service ForwardScene
+	cli := newClient()
+	defer cli.CloseImmediately()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	resq, err := conn.RequestForward(ctx, service.Name(), service.Api(), nil)
+	resp, err := cli.RequestForward(ctx, forwardClientListenId, forwardClientHandleApi, []byte("wait"))
 	if err != nil {
-		t.Error(err, resq)
+		t.Error(err, resp)
 		//return
 	}
-	//fmt.Println(resq.String())
-	for {
-	}
+	fmt.Println(string(resp))
+	time.Sleep(time.Second * 3)
 }
 
 // 测试消息保活
 func TestClientTick(t *testing.T) {
-	c := NewClient(DEFAULT_ClientID+"-forward", DEFAULT_ServerAddress)
-	c.KeepAlive = time.Second * 3
-	conn, err := c.Connect(nil)
+	cli := NewClient(DEFAULT_ServerAddress, WithClientKeepAlive(time.Second*3))
+	_, err := cli.Connect([]byte(permit))
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	defer conn.Close()
-
+	defer cli.CloseImmediately()
 	select {}
 }
 
-// 异步请求测试 请求次数：100000 耗时：3.0871572s
+func TestServer_RequestClient(t *testing.T) {
+	cli := NewClient(DEFAULT_ServerAddress)
+	cli.HandleFunc(1, func(id uint64, data []byte) (out []byte, err error) {
+		fmt.Println(id, string(data))
+		return nil, nil
+	})
+	_, err := cli.Connect([]byte(permit))
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer cli.CloseImmediately()
+	cli.Run()
+}
+
+// 测试发送消息
+func TestClientSend(t *testing.T) {
+	cli := NewClient(DEFAULT_ServerAddress)
+	_, err := cli.Connect([]byte(permit))
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	err = cli.Send(sendApi, []byte("send print"))
+	fmt.Println(err)
+	defer cli.CloseImmediately()
+
+}
+
+// 异步请求测试 请求次数：100000 耗时：2.774963s
 func TestClientAsyncRequest(t *testing.T) {
-	c := NewClient(DEFAULT_ClientID, DEFAULT_ServerAddress)
-	conn, err := c.Connect(nil)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	var req ReqScene
-	n := 10
-	t1 := time.Now()
-	var w sync.WaitGroup
-	w.Add(n)
-	for i := 0; i < n; i++ {
-		go func() {
-			resq, err := conn.Request(context.Background(), req.Api(), req.Hello())
-			if err != nil {
-				t.Error(err, resq)
-				return
-			}
-			//fmt.Println(resq.String())
-			w.Done()
-		}()
-	}
-	w.Wait()
-	fmt.Printf("异步请求测试 请求次数：%v 耗时：%v\n", n, time.Since(t1))
-	conn.Close()
-}
-
-// 异步请求测试 请求次数：100000 耗时：5.4646363s
-func TestClientAsyncForward(t *testing.T) {
-	c := NewClient("forward-client", DEFAULT_ServerAddress)
-	conn, err := c.Connect(nil)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	var service ForwardScene
+	cli := newClient()
+	defer cli.CloseImmediately()
 	n := 100000
-	var w sync.WaitGroup
-	w.Add(n)
-	t1 := time.Now()
-	for i := 0; i < n; i++ {
-		go func() {
-			resq, err := conn.RequestForward(context.Background(), service.Name(), service.Api(), service.Hello())
-			if err != nil {
-				t.Error(err, resq)
-				return
-			}
-			w.Done()
-		}()
-	}
-	w.Wait()
-	fmt.Printf("异步请求测试 请求次数：%v 耗时：%v\n", n, time.Since(t1))
-	conn.Close()
+	count := NewCounter()
+	count.AsyncRun(n, func() {
+		resp, err := cli.Request(context.Background(), performance_ReqTestApi, []byte("hello"))
+		if err != nil {
+			t.Error(err, resp)
+			return
+		}
+		//fmt.Println(string(resp))
+	})
+	count.Debug()
+	//fmt.Println("_msgPoolCount：", _msgPoolCount)
 }
 
-// 测试服务端最大连接数功能
-func TestServerMaxConnectNum(t *testing.T) {
-
-	var clients = make([]*Client, 0)
-
-	for i := 0; i < 10000; i++ {
-		id := strconv.Itoa(i)
-		c1 := NewClient(id, DEFAULT_ServerAddress)
-		_, err := c1.Connect(nil)
+// 异步转发测试 请求次数：100000 耗时：3.7331478s
+func TestClientAsyncForward(t *testing.T) {
+	go TestClientForwardServe(t)
+	time.Sleep(time.Second * 2)
+	cli := newClient()
+	defer cli.CloseImmediately()
+	n := 10
+	count := NewCounter()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+	count.AsyncRun(n, func() {
+		resp, err := cli.RequestForward(ctx, forwardClientListenId, forwardClientHandleperFormanceTestApi, []byte("hello"))
 		if err != nil {
-			t.Error(err)
-			continue
+			t.Error(err, resp)
+			return
 		}
-		//res, err := conn.Request(context.Background(), 1, []byte("i'm "+id))
-		//if err != nil {
-		//	t.Error(err)
-		//	return
-		//}
-		//fmt.Println(res.String())
-		clients = append(clients, c1)
-		//time.Sleep(time.Second * 1)
-	}
-
-	time.Sleep(time.Second * 5)
-	for _, client := range clients {
-		client.conn.Close()
-	}
-
+		fmt.Println(string(resp))
+	})
+	count.Debug()
 }
