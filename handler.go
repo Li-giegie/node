@@ -13,7 +13,7 @@ type Handler struct {
 	handle map[uint32]HandleFunc
 }
 
-func newRouter() *Handler {
+func newHandler() *Handler {
 	r := new(Handler)
 	r.handle = make(map[uint32]HandleFunc)
 	return r
@@ -21,7 +21,7 @@ func newRouter() *Handler {
 
 func (r *Handler) HandleFunc(api uint32, handle HandleFunc) *Handler {
 	if _, ok := r.handle[api]; ok {
-		log.Printf("[warning] router route repeat [%v]\n", api)
+		log.Printf("[warning] HandleFunc repeat [%v]\n", api)
 		return r
 	}
 	r.handle[api] = handle

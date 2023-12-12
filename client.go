@@ -1,67 +1,103 @@
+/*
+2023-11-24 13:28:00
+增加：
+	增加客户端权重属性 weight uint8
+	增加客户端接口注册到服务端功能
+*/
+
 package node
 
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
+	utils "github.com/Li-giegie/go-utils"
 	"log"
 	"net"
 	"sync"
 	"time"
 )
 
+type ClientI interface {
+	Registration(noExposure ...uint32) ([]uint32, error)                                //将handle API注册到服务端，只有error返回值不为nil时，[]uint32返回失败列表
+	HandleFunc(api uint32, handle HandleFunc) *Handler                                  //添加处理函数
+	HandlerI(ri ...HandlerI) *Handler                                                   //添加多个处理函数接口
+	Connect() (authReply []byte, err error)                                             //发起连接：authReply 服务端认证回复 err 是否连接成功
+	Run()                                                                               //如果客户端仅作为请求用途此方法效果仅为阻塞主协程，当客户端挂载有handle接口推荐使用
+	Send(api uint32, data []byte) error                                                 //向服务端发送一次数据,本次发送是单向的，不会确认消息是否送达，有tcp/ip协议栈保证消息送达
+	Request(ctx context.Context, api uint32, data []byte) ([]byte, error)               //发起一个请求，会等待服务端返回数据
+	Forward(ctx context.Context, dstId uint64, api uint32, data []byte) ([]byte, error) //转发一个消息到指定客户端上，dstId远端
+	Close(fast ...bool)                                                                 //关闭连接 fast 如果为true，连接迅速关闭，tcp/ip不会确认消息是否真的接受完毕，通常在调试程序中使用
+}
+
 type Client struct {
 	id         uint64
 	localAddr  string
 	remoteAddr string
 	conn       *net.TCPConn
-	//连接保活：在一段时间没有发送消息后会发送消息维持连接状态的休眠时间 默认值30s
-	keepAlive time.Duration
-	*Handler
-	response sync.Map
-	activate int64
-	state    bool
+	keepAlive  time.Duration //连接保活：在一段时间没有发送消息后会发送消息维持连接状态的休眠时间 默认值30s
+	handler    *Handler
+	response   sync.Map
+	activate   int64
+	state      bool
+	authData   []byte
 }
 
-func NewClient(remoteAddr string, options ...Option) *Client {
+type OptionClient func(*Client) *Client
+
+func NewClient(remoteAddr string, options ...OptionClient) ClientI {
 	c := new(Client)
 	c.id = DEFAULT_ClientID
 	c.localAddr = DEFAULT_ClientAddress
 	c.keepAlive = DEFAULT_KeepAlive
 	c.remoteAddr = remoteAddr
-	c.Handler = newRouter()
+	c.handler = newHandler()
 	c.state = true
 	for _, opt := range options {
-		opt.(func(*Client) *Client)(c)
+		opt(c)
 	}
 	return c
 }
 
-func WithClientId(id uint64) Option {
+func WithClientId(id uint64) OptionClient {
 	return func(c *Client) *Client {
 		c.id = id
 		return c
 	}
 }
 
-func WithClientLocalIpAddr(addr string) Option {
+func WithClientLocalIpAddr(addr string) OptionClient {
 	return func(c *Client) *Client {
 		c.localAddr = addr
 		return c
 	}
 }
 
-func WithClientKeepAlive(t time.Duration) Option {
+func WithClientKeepAlive(t time.Duration) OptionClient {
 	return func(c *Client) *Client {
 		c.keepAlive = t
 		return c
 	}
 }
 
-func (c *Client) Connect(authenticationData []byte) ([]byte, error) {
+func WithClientAuthentication(b []byte) OptionClient {
+	return func(c *Client) *Client {
+		c.authData = b
+		return c
+	}
+}
+
+func (c *Client) HandleFunc(api uint32, handle HandleFunc) *Handler {
+	return c.handler.HandleFunc(api, handle)
+}
+
+func (c *Client) HandlerI(ri ...HandlerI) *Handler {
+	return c.handler.HandlerI(ri...)
+}
+
+func (c *Client) Connect() ([]byte, error) {
 	addr, err := parseAddress("tcp", c.localAddr, c.remoteAddr)
 	if err != nil {
 		return nil, err
@@ -71,24 +107,23 @@ func (c *Client) Connect(authenticationData []byte) ([]byte, error) {
 		return nil, err
 	}
 	c.conn = conn
-	reply, err := c.authentication(c.conn, authenticationData)
+	reply, err := c.authentication()
 	if err != nil {
-		c.CloseImmediately()
+		c.Close(true)
 		return nil, err
 	}
-	go c.read()
+	go c.process()
 	go c.tick(c.keepAlive)
 	return reply, nil
 }
 
-func (c *Client) authentication(conn *net.TCPConn, authenticationData []byte) ([]byte, error) {
-	var id_b = make([]byte, 8)
-	binary.LittleEndian.PutUint64(id_b, c.id)
-	authBuf := append(id_b, authenticationData...)
-	if err := write(conn, authBuf); err != nil {
+func (c *Client) authentication() ([]byte, error) {
+	id, _ := jeans.Encode(c.id)
+	authBuf := append(id, c.authData...)
+	if err := write(c.conn, authBuf); err != nil {
 		return nil, fmt.Errorf("%v %v", auth_err_head, err)
 	}
-	buf, err := jeans.Unpack(conn)
+	buf, err := jeans.Unpack(c.conn)
 	if err != nil {
 		return nil, fmt.Errorf("%v %v", auth_err_head, err)
 	}
@@ -99,11 +134,41 @@ func (c *Client) authentication(conn *net.TCPConn, authenticationData []byte) ([
 	} else if n = bytes.Index(buf, []byte(auth_err_head)); n >= 0 {
 		return nil, errors.New(string(buf))
 	} else {
-		panic("Illegal reply")
+		panic("invalid reply")
 	}
 }
 
-func (c *Client) read() {
+// registration 注册Api：noExposure 不注册API列表,error 不为空时返回注册失败的api
+func (c *Client) Registration(noExposure ...uint32) ([]uint32, error) {
+	var apiList = make([]uint32, 0, len(c.handler.handle))
+	var ok bool
+	for u, _ := range c.handler.handle {
+		ok = true
+		for _, u2 := range noExposure {
+			if u2 == u {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			apiList = append(apiList, u)
+		}
+	}
+	msg := newMsgWithRegistration(apiList)
+	defer msg.recycle()
+	ctx, cancel := context.WithTimeout(context.Background(), DEFAULT_REQUESTTIMEOUT)
+	defer cancel()
+	msg, err := c.request(ctx, msg)
+	if err != nil {
+		if _err := jeans.DecodeSlice(msg.data, &apiList); _err != nil {
+			return nil, errors.New("invalid request: " + string(msg.data))
+		}
+		return apiList, err
+	}
+	return nil, nil
+}
+
+func (c *Client) process() {
 	defer c.Close()
 	for c.state {
 		msg, err := readMessage(c.conn)
@@ -118,51 +183,51 @@ func (c *Client) read() {
 			return
 		}
 		c.activate = time.Now().Unix()
-		switch msg._type {
-		case MsgType_RespSuccess, MsgType_RespFail, MsgType_RespForwardSuccess, MsgType_RespForwardFail, MsgType_TickResp:
+		switch msg.typ {
+		case msgType_RespSuccess, msgType_RespFail, msgType_RegistrationSucccess, msgType_RegistrationFail, msgType_ForwardSuccess, msgType_ForwardFail, msgType_TickResp:
 			res, ok := c.response.Load(msg.id)
 			if !ok {
 				log.Println("Receive timeout message or push message:", msg.String())
 				continue
 			}
 			res.(chan *message) <- msg
-		case MsgType_ReqForward, MsgType_ServerReq, MsgType_Send:
-			_handle, ok := c.Handler.handle[msg.API]
+		case msgType_Forward, msgType_Req, msgType_Send:
+			_handle, ok := c.handler.handle[msg.api]
 			if !ok {
-				if msg._type == MsgType_Send {
+				if msg.typ == msgType_Send {
 					continue
 				}
-				switch msg._type {
-				case MsgType_ReqForward:
-					msg._type = MsgType_RespForwardFail
+				switch msg.typ {
+				case msgType_Forward:
+					msg.typ = msgType_ForwardFail
 				default:
-					msg._type = MsgType_ServerRespFail
+					msg.typ = msgType_RespFail
 				}
-				msg.Data = []byte(ErrNoApi.Error())
+				msg.data = []byte(ErrNoApi.Error())
 				msg.srcId, msg.dstId = msg.dstId, msg.srcId
 				_ = writeMsg(c.conn, msg)
 				continue
 			}
 			go func(m *message, handle HandleFunc) {
-				out, err := handle(m.srcId, m.Data)
-				switch m._type {
-				case MsgType_ReqForward:
+				out, err := handle(m.srcId, m.data)
+				switch m.typ {
+				case msgType_Forward:
 					if err != nil {
-						msg._type = MsgType_RespForwardFail
+						msg.typ = msgType_ForwardFail
 						break
 					}
-					msg._type = MsgType_RespForwardSuccess
-				case MsgType_ServerReq:
+					msg.typ = msgType_ForwardSuccess
+				case msgType_Req:
 					if err != nil {
-						msg._type = MsgType_ServerRespFail
+						msg.typ = msgType_RespFail
 						break
 					}
-					msg._type = MsgType_ServerRespSuccess
-				case MsgType_Send:
+					msg.typ = msgType_RespSuccess
+				case msgType_Send:
 					return
 				}
 				msg.srcId, msg.dstId = msg.dstId, msg.srcId
-				msg.Data = out
+				msg.data = out
 				_ = writeMsg(c.conn, msg)
 			}(msg, _handle)
 		default:
@@ -180,7 +245,7 @@ func (c *Client) tick(keepAlive time.Duration) {
 			ctx, cancel := context.WithTimeout(context.Background(), keepAlive)
 			m, err := c.request(ctx, newMsgWithTick())
 			log.Println("activate tick：", m.String())
-			if err != nil || m._type != MsgType_TickResp {
+			if err != nil || m.typ != msgType_TickResp {
 				cancel()
 				c.Close()
 				m.recycle()
@@ -193,7 +258,7 @@ func (c *Client) tick(keepAlive time.Duration) {
 }
 
 func (c *Client) Run() {
-	for u, _ := range c.handle {
+	for u, _ := range c.handler.handle {
 		log.Printf("[api] %v\n", u)
 	}
 	log.Println("client listen ------")
@@ -202,72 +267,53 @@ func (c *Client) Run() {
 
 // Send 发送到服务端，但不会有响应
 func (c *Client) Send(api uint32, data []byte) error {
-	m := newMsgWithSend(api, data)
-	err := writeMsg(c.conn, m)
-	m.recycle()
-	return err
+	return writeMsg(c.conn, newMsgWithSend(api, data))
 }
 
 // Request 请求服务端，接受响应
 func (c *Client) Request(ctx context.Context, api uint32, data []byte) ([]byte, error) {
-	m := newMsgWithReq(api, data)
-	reply, err := c.request(ctx, m)
+	reply, err := c.request(ctx, newMsgWithReq(api, data))
 	defer reply.recycle()
-	return reply.Data, err
+	return reply.data, err
 }
 
-func (c *Client) RequestForward(ctx context.Context, dstId uint64, api uint32, data []byte) ([]byte, error) {
-	m := newMsgWithForward(c.id, dstId, api, data)
-	reply, err := c.request(ctx, m)
+func (c *Client) Forward(ctx context.Context, dstId uint64, api uint32, data []byte) ([]byte, error) {
+	reply, err := c.request(ctx, newMsgWithForward(c.id, dstId, api, data))
 	defer reply.recycle()
-	return reply.Data, err
+	return reply.data, err
 }
 
 func (c *Client) request(ctx context.Context, m *message) (*message, error) {
-	if !c.state {
-		return nil, errors.New("connect is close")
-	}
 	replyChan := make(chan *message)
 	c.response.Store(m.id, replyChan)
 	defer c.response.Delete(m.id)
-
 	err := writeMsg(c.conn, m)
 	if err != nil {
-		m.recycle()
 		return m, err
 	}
-	m.recycle()
-
-	var respMsg *message
+	replyMsg := msgPool.Get().(*message)
 	select {
-	case respMsg = <-replyChan:
-		switch respMsg._type {
-		case MsgType_RespFail, MsgType_RespForwardFail:
-			err = errors.New(string(respMsg.Data))
+	case replyMsg = <-replyChan:
+		switch replyMsg.typ {
+		case msgType_RespFail, msgType_ForwardFail, msgType_RegistrationFail:
+			err = errors.New(string(replyMsg.data))
 		}
 	case <-ctx.Done():
 		err = errors.New("err :time out")
 	}
-	return respMsg, err
+	return replyMsg, err
 }
 
-func (c *Client) Close() {
-	if c.conn != nil {
-		c.state = false
-		if err := c.conn.Close(); err != nil {
-			log.Println("close err: ", err)
-		}
+// Close 断开连接，可选参数：如果为true：将立即关闭连接不管发送中的数据是否发送完成 避免产生dial tcp x.x.x.x:xxxx->x.x.x.x:xxxx: connectex: Only one usage of each socket address (protocol/network address/port) is normally permitted.
+func (c *Client) Close(fast ...bool) {
+	c.state = false
+	if len(fast) > 0 && fast[0] {
+		_ = c.conn.SetLinger(0)
 	}
+	_ = c.conn.Close()
 }
 
-// CloseImmediately 立刻关闭连接
-func (c *Client) CloseImmediately() {
-	if c.conn != nil {
-		c.state = false
-		c.conn.SetLinger(0)
-		if err := c.conn.Close(); err != nil {
-			log.Println("close err: ", err)
-		}
-		c.conn = nil
-	}
+type register struct {
+	enable     bool
+	noExposure utils.MapUint32I //不注册到服务端的handle api
 }

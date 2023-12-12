@@ -7,11 +7,12 @@ import (
 	"math/rand"
 	"net"
 	"strconv"
-	"sync"
 	"time"
 )
 
 var _rnd *rand.Rand
+
+type AuthenticationFunc func(id uint64, data []byte) (ok bool, reply []byte)
 
 func init() {
 	_rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -20,50 +21,6 @@ func init() {
 // 1024-49151
 func getPort() string {
 	return strconv.Itoa(_rnd.Intn(49152-1024) + 1024)
-}
-
-// 测试用：原子计数器
-type Counter struct {
-	start time.Time
-	end   time.Time
-	w     sync.WaitGroup
-	num   int
-}
-
-func NewCounter() *Counter {
-	return new(Counter)
-}
-
-func (c *Counter) AsyncRun(num int, f func()) {
-	c.w.Add(num)
-	c.num = num
-	c.start = time.Now()
-	for i := 0; i < num; i++ {
-		go func() {
-			defer c.w.Done()
-			f()
-		}()
-	}
-	c.w.Wait()
-	c.end = time.Now()
-}
-
-func (c *Counter) Run(num int, f func()) {
-	c.num = num
-	c.start = time.Now()
-	for i := 0; i < num; i++ {
-		f()
-	}
-	c.end = time.Now()
-}
-
-func (c *Counter) String() string {
-	t := c.end.Sub(c.start)
-	return fmt.Sprintf("run info: num [%v] duration [%v] avg [%v]", c.num, t, time.Duration(t.Nanoseconds()/int64(c.num)).String())
-}
-
-func (c *Counter) Debug() {
-	fmt.Println(c.String())
 }
 
 func readMessage(conn *net.TCPConn) (*message, error) {
@@ -75,7 +32,9 @@ func readMessage(conn *net.TCPConn) (*message, error) {
 }
 
 func writeMsg(conn *net.TCPConn, m *message) error {
-	_, err := conn.Write(jeans.Pack(m.marshalV2()))
+	buf := m.marshalV2()
+	m.recycle()
+	_, err := conn.Write(jeans.Pack(buf))
 	return err
 }
 
@@ -98,49 +57,49 @@ func parseAddress(protocol string, addr ...string) ([]*net.TCPAddr, error) {
 
 func srvConnHandle(router *Handler, forward func(msg *message) error) func(i interface{}) {
 	return func(i interface{}) {
-		ctx := i.(*Context)
-		switch ctx._type {
-		case MsgType_ServerRespSuccess, MsgType_ServerRespFail:
+		ctx := i.(*nodeContext)
+		switch ctx.typ {
+		case msgType_RespSuccess, msgType_RespFail:
 			v, ok := ctx.setRespChan(ctx.id)
 			if !ok {
 				log.Println("Receive timeout message or push message:", ctx.message.String())
 				break
 			}
 			v.(chan *message) <- ctx.message
-		case MsgType_Req, MsgType_Send:
-			handler, ok := router.handle[ctx.message.API]
+		case msgType_Req, msgType_Send:
+			handler, ok := router.handle[ctx.message.api]
 			if !ok {
-				switch ctx._type {
-				case MsgType_Send:
+				switch ctx.typ {
+				case msgType_Send:
 					//不通知返回
-				case MsgType_Req:
-					ctx._type = MsgType_RespFail
-					ctx.Data = []byte(ErrNoApi.Error())
+				case msgType_Req:
+					ctx.typ = msgType_RespFail
+					ctx.data = []byte(ErrNoApi.Error())
 					_ = ctx.write(ctx.message)
 				}
 				return
 			}
-			data, err := handler(ctx.srcId, ctx.Data)
-			if ctx._type == MsgType_Send {
+			data, err := handler(ctx.srcId, ctx.data)
+			if ctx.typ == msgType_Send {
 				return
 			}
 			if err != nil {
-				ctx._type = MsgType_RespFail
-				ctx.Data = []byte(err.Error())
+				ctx.typ = msgType_RespFail
+				ctx.data = []byte(err.Error())
 			} else {
-				ctx.Data = data
-				ctx._type = MsgType_RespSuccess
+				ctx.data = data
+				ctx.typ = msgType_RespSuccess
 			}
 			_ = ctx.write(ctx.message)
-		case MsgType_ReqForward, MsgType_RespForwardSuccess, MsgType_RespForwardFail:
+		case msgType_Forward, msgType_ForwardSuccess, msgType_ForwardFail:
 			err := forward(ctx.message)
-			if err != nil && ctx._type == MsgType_ReqForward {
-				ctx._type = MsgType_RespForwardFail
-				ctx.Data = []byte(err.Error())
+			if err != nil && ctx.typ == msgType_Forward {
+				ctx.typ = msgType_ForwardFail
+				ctx.data = []byte(err.Error())
 				_ = ctx.write(ctx.message)
 			}
-		case MsgType_Tick:
-			ctx._type = MsgType_TickResp
+		case msgType_Tick:
+			ctx.typ = msgType_TickResp
 			_ = ctx.write(ctx.message)
 		default:
 			fmt.Println("default handle:", ctx.message.String())
