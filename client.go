@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
-	utils "github.com/Li-giegie/go-utils"
 	"log"
 	"net"
 	"sync"
@@ -43,6 +42,7 @@ type Client struct {
 	activate   int64
 	state      bool
 	authData   []byte
+	closeChan  chan struct{}
 }
 
 type OptionClient func(*Client) *Client
@@ -55,6 +55,7 @@ func NewClient(remoteAddr string, options ...OptionClient) ClientI {
 	c.remoteAddr = remoteAddr
 	c.handler = newHandler()
 	c.state = true
+	c.closeChan = make(chan struct{})
 	for _, opt := range options {
 		opt(c)
 	}
@@ -140,30 +141,23 @@ func (c *Client) authentication() ([]byte, error) {
 
 // registration 注册Api：noExposure 不注册API列表,error 不为空时返回注册失败的api
 func (c *Client) Registration(noExposure ...uint32) ([]uint32, error) {
-	var apiList = make([]uint32, 0, len(c.handler.handle))
-	var ok bool
-	for u, _ := range c.handler.handle {
-		ok = true
-		for _, u2 := range noExposure {
-			if u2 == u {
-				ok = false
-				break
-			}
-		}
-		if ok {
-			apiList = append(apiList, u)
-		}
-	}
+	apiList := handleMapToSlice(c.handler.handle, noExposure...)
 	msg := newMsgWithRegistration(apiList)
 	defer msg.recycle()
 	ctx, cancel := context.WithTimeout(context.Background(), DEFAULT_REQUESTTIMEOUT)
 	defer cancel()
 	msg, err := c.request(ctx, msg)
+	var text string
+	var badApiListBuf []byte
 	if err != nil {
-		if _err := jeans.DecodeSlice(msg.data, &apiList); _err != nil {
-			return nil, errors.New("invalid request: " + string(msg.data))
+		if err = jeans.Decode(msg.data, &text, &badApiListBuf); err != nil {
+			panic("1" + err.Error())
 		}
-		return apiList, err
+		var badApiList []uint32
+		if err = jeans.DecodeSlice(badApiListBuf, &badApiList); err != nil {
+			panic("2" + err.Error())
+		}
+		return badApiList, fmt.Errorf("err : %s", text)
 	}
 	return nil, nil
 }
@@ -187,7 +181,7 @@ func (c *Client) process() {
 		case msgType_RespSuccess, msgType_RespFail, msgType_RegistrationSucccess, msgType_RegistrationFail, msgType_ForwardSuccess, msgType_ForwardFail, msgType_TickResp:
 			res, ok := c.response.Load(msg.id)
 			if !ok {
-				log.Println("Receive timeout message or push message:", msg.String())
+				log.Println("Receive timeout message or push message:", msg.String(), ok)
 				continue
 			}
 			res.(chan *message) <- msg
@@ -244,7 +238,6 @@ func (c *Client) tick(keepAlive time.Duration) {
 		if c.activate+int64(keepAlive.Seconds()) <= time.Now().Unix() {
 			ctx, cancel := context.WithTimeout(context.Background(), keepAlive)
 			m, err := c.request(ctx, newMsgWithTick())
-			log.Println("activate tick：", m.String())
 			if err != nil || m.typ != msgType_TickResp {
 				cancel()
 				c.Close()
@@ -262,7 +255,7 @@ func (c *Client) Run() {
 		log.Printf("[api] %v\n", u)
 	}
 	log.Println("client listen ------")
-	select {}
+	<-c.closeChan
 }
 
 // Send 发送到服务端，但不会有响应
@@ -285,6 +278,7 @@ func (c *Client) Forward(ctx context.Context, dstId uint64, api uint32, data []b
 
 func (c *Client) request(ctx context.Context, m *message) (*message, error) {
 	replyChan := make(chan *message)
+	fmt.Println("cli req ", m.String())
 	c.response.Store(m.id, replyChan)
 	defer c.response.Delete(m.id)
 	err := writeMsg(c.conn, m)
@@ -306,14 +300,13 @@ func (c *Client) request(ctx context.Context, m *message) (*message, error) {
 
 // Close 断开连接，可选参数：如果为true：将立即关闭连接不管发送中的数据是否发送完成 避免产生dial tcp x.x.x.x:xxxx->x.x.x.x:xxxx: connectex: Only one usage of each socket address (protocol/network address/port) is normally permitted.
 func (c *Client) Close(fast ...bool) {
+	if c.closeChan != nil {
+		close(c.closeChan)
+		c.closeChan = nil
+	}
 	c.state = false
 	if len(fast) > 0 && fast[0] {
 		_ = c.conn.SetLinger(0)
 	}
 	_ = c.conn.Close()
-}
-
-type register struct {
-	enable     bool
-	noExposure utils.MapUint32I //不注册到服务端的handle api
 }

@@ -8,6 +8,7 @@ import (
 	jeans "github.com/Li-giegie/go-jeans"
 	utils "github.com/Li-giegie/go-utils"
 	"github.com/panjf2000/ants/v2"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -27,28 +28,35 @@ type serverConnectionManagerI interface {
 	GetServerConnectionManager() *serverConnectionManager
 }
 
+type serverI interface {
+	getId() uint64
+}
+
 // serverConnectionManager
 type serverConnectionManager struct {
-	minGoroutine int
-	maxGoroutine int
-	connTimeOut  time.Duration
-	lock         sync.RWMutex
-	connList     map[uint64]*serverConnect
+	minGoroutine    int
+	maxGoroutine    int
+	connTimeOut     time.Duration
+	connList        *utils.MapUint64
+	registrationApi *utils.MapUint32
+	serverI
 	AuthenticationFunc
 	ConnectionEnableFunc
 	*Handler
-	*ants.PoolWithFunc
+	*ants.Pool
 }
 
 // newServerConnectionManager 创建一个默认配置的连接管理器
-func newServerConnectionManager() *serverConnectionManager {
+func newServerConnectionManager(si serverI) *serverConnectionManager {
 	srcConList := new(serverConnectionManager)
-	srcConList.connList = make(map[uint64]*serverConnect)
+	srcConList.connList = utils.NewMapUint64()
 	srcConList.Handler = newHandler()
 	srcConList.maxGoroutine = DEFAULT_MAX_GOROUTINE
 	srcConList.minGoroutine = DEFAULT_MIN_GOROUTINE
 	srcConList.connTimeOut = DEFAULT_KeepAlive
 	srcConList.ConnectionEnableFunc = func(conn Conn) {}
+	srcConList.registrationApi = utils.NewMapUint32()
+	srcConList.serverI = si
 	return srcConList
 }
 
@@ -58,13 +66,16 @@ func (s *serverConnectionManager) GetServerConnectionManager() *serverConnection
 
 // init 初始化
 func (s *serverConnectionManager) init() error {
-	pool, err := ants.NewPoolWithFunc(s.minGoroutine, srvConnHandle(s.Handler, s.write))
+	pool, err := ants.NewPool(s.minGoroutine)
+	pool.Tune(s.maxGoroutine)
 	if err != nil {
 		return err
 	}
-	pool.Tune(s.maxGoroutine)
-	s.PoolWithFunc = pool
-	go s.connHealthDetection(s.connTimeOut)
+	s.Pool = pool
+	for u, _ := range s.handle {
+		s.registrationApi.Set(u, s.serverI.getId())
+	}
+	go s.checkUp()
 	return nil
 }
 
@@ -74,18 +85,9 @@ func (s *serverConnectionManager) addConnect(conn *net.TCPConn) {
 		_ = conn.Close()
 		return
 	}
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	srvConn := newServerConnect(id, conn, s.delContList, s.Invoke, s)
-	s.connList[id] = srvConn
+	srvConn := newServerConnect(id, conn, s)
+	s.connList.Set(id, srvConn)
 	s.ConnectionEnableFunc(srvConn)
-}
-
-func (s *serverConnectionManager) delContList(id uint64) {
-	s.lock.Lock()
-	delete(s.connList, id)
-	s.lock.Unlock()
-
 }
 
 // authentication 认证连接是否合法
@@ -100,11 +102,8 @@ func (s *serverConnectionManager) authentication(conn *net.TCPConn) (uint64, err
 	if len(buf) > 8 {
 		data = buf[8:]
 	}
-	s.lock.RLock()
-	mgConn, ok := s.connList[id]
-	s.lock.RUnlock()
-
-	if ok && mgConn.state {
+	intfc, ok := s.connList.Get(id)
+	if s.serverI.getId() == id || ok && intfc.(*serverConnect).state {
 		_ = write(conn, []byte(auth_err_user_online.Error()))
 		return id, auth_err_user_online
 	}
@@ -120,17 +119,18 @@ func (s *serverConnectionManager) authentication(conn *net.TCPConn) (uint64, err
 		_ = write(conn, []byte(err.Error()))
 		return id, err
 	}
-
 	err = write(conn, append([]byte(auth_sucess), b...))
 	return id, err
 }
 
 func (s *serverConnectionManager) write(msg *message) error {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
-	conn, ok := s.connList[msg.dstId]
-	if !ok || !conn.state {
+	intfc, ok := s.connList.Get(msg.dstId)
+	if !ok {
 		return ErrConnNotExist
+	}
+	conn := intfc.(*serverConnect)
+	if !conn.state {
+		return ErrDisconnect
 	}
 	if err := conn.write(msg); err != nil {
 		return ErrDisconnect
@@ -138,94 +138,180 @@ func (s *serverConnectionManager) write(msg *message) error {
 	return nil
 }
 
-func (s *serverConnectionManager) closeAllConn() {
-	for _, v := range s.connList {
-		v.Close()
-	}
-}
-
-func (s *serverConnectionManager) connHealthDetection(connTimeOut time.Duration) {
-	tick := time.NewTicker(time.Second * 2)
-	for range tick.C {
-		for s2, connect := range s.connList {
-			if connect.activate+int64(connTimeOut.Seconds()) < time.Now().Unix() {
-				s.CloseConn(s2)
-				fmt.Printf("close connect :[%v]", connect.id)
-			}
-		}
+func (s *serverConnectionManager) CloseAllConn() {
+	s.connList.RWMutex.Lock()
+	defer s.connList.RWMutex.Unlock()
+	for _, conn := range s.connList.GetMap() {
+		conn.(*serverConnect).Close()
 	}
 }
 
 func (s *serverConnectionManager) CloseConn(id uint64) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	v, ok := s.connList[id]
+	intfc, ok := s.connList.Get(id)
 	if ok {
-		v.Close()
+		intfc.(*serverConnect).Close()
+	}
+}
+
+func (s *serverConnectionManager) checkUp() {
+	var invalidConn []*serverConnect
+	var l int
+	for {
+		time.Sleep(time.Second * 5)
+		l = len(s.connList.GetMap())
+		if l == 0 {
+			continue
+		}
+		invalidConn = make([]*serverConnect, 0, l/10+1)
+		s.connList.Range(func(k uint64, v interface{}) {
+			conn := v.(*serverConnect)
+			if time.Now().Add(time.Duration(-conn.activate)).UnixNano() > s.connTimeOut.Nanoseconds() {
+				invalidConn = append(invalidConn, conn)
+			}
+		})
+		for _, connect := range invalidConn {
+			connect.Close()
+		}
 	}
 }
 
 func (s *serverConnectionManager) FindConn(id uint64) (Conn, bool) {
-	v, ok := s.connList[id]
-	return v, ok
+	intfc, ok := s.connList.Get(id)
+	if !ok {
+		return nil, false
+	}
+	return intfc.(*serverConnect), ok
 }
 
 func (s *serverConnectionManager) ConnList() []Conn {
 	list := make([]Conn, 0, len(s.handle))
-	for _, conn := range s.connList {
-		list = append(list, conn)
+	for _, conn := range s.connList.GetMap() {
+		list = append(list, conn.(*serverConnect))
 	}
 	return list
 }
 
 type serverConnect struct {
-	id          uint64
-	conn        *net.TCPConn
-	activate    int64
-	state       bool
-	delContList func(id uint64)
-	response    sync.Map
-	weight      uint8
+	id       uint64
+	conn     *net.TCPConn
+	activate int64
+	state    bool
+	response sync.Map
+	apiList  []uint32
 	serverConnectionManagerI
-	utils.MapUint32I
 }
 
-func newServerConnect(id uint64, conn *net.TCPConn, delContList func(id uint64), invoke func(i interface{}) error, scm serverConnectionManagerI) *serverConnect {
+func newServerConnect(id uint64, conn *net.TCPConn, scm serverConnectionManagerI) *serverConnect {
 	srvConn := new(serverConnect)
 	srvConn.conn = conn
 	srvConn.activate = time.Now().UnixNano()
 	srvConn.id = id
 	srvConn.state = true
-	srvConn.delContList = delContList
-	srvConn.MapUint32I = utils.NewMapUint32()
 	srvConn.serverConnectionManagerI = scm
-	go srvConn.process(invoke)
+	go srvConn.process(scm.GetServerConnectionManager().Pool)
 	return srvConn
 }
 
-func (c *serverConnect) process(invoke func(i interface{}) error) {
-	defer func() {
-		c.Close()
-	}()
+func (c *serverConnect) getId() uint64 {
+	return c.id
+}
+
+func (c *serverConnect) process(p *ants.Pool) {
+	defer c.Close()
 	for c.state {
-		msg, err := readMessage(c.conn)
+		tmp, err := readMessage(c.conn)
 		if err != nil {
+			c.state = false
 			break
 		}
+		msg := tmp
 		c.activate = time.Now().UnixNano()
-		switch msg.typ {
-		case msgType_Registration:
-			var apiList []uint32
-			if err = jeans.DecodeSlice(msg.data, &apiList); err != nil {
-
+		err = p.Submit(func() {
+			switch msg.typ {
+			case msgType_Registration: //注册API接受消息
+				apiList, err := serverConnectHandleRegistration(c, msg)
+				if err == nil {
+					c.apiList = apiList
+				}
+			case msgType_RespSuccess, msgType_RespFail: //服务端发起请求类型
+				v, ok := c.response.Load(msg.id)
+				if !ok {
+					log.Println("Receive timeout message or push message:", msg.String())
+					break
+				}
+				msgChan := v.(chan *message)
+				if msgChan != nil {
+					msgChan <- msg
+				}
+			case msgType_Send:
+				handler, ok := c.GetServerConnectionManager().handle[msg.api]
+				if ok {
+					_, _ = handler(msg.srcId, msg.data)
+					return
+				}
+				v, ok := c.GetServerConnectionManager().registrationApi.Get(msg.api)
+				if !ok {
+					msg.typ = msgType_RespFail
+					msg.data = []byte(ErrNoApi.Error())
+					_ = c.write(msg)
+					break
+				}
+				msg.srcId = c.id
+				msg.typ = msgType_Forward
+				msg.dstId = v.(uint64)
+				if err = c.GetServerConnectionManager().write(msg); err != nil {
+					msg.typ = msgType_RespFail
+					msg.data = []byte(err.Error())
+					_ = c.write(msg)
+				}
+			case msgType_Req:
+				handler, ok := c.GetServerConnectionManager().handle[msg.api]
+				if !ok {
+					v, ok := c.GetServerConnectionManager().registrationApi.Get(msg.api)
+					if !ok {
+						msg.typ = msgType_RespFail
+						msg.data = []byte(ErrNoApi.Error())
+						_ = c.write(msg)
+						break
+					}
+					msg.srcId = c.id
+					msg.typ = msgType_Forward
+					msg.dstId = v.(uint64)
+					if err = c.GetServerConnectionManager().write(msg); err != nil {
+						msg.typ = msgType_RespFail
+						msg.data = []byte(err.Error())
+						_ = c.write(msg)
+					}
+					return
+				}
+				data, err := handler(msg.srcId, msg.data)
+				if err != nil {
+					msg.typ = msgType_RespFail
+					msg.data = []byte(err.Error())
+				} else {
+					msg.data = data
+					msg.typ = msgType_RespSuccess
+				}
+				_ = c.write(msg)
+			case msgType_Forward, msgType_ForwardSuccess, msgType_ForwardFail:
+				err = c.GetServerConnectionManager().write(msg)
+				if err != nil && msg.typ == msgType_Forward {
+					msg.typ = msgType_ForwardFail
+					msg.data = []byte(err.Error())
+					_ = c.write(msg)
+				}
+			case msgType_Tick:
+				msg.typ = msgType_TickResp
+				_ = c.write(msg)
+			default:
+				fmt.Println("default handle:", msg.String())
+				break
 			}
-		default:
-			_ = invoke(&nodeContext{
-				message:     msg,
-				write:       c.write,
-				setRespChan: c.response.Load,
-			})
+		})
+		if err != nil {
+			log.Println("process err: ", err)
 		}
+
 	}
 }
 
@@ -273,12 +359,18 @@ func (c *serverConnect) Send(api uint32, data []byte) error {
 
 // Close 断开连接，可选参数：如果为true：将立即关闭连接不管发送中的数据是否发送完成
 func (c *serverConnect) Close(fast ...bool) {
-	if c.state {
+	if c.conn != nil {
 		c.state = false
 		if len(fast) > 0 && fast[0] {
 			_ = c.conn.SetLinger(0)
 		}
 		_ = c.conn.Close()
-		c.delContList(c.id)
+		c.conn = nil
+		scm := c.serverConnectionManagerI.GetServerConnectionManager()
+		scm.connList.Delete(c.id)
+		for _, u := range c.apiList {
+			log.Println("close client ", u)
+			scm.registrationApi.Delete(u)
+		}
 	}
 }

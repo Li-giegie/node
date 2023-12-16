@@ -148,6 +148,24 @@ func newMsgWithRegistration(apiList []uint32) *message {
 	return m
 }
 
+func newMsgWithRegistrationResp(m *message, ok bool, text string, badApiList []uint32) *message {
+	if ok {
+		m.typ = msgType_RegistrationSucccess
+	} else {
+		m.typ = msgType_RegistrationFail
+	}
+	buf, err := jeans.EncodeSlice(badApiList)
+	if err != nil {
+		panic(err)
+	}
+	buf, err = jeans.Encode(text, buf)
+	if err != nil {
+		panic(err)
+	}
+	m.data = buf
+	return m
+}
+
 func newMsgWithUnmarshalV2(b []byte) *message {
 	m := msgPool.Get().(*message)
 	m.unmarshalV2(b)
@@ -245,17 +263,17 @@ func (m *message) unmarshalWithSend(buf []byte) {
 }
 
 func (m *message) marshalRegistration() []byte {
-	buf, err := jeans.Encode(m.typ, m.data)
+	buf, err := jeans.Encode(m.typ, m.id, m.data)
 	if err != nil {
-		panic(any(err))
+		panic(any("err1 " + err.Error()))
 	}
 	return buf
 }
 
 func (m *message) unmarshalRegistration(buf []byte) {
-	err := jeans.Decode(buf, &m.typ, &m.data)
+	err := jeans.Decode(buf, &m.typ, &m.id, &m.data)
 	if err != nil {
-		panic(any(err))
+		panic(any("err2 " + err.Error()))
 	}
 }
 

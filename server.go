@@ -34,7 +34,7 @@ func NewServer(address string, options ...Option) ServerI {
 	srv.addr = address
 	srv.id = DEFAULT_ServerID
 	srv.maxConNum = DEFAULT_MAXCONNNUM
-	srv.srvConnMgmt = newServerConnectionManager()
+	srv.srvConnMgmt = newServerConnectionManager(srv)
 	srv.state = true
 	for _, v := range options {
 		v(srv)
@@ -90,6 +90,10 @@ func WithSrvMaxConnectNum(maxNum int) Option {
 	}
 }
 
+func (s *Server) getId() uint64 {
+	return s.id
+}
+
 func (s *Server) HandleFunc(api uint32, handle HandleFunc) *Handler {
 	return s.srvConnMgmt.HandleFunc(api, handle)
 }
@@ -115,7 +119,7 @@ func (s *Server) ListenAndServer() error {
 	defer s.listen.Close()
 	log.Printf("server start success id：%v listen：%v\n", s.id, addr[0].String())
 	for s.state {
-		if len(s.srvConnMgmt.connList) > s.maxConNum {
+		if len(s.srvConnMgmt.connList.GetMap()) > s.maxConNum {
 			time.Sleep(time.Millisecond * 200)
 			continue
 		}
@@ -162,6 +166,6 @@ func (s *Server) FindConn(id uint64) (Conn, bool) {
 
 func (s *Server) Shutdown() {
 	s.state = false
-	s.srvConnMgmt.closeAllConn()
+	s.srvConnMgmt.CloseAllConn()
 	_ = s.listen.Close()
 }

@@ -1,5 +1,9 @@
 github.com/Li-giegie/go-jeans v1.0.1-0.20231204035555-d6da25f7d95a h1:ehTfWxrf4AQQiqmgSg8ff7us5xHZVasKlugwiR3nZx8=
 github.com/Li-giegie/go-jeans v1.0.1-0.20231204035555-d6da25f7d95a/go.mod h1:11TTAl8HimiYyXCekzT4obwAF928xbMLiRzRrTLFQ8I=
+github.com/Li-giegie/go-jeans v1.0.1-0.20231213011801-6a1bf8147b0d h1:sbpbhFlTuXPTeHk2SMqhvh4pq6TFS5wcYco/4nU0ftA=
+github.com/Li-giegie/go-jeans v1.0.1-0.20231213011801-6a1bf8147b0d/go.mod h1:11TTAl8HimiYyXCekzT4obwAF928xbMLiRzRrTLFQ8I=
+github.com/Li-giegie/go-jeans v1.0.1-0.20231213020253-59cc4b80f0d5 h1:0nmNmW0iC4ebVj/lr2N6MN4tTi9xRP1iIHHefkR/NGs=
+github.com/Li-giegie/go-jeans v1.0.1-0.20231213020253-59cc4b80f0d5/go.mod h1:11TTAl8HimiYyXCekzT4obwAF928xbMLiRzRrTLFQ8I=
 github.com/Li-giegie/go-jeans v1.1.0 h1:e1mu+sJBdufENHQ4iKU9byGWwJGK8DIXm6h5zQ2n2UY=
 github.com/Li-giegie/go-jeans v1.1.0/go.mod h1:11TTAl8HimiYyXCekzT4obwAF928xbMLiRzRrTLFQ8I=
 github.com/Li-giegie/go-utils v0.0.0-20231201091546-8de941791fb5 h1:cT4y9HmaFwOGEqdRAn8csdYvwj4ZmuAexGrLjzjjZHA=
@@ -8,6 +12,8 @@ github.com/Li-giegie/go-utils v0.0.0-20231202084503-afe315f38355 h1:+FBEgorOPBAs
 github.com/Li-giegie/go-utils v0.0.0-20231202084503-afe315f38355/go.mod h1:YKNIGhjgYENvL9HwWmlRnYme6bQbEFZJgI7FDgpU0PA=
 github.com/Li-giegie/go-utils v0.0.0-20231202090945-046e1cdf564f h1:SIdf1353o2M6DHnmdQnf+NO8gdfGrgY1CpsxLr7NIoM=
 github.com/Li-giegie/go-utils v0.0.0-20231202090945-046e1cdf564f/go.mod h1:YKNIGhjgYENvL9HwWmlRnYme6bQbEFZJgI7FDgpU0PA=
+github.com/Li-giegie/go-utils v0.0.0-20231213033017-c0e274a2b5a0 h1:A+wLZzrYmWnAuZManULzm6NfCojT83ZBpNu7P570uKE=
+github.com/Li-giegie/go-utils v0.0.0-20231213033017-c0e274a2b5a0/go.mod h1:VmgorL5MYveXQAY6Jcd/kcbBGnt6Ehjqiv7+0b+Q/i8=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

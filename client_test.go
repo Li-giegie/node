@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"fmt"
-	jeans "github.com/Li-giegie/go-jeans"
 	utils "github.com/Li-giegie/go-utils"
 	"log"
 	"strings"
@@ -11,10 +10,13 @@ import (
 	"time"
 )
 
-func newClient() ClientI {
+func newClient(localAddr ...string) ClientI {
+	if len(localAddr) == 0 {
+		localAddr = []string{"127.0.0.1:8919"}
+	}
 	cli := NewClient(DEFAULT_ServerAddress,
 		WithClientAuthentication([]byte(permit)),
-		WithClientLocalIpAddr("127.0.0.1:8919"),
+		WithClientLocalIpAddr(localAddr[0]),
 	)
 	_, err := cli.Connect()
 	if err != nil {
@@ -25,7 +27,10 @@ func newClient() ClientI {
 
 // 测试场景一：认证成功后结束
 func TestClientAuthScene1(t *testing.T) {
-	cli := NewClient(DEFAULT_ServerAddress, WithClientAuthentication([]byte(permit)))
+	cli := NewClient(DEFAULT_ServerAddress,
+		WithClientAuthentication([]byte(permit)),
+		WithClientId(DEFAULT_ClientID),
+	)
 	authReply, err := cli.Connect()
 	defer cli.Close(true)
 	if err != nil {
@@ -63,25 +68,46 @@ func TestClientAuthScene2(t *testing.T) {
 }
 
 func TestClient_Send(t *testing.T) {
-	cli := newClient()
+	cli := NewClient(DEFAULT_ServerAddress,
+		WithClientAuthentication([]byte(permit)),
+		WithClientLocalIpAddr("127.0.0.1:9000"),
+		WithClientId(20),
+	)
+	_, err := cli.Connect()
+	if err != nil {
+		t.Error(err)
+		return
+	}
 	defer cli.Close(true)
-	cli.Send(sendApi, append([]byte{0}, []byte("你好~")...))
+	err = cli.Send(sendApi, append([]byte{0}, []byte("你好~")...))
+	if err != nil {
+		t.Error(err)
+		return
+	}
 	//发送到服务端让服务端发起请求到客户端
-	go TestClientForwardServe(t)
-	time.Sleep(time.Second * 2)
-	toSrvReq, _ := jeans.Encode(msgType_Req, forwardClientListenId, forwardClientHandleApi, []byte("你好~"))
-	fmt.Println(cli.Send(sendApi, toSrvReq))
-	time.Sleep(time.Second * 3)
+	//go TestClientForwardServe(t)
+	//time.Sleep(time.Second * 2)
+	//toSrvReq, _ := jeans.Encode(msgType_Req, forwardClientListenId, forwardClientHandleApi, []byte("你好~"))
+	//fmt.Println(cli.Send(sendApi, toSrvReq))
+	//time.Sleep(time.Second * 3)
 }
 
 // 测试场景一：请求成功
 func TestClientScene1(t *testing.T) {
-	cli := newClient()
-	defer cli.Close(true)
-	data, _ := jeans.Encode(msgType_Req, uint64(forwardClientListenId), forwardClientHandleApi, []byte("asdasdas 10 req client"))
-	resp, err := cli.Request(context.Background(), reqApi, data)
+	cli := NewClient(DEFAULT_ServerAddress,
+		WithClientAuthentication([]byte(permit)),
+		WithClientLocalIpAddr("127.0.0.1:9000"),
+		WithClientId(20),
+	)
+	_, err := cli.Connect()
 	if err != nil {
-		t.Error(err == nil, err, resp)
+		t.Error(err)
+		return
+	}
+	defer cli.Close(true)
+	resp, err := cli.Request(context.Background(), reqApi, []byte("hello"))
+	if err != nil {
+		t.Error(err, resp)
 		return
 	}
 	fmt.Println(string(resp))
@@ -235,7 +261,6 @@ func TestClientSend(t *testing.T) {
 	err = cli.Send(sendApi, []byte("send print"))
 	fmt.Println(err)
 	defer cli.Close(true)
-
 }
 
 // 异步请求测试 请求次数：100000 耗时：2.774963s
@@ -269,4 +294,27 @@ func TestClientAsyncForward(t *testing.T) {
 		}
 		fmt.Println(string(resp))
 	}).Debug()
+}
+
+func TestClient_Registration(t *testing.T) {
+	cli := newClient()
+	defer cli.Close(true)
+	cli.HandleFunc(1, func(id uint64, data []byte) (out []byte, err error) {
+		log.Println(id, string(data), "api handle [1] access success")
+		return []byte("api handle [1] access success"), err
+	})
+	cli.HandleFunc(2, func(id uint64, data []byte) (out []byte, err error) {
+		log.Println(id, string(data), "api handle [2] access success")
+		return []byte("api handle [2] access success"), err
+	})
+	cli.HandleFunc(3, func(id uint64, data []byte) (out []byte, err error) {
+		log.Println(id, string(data), "api handle [3] access success")
+		return []byte("api handle [2] access success"), err
+	})
+	badApiList, err := cli.Registration()
+	if err != nil {
+		log.Println(err, badApiList)
+		return
+	}
+	cli.Run()
 }

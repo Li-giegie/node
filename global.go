@@ -22,7 +22,7 @@ var auth_err_head = "authentication fail:"
 var auth_err_conn_supper_limit = errors.New(auth_err_head + " number of connections established by the server reached the upper limit and the connection was denied")
 var auth_err_illegality = errors.New(auth_err_head + " Illegal connection")
 var auth_err_illegalityIdIsNull = errors.New(auth_err_head + " id is null")
-var auth_err_user_online = errors.New(auth_err_head + " User online")
+var auth_err_user_online = errors.New(auth_err_head + " User id exist or online")
 
 var (
 	ErrConnNotExist = errors.New("err: id not exist or offline")

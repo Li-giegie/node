@@ -1,9 +1,8 @@
 package node
 
 import (
-	"fmt"
+	"errors"
 	jeans "github.com/Li-giegie/go-jeans"
-	"log"
 	"math/rand"
 	"net"
 	"strconv"
@@ -55,54 +54,62 @@ func parseAddress(protocol string, addr ...string) ([]*net.TCPAddr, error) {
 	return a, nil
 }
 
-func srvConnHandle(router *Handler, forward func(msg *message) error) func(i interface{}) {
-	return func(i interface{}) {
-		ctx := i.(*nodeContext)
-		switch ctx.typ {
-		case msgType_RespSuccess, msgType_RespFail:
-			v, ok := ctx.setRespChan(ctx.id)
-			if !ok {
-				log.Println("Receive timeout message or push message:", ctx.message.String())
+type srvHandleI interface {
+	Load(arg interface{}) (interface{}, bool)
+	serverConnectionManagerI
+	write(m *message) error
+}
+
+type handleRegistrationI interface {
+	write(m *message) error
+	getId() uint64
+	serverConnectionManagerI
+}
+
+func serverConnectHandleRegistration(h handleRegistrationI, m *message) ([]uint32, error) {
+	var apiList []uint32
+	if err := jeans.DecodeSlice(m.data, &apiList); err != nil {
+		return nil, h.write(newMsgWithRegistrationResp(m, false, "invalid Registration content", []uint32{}))
+	}
+	if len(apiList) == 0 {
+		return nil, h.write(newMsgWithRegistrationResp(m, false, "invalid Registration not api", []uint32{}))
+	}
+	var badApiList = make([]uint32, 0, len(apiList))
+	var ok bool
+	for _, u := range apiList {
+		if _, ok = h.GetServerConnectionManager().registrationApi.Get(u); ok {
+			badApiList = append(badApiList, u)
+			continue
+		}
+		h.GetServerConnectionManager().registrationApi.Set(u, h.getId())
+	}
+	var regErr error
+	if len(badApiList) == 0 {
+		newMsgWithRegistrationResp(m, true, "", nil)
+	} else {
+		newMsgWithRegistrationResp(m, false, "api exist", badApiList)
+		regErr = errors.New("api reg fail")
+	}
+	if err := h.write(m); err != nil {
+		return nil, err
+	}
+	return apiList, regErr
+}
+
+func handleMapToSlice(handler map[uint32]HandleFunc, filter ...uint32) []uint32 {
+	res := make([]uint32, 0, len(handler))
+	var ok bool
+	for u, _ := range handler {
+		ok = true
+		for _, u2 := range filter {
+			if u == u2 {
+				ok = false
 				break
 			}
-			v.(chan *message) <- ctx.message
-		case msgType_Req, msgType_Send:
-			handler, ok := router.handle[ctx.message.api]
-			if !ok {
-				switch ctx.typ {
-				case msgType_Send:
-					//不通知返回
-				case msgType_Req:
-					ctx.typ = msgType_RespFail
-					ctx.data = []byte(ErrNoApi.Error())
-					_ = ctx.write(ctx.message)
-				}
-				return
-			}
-			data, err := handler(ctx.srcId, ctx.data)
-			if ctx.typ == msgType_Send {
-				return
-			}
-			if err != nil {
-				ctx.typ = msgType_RespFail
-				ctx.data = []byte(err.Error())
-			} else {
-				ctx.data = data
-				ctx.typ = msgType_RespSuccess
-			}
-			_ = ctx.write(ctx.message)
-		case msgType_Forward, msgType_ForwardSuccess, msgType_ForwardFail:
-			err := forward(ctx.message)
-			if err != nil && ctx.typ == msgType_Forward {
-				ctx.typ = msgType_ForwardFail
-				ctx.data = []byte(err.Error())
-				_ = ctx.write(ctx.message)
-			}
-		case msgType_Tick:
-			ctx.typ = msgType_TickResp
-			_ = ctx.write(ctx.message)
-		default:
-			fmt.Println("default handle:", ctx.message.String())
+		}
+		if ok {
+			res = append(res, u)
 		}
 	}
+	return res
 }
