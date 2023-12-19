@@ -2,27 +2,12 @@ package node
 
 import (
 	"fmt"
+	"github.com/Li-giegie/node/handle"
 	"github.com/panjf2000/ants/v2"
-	"sync"
+	"log"
 	"testing"
 	"time"
 )
-
-func TestPack(t *testing.T) {
-	var l sync.RWMutex
-	var m = map[string]string{
-		"":  "",
-		"1": "",
-		"2": "",
-	}
-	l.RLock()
-	for _, s2 := range m {
-		l.Lock()
-		fmt.Println(s2)
-		l.Unlock()
-	}
-	l.RUnlock()
-}
 
 func TestAnts(t *testing.T) {
 	p, _ := ants.NewPool(10)
@@ -40,7 +25,32 @@ func TestAnts(t *testing.T) {
 	fmt.Println("cap ", p.Cap())
 	fmt.Println("running ", p.Running())
 	p.Waiting()
-
 	p.Release()
+}
+
+func TestTimeOut(t *testing.T) {
+	dt := time.Duration(time.Now().Unix()) * time.Second
+	for {
+		time.Sleep(time.Second)
+		if checkUpTimeOut(dt, time.Second*5) {
+			log.Println(int64(dt.Seconds()), time.Second*5, time.Now().Unix())
+		}
+	}
+
+}
+
+type AA struct {
+}
+
+func (a AA) Typ() uint8 {
+	return 0
+}
+func TestHandler(t *testing.T) {
+	h := handle.NewHandler()
+	h.Add(1, handle.HandlerFuncSend(func(id uint64, data []byte) {
+
+	}))
+	fmt.Println(h.Get(1))
+	fmt.Println(h.Get(2))
 
 }

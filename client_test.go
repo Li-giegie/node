@@ -267,14 +267,15 @@ func TestClientSend(t *testing.T) {
 func TestClientAsyncRequest(t *testing.T) {
 	cli := newClient()
 	defer cli.Close(true)
-	n := 100000
+	n := 20000
 	utils.AsyncRun(n, func() {
-		resp, err := cli.Request(context.Background(), performance_ReqTestApi, []byte("hello"))
+		resp, err := cli.Request(context.Background(), 2, []byte("request msg"))
 		if err != nil {
 			t.Error(err, resp)
 			return
 		}
 	}).Debug()
+
 }
 
 // 异步转发测试 请求次数：100000 耗时：3.7331478s

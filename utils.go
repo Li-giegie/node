@@ -54,15 +54,9 @@ func parseAddress(protocol string, addr ...string) ([]*net.TCPAddr, error) {
 	return a, nil
 }
 
-type srvHandleI interface {
-	Load(arg interface{}) (interface{}, bool)
-	serverConnectionManagerI
-	write(m *message) error
-}
-
 type handleRegistrationI interface {
 	write(m *message) error
-	getId() uint64
+	Id() uint64
 	serverConnectionManagerI
 }
 
@@ -81,7 +75,7 @@ func serverConnectHandleRegistration(h handleRegistrationI, m *message) ([]uint3
 			badApiList = append(badApiList, u)
 			continue
 		}
-		h.GetServerConnectionManager().registrationApi.Set(u, h.getId())
+		h.GetServerConnectionManager().registrationApi.Set(u, h.Id())
 	}
 	var regErr error
 	if len(badApiList) == 0 {
@@ -112,4 +106,8 @@ func handleMapToSlice(handler map[uint32]HandleFunc, filter ...uint32) []uint32 
 		}
 	}
 	return res
+}
+
+func checkUpTimeOut(t1 time.Duration, to time.Duration) bool {
+	return time.Now().Unix() >= int64(t1.Seconds()+to.Seconds())
 }

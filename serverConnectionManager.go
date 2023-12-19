@@ -7,6 +7,7 @@ import (
 	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
 	utils "github.com/Li-giegie/go-utils"
+	"github.com/Li-giegie/node/handle"
 	"github.com/panjf2000/ants/v2"
 	"log"
 	"net"
@@ -19,6 +20,7 @@ type Conn interface {
 	Close(fast ...bool)
 	Request(ctx context.Context, api uint32, data []byte) ([]byte, error)
 	Id() uint64
+	State() bool
 }
 
 // ConnectionEnableFunc  钩子函数 身份验证通过、连接启用后回调
@@ -29,7 +31,7 @@ type serverConnectionManagerI interface {
 }
 
 type serverI interface {
-	getId() uint64
+	Id() uint64
 }
 
 // serverConnectionManager
@@ -42,7 +44,7 @@ type serverConnectionManager struct {
 	serverI
 	AuthenticationFunc
 	ConnectionEnableFunc
-	*Handler
+	*handle.Handler
 	*ants.Pool
 }
 
@@ -50,7 +52,7 @@ type serverConnectionManager struct {
 func newServerConnectionManager(si serverI) *serverConnectionManager {
 	srcConList := new(serverConnectionManager)
 	srcConList.connList = utils.NewMapUint64()
-	srcConList.Handler = newHandler()
+	srcConList.Handler = handle.NewHandler()
 	srcConList.maxGoroutine = DEFAULT_MAX_GOROUTINE
 	srcConList.minGoroutine = DEFAULT_MIN_GOROUTINE
 	srcConList.connTimeOut = DEFAULT_KeepAlive
@@ -72,9 +74,6 @@ func (s *serverConnectionManager) init() error {
 		return err
 	}
 	s.Pool = pool
-	for u, _ := range s.handle {
-		s.registrationApi.Set(u, s.serverI.getId())
-	}
 	go s.checkUp()
 	return nil
 }
@@ -103,7 +102,7 @@ func (s *serverConnectionManager) authentication(conn *net.TCPConn) (uint64, err
 		data = buf[8:]
 	}
 	intfc, ok := s.connList.Get(id)
-	if s.serverI.getId() == id || ok && intfc.(*serverConnect).state {
+	if s.serverI.Id() == id || ok && intfc.(*serverConnect).state {
 		_ = write(conn, []byte(auth_err_user_online.Error()))
 		return id, auth_err_user_online
 	}
@@ -157,7 +156,7 @@ func (s *serverConnectionManager) checkUp() {
 	var invalidConn []*serverConnect
 	var l int
 	for {
-		time.Sleep(time.Second * 5)
+		time.Sleep(s.connTimeOut)
 		l = len(s.connList.GetMap())
 		if l == 0 {
 			continue
@@ -165,7 +164,7 @@ func (s *serverConnectionManager) checkUp() {
 		invalidConn = make([]*serverConnect, 0, l/10+1)
 		s.connList.Range(func(k uint64, v interface{}) {
 			conn := v.(*serverConnect)
-			if time.Now().Add(time.Duration(-conn.activate)).UnixNano() > s.connTimeOut.Nanoseconds() {
+			if checkUpTimeOut(conn.activate, s.connTimeOut) {
 				invalidConn = append(invalidConn, conn)
 			}
 		})
@@ -184,7 +183,7 @@ func (s *serverConnectionManager) FindConn(id uint64) (Conn, bool) {
 }
 
 func (s *serverConnectionManager) ConnList() []Conn {
-	list := make([]Conn, 0, len(s.handle))
+	list := make([]Conn, 0, 10)
 	for _, conn := range s.connList.GetMap() {
 		list = append(list, conn.(*serverConnect))
 	}
@@ -194,7 +193,7 @@ func (s *serverConnectionManager) ConnList() []Conn {
 type serverConnect struct {
 	id       uint64
 	conn     *net.TCPConn
-	activate int64
+	activate time.Duration
 	state    bool
 	response sync.Map
 	apiList  []uint32
@@ -204,7 +203,7 @@ type serverConnect struct {
 func newServerConnect(id uint64, conn *net.TCPConn, scm serverConnectionManagerI) *serverConnect {
 	srvConn := new(serverConnect)
 	srvConn.conn = conn
-	srvConn.activate = time.Now().UnixNano()
+	srvConn.activate = time.Duration(time.Now().Unix()) * time.Second
 	srvConn.id = id
 	srvConn.state = true
 	srvConn.serverConnectionManagerI = scm
@@ -212,8 +211,8 @@ func newServerConnect(id uint64, conn *net.TCPConn, scm serverConnectionManagerI
 	return srvConn
 }
 
-func (c *serverConnect) getId() uint64 {
-	return c.id
+func (c *serverConnect) State() bool {
+	return c.state
 }
 
 func (c *serverConnect) process(p *ants.Pool) {
@@ -225,7 +224,7 @@ func (c *serverConnect) process(p *ants.Pool) {
 			break
 		}
 		msg := tmp
-		c.activate = time.Now().UnixNano()
+		c.activate = time.Duration(time.Now().Unix()) * time.Second
 		err = p.Submit(func() {
 			switch msg.typ {
 			case msgType_Registration: //注册API接受消息
@@ -244,25 +243,9 @@ func (c *serverConnect) process(p *ants.Pool) {
 					msgChan <- msg
 				}
 			case msgType_Send:
-				handler, ok := c.GetServerConnectionManager().handle[msg.api]
-				if ok {
-					_, _ = handler(msg.srcId, msg.data)
-					return
-				}
-				v, ok := c.GetServerConnectionManager().registrationApi.Get(msg.api)
-				if !ok {
-					msg.typ = msgType_RespFail
-					msg.data = []byte(ErrNoApi.Error())
-					_ = c.write(msg)
-					break
-				}
-				msg.srcId = c.id
-				msg.typ = msgType_Forward
-				msg.dstId = v.(uint64)
-				if err = c.GetServerConnectionManager().write(msg); err != nil {
-					msg.typ = msgType_RespFail
-					msg.data = []byte(err.Error())
-					_ = c.write(msg)
+				ih, ok := c.GetServerConnectionManager().Handler.Get(msg.api)
+				if ok && ih.Typ() == handle.HandlerTYpe_Send {
+					ih.(handle.HandlerFuncSend)(msg.srcId, msg.data)
 				}
 			case msgType_Req:
 				handler, ok := c.GetServerConnectionManager().handle[msg.api]
@@ -319,6 +302,7 @@ func (c *serverConnect) write(m *message) error {
 	if !c.state {
 		return errors.New("connect state offline")
 	}
+	c.activate = time.Duration(time.Now().Unix()) * time.Second
 	if err := writeMsg(c.conn, m); err != nil {
 		c.Close()
 		return err

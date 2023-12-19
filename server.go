@@ -2,14 +2,14 @@ package node
 
 import (
 	"context"
+	"github.com/Li-giegie/node/handle"
 	"log"
 	"net"
 	"time"
 )
 
 type ServerI interface {
-	HandleFunc(api uint32, handle HandleFunc) *Handler
-	HandlerI(ri ...HandlerI) *Handler
+	HandleFunc(api uint32, handler handle.IHandler)
 	ListenAndServer() error
 	Request(ctx context.Context, dstId uint64, api uint32, data []byte) ([]byte, error)
 	Send(dstId uint64, api uint32, data []byte) error
@@ -90,16 +90,12 @@ func WithSrvMaxConnectNum(maxNum int) Option {
 	}
 }
 
-func (s *Server) getId() uint64 {
+func (s *Server) Id() uint64 {
 	return s.id
 }
 
-func (s *Server) HandleFunc(api uint32, handle HandleFunc) *Handler {
-	return s.srvConnMgmt.HandleFunc(api, handle)
-}
-
-func (s *Server) HandlerI(ri ...HandlerI) *Handler {
-	return s.srvConnMgmt.HandlerI(ri...)
+func (s *Server) HandleFunc(api uint32, handler handle.IHandler) {
+	s.srvConnMgmt.Handler.Add(api, handler)
 }
 
 // ListenAndServer 开启服务

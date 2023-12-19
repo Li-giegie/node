@@ -39,7 +39,7 @@ type Client struct {
 	keepAlive  time.Duration //连接保活：在一段时间没有发送消息后会发送消息维持连接状态的休眠时间 默认值30s
 	handler    *Handler
 	response   sync.Map
-	activate   int64
+	activate   time.Duration
 	state      bool
 	authData   []byte
 	closeChan  chan struct{}
@@ -163,7 +163,7 @@ func (c *Client) Registration(noExposure ...uint32) ([]uint32, error) {
 }
 
 func (c *Client) process() {
-	defer c.Close()
+	defer c.Close(true)
 	for c.state {
 		msg, err := readMessage(c.conn)
 		if err != nil {
@@ -173,10 +173,9 @@ func (c *Client) process() {
 			}
 			log.Printf("client.Conn.read err : at  %v \n", err)
 			c.state = false
-			c.Close()
 			return
 		}
-		c.activate = time.Now().Unix()
+		c.activate = time.Duration(time.Now().Unix()) * time.Second
 		switch msg.typ {
 		case msgType_RespSuccess, msgType_RespFail, msgType_RegistrationSucccess, msgType_RegistrationFail, msgType_ForwardSuccess, msgType_ForwardFail, msgType_TickResp:
 			res, ok := c.response.Load(msg.id)
@@ -233,9 +232,10 @@ func (c *Client) process() {
 }
 
 func (c *Client) tick(keepAlive time.Duration) {
-	tick := time.NewTicker(keepAlive)
-	for range tick.C {
-		if c.activate+int64(keepAlive.Seconds()) <= time.Now().Unix() {
+	for c.state {
+		time.Sleep(time.Second)
+		if checkUpTimeOut(c.activate, keepAlive) {
+			log.Println("超时")
 			ctx, cancel := context.WithTimeout(context.Background(), keepAlive)
 			m, err := c.request(ctx, newMsgWithTick())
 			if err != nil || m.typ != msgType_TickResp {
@@ -260,6 +260,7 @@ func (c *Client) Run() {
 
 // Send 发送到服务端，但不会有响应
 func (c *Client) Send(api uint32, data []byte) error {
+	c.activate = time.Duration(time.Now().Unix()) * time.Second
 	return writeMsg(c.conn, newMsgWithSend(api, data))
 }
 
@@ -277,8 +278,8 @@ func (c *Client) Forward(ctx context.Context, dstId uint64, api uint32, data []b
 }
 
 func (c *Client) request(ctx context.Context, m *message) (*message, error) {
+	c.activate = time.Duration(time.Now().Unix()) * time.Second
 	replyChan := make(chan *message)
-	fmt.Println("cli req ", m.String())
 	c.response.Store(m.id, replyChan)
 	defer c.response.Delete(m.id)
 	err := writeMsg(c.conn, m)

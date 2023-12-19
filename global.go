@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	DEFAULT_ServerAddress  = "127.0.0.1:2023"
+	DEFAULT_ServerAddress  = "0.0.0.0:8088"
 	DEFAULT_ClientAddress  = "127.0.0.1:20239"
 	DEFAULT_ClientID       = 20230
 	DEFAULT_ServerID       = 20240
