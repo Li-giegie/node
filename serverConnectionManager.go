@@ -222,6 +222,7 @@ func (c *serverConnect) process(p *ants.Pool) {
 		tmp, err := readMessage(c.conn)
 		if err != nil {
 			c.state = false
+			log.Println("readMessage err: ", err)
 			break
 		}
 		msg := tmp
@@ -311,7 +312,6 @@ func (c *serverConnect) process(p *ants.Pool) {
 		if err != nil {
 			log.Println("process err: ", err)
 		}
-
 	}
 }
 

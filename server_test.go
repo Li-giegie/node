@@ -38,6 +38,6 @@ func TestNodeServer(t *testing.T) {
 
 	defer srv.Shutdown()
 	if err := srv.ListenAndServer(); err != nil {
-		fmt.Println(err)
+		fmt.Println("listen err: ", err)
 	}
 }
