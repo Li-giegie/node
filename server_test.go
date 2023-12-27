@@ -2,53 +2,26 @@ package node
 
 import (
 	"fmt"
+	"log"
 	"testing"
-	"time"
 )
 
-const (
-	sendApi    = 1
-	reqApi     = 2
-	forwardApi = 3
-
-	permit = "permit"
-	deny   = "deny"
-
-	performance_ReqTestApi = 4
-)
-
-func TestNodeServer(t *testing.T) {
-	srv := NewServer(DEFAULT_ServerAddress,
-		WithSrvGoroutine(100, 200),
-		WithSrvId(DEFAULT_ServerID),
-		WithSrvConnTimeout(time.Second*5),
-		WithSrvAuthentication(func(id uint64, data []byte) (ok bool, reply []byte) {
-			fmt.Println("auth handle:", id, string(data), len(data))
-			switch string(data) {
-			case permit:
-				return true, []byte(permit)
-			case deny:
-				return false, []byte(deny)
-			default:
-				return false, []byte("Invalid Format")
-			}
-		},
-		),
-	)
-	srv.HandleFunc(1, func(id uint64, data []byte) (out []byte, err error) {
-		fmt.Println(id, string(data))
-		time.Sleep(time.Second * 5)
-		return nil, err
+func TestServer(t *testing.T) {
+	srv := NewServer(DEFAULT_ServerAddress, WithSrvAuthentication(func(id uint64, data []byte) (ok bool, reply []byte) {
+		log.Println(id, string(data))
+		return true, nil
+	}))
+	srv.HandleFunc(1, func(ctx *Context) {
+		//if err := ctx.Reply([]byte("1")); err != nil {
+		//	fmt.Println(err)
+		//}
 	})
-	srv.HandleFunc(2, func(id uint64, data []byte) (out []byte, err error) {
-		//fmt.Println(id, string(data))
-		return data, err
+	srv.HandleFunc(2, func(ctx *Context) {
+		log.Println("handle 2: ", ctx.GetSrcId(), string(ctx.GetData()))
+		if err := ctx.Reply([]byte("ok---2")); err != nil {
+			log.Println("reply err: ", err)
+		}
 	})
-	defer srv.Shutdown()
-	go func() {
-		time.Sleep(time.Second * 10)
-		srv.Shutdown()
-	}()
 	if err := srv.ListenAndServer(); err != nil {
 		fmt.Println(err)
 	}

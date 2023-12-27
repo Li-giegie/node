@@ -1,22 +1,19 @@
 package node
 
 import (
-	"context"
-	"github.com/Li-giegie/node/handle"
 	"log"
 	"net"
 	"time"
 )
 
 type ServerI interface {
-	HandleFunc(api uint32, handler handle.IHandler)
+	HandleFunc(api uint32, handler HandlerFunc)
 	ListenAndServer() error
-	Request(ctx context.Context, dstId uint64, api uint32, data []byte) ([]byte, error)
-	Send(dstId uint64, api uint32, data []byte) error
 	CloseConn(id uint64)
-	ConnList() []Conn
-	FindConn(id uint64) (Conn, bool)
+	ConnList() []ISrvConn
+	FindConn(id uint64) (ISrvConn, bool)
 	Shutdown()
+	ServerId() uint64
 }
 
 type Server struct {
@@ -90,12 +87,12 @@ func WithSrvMaxConnectNum(maxNum int) Option {
 	}
 }
 
-func (s *Server) Id() uint64 {
+func (s *Server) ServerId() uint64 {
 	return s.id
 }
 
-func (s *Server) HandleFunc(api uint32, handler handle.IHandler) {
-	s.srvConnMgmt.Handler.Add(api, handler)
+func (s *Server) HandleFunc(api uint32, handler HandlerFunc) {
+	s.srvConnMgmt.LocalHandleFuncList.Add(api, handler)
 }
 
 // ListenAndServer 开启服务
@@ -132,31 +129,15 @@ func (s *Server) ListenAndServer() error {
 	return nil
 }
 
-func (s *Server) Request(ctx context.Context, dstId uint64, api uint32, data []byte) ([]byte, error) {
-	conn, ok := s.FindConn(dstId)
-	if !ok {
-		return nil, ErrConnNotExist
-	}
-	return conn.Request(ctx, api, data)
-}
-
-func (s *Server) Send(dstId uint64, api uint32, data []byte) error {
-	conn, ok := s.FindConn(dstId)
-	if !ok {
-		return ErrConnNotExist
-	}
-	return conn.Send(api, data)
-}
-
 func (s *Server) CloseConn(id uint64) {
 	s.srvConnMgmt.CloseConn(id)
 }
 
-func (s *Server) ConnList() []Conn {
+func (s *Server) ConnList() []ISrvConn {
 	return s.srvConnMgmt.ConnList()
 }
 
-func (s *Server) FindConn(id uint64) (Conn, bool) {
+func (s *Server) FindConn(id uint64) (ISrvConn, bool) {
 	return s.srvConnMgmt.FindConn(id)
 }
 

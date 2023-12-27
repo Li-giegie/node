@@ -2,7 +2,6 @@ package node
 
 import (
 	"fmt"
-	"github.com/Li-giegie/node/handle"
 	"github.com/panjf2000/ants/v2"
 	"log"
 	"testing"
@@ -36,21 +35,5 @@ func TestTimeOut(t *testing.T) {
 			log.Println(int64(dt.Seconds()), time.Second*5, time.Now().Unix())
 		}
 	}
-
-}
-
-type AA struct {
-}
-
-func (a AA) Typ() uint8 {
-	return 0
-}
-func TestHandler(t *testing.T) {
-	h := handle.NewHandler()
-	h.Add(1, handle.HandlerFuncSend(func(id uint64, data []byte) {
-
-	}))
-	fmt.Println(h.Get(1))
-	fmt.Println(h.Get(2))
 
 }

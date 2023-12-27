@@ -1,7 +1,6 @@
 package node
 
 import (
-	"errors"
 	jeans "github.com/Li-giegie/go-jeans"
 	"math/rand"
 	"net"
@@ -27,11 +26,11 @@ func readMessage(conn *net.TCPConn) (*message, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMsgWithUnmarshalV2(buf), nil
+	return unmarshalMsg(buf), nil
 }
 
-func writeMsg(conn *net.TCPConn, m *message) error {
-	buf := m.marshalV2()
+func writeMessage(conn *net.TCPConn, m *message) error {
+	buf := m.marshal()
 	m.recycle()
 	_, err := conn.Write(jeans.Pack(buf))
 	return err
@@ -54,60 +53,23 @@ func parseAddress(protocol string, addr ...string) ([]*net.TCPAddr, error) {
 	return a, nil
 }
 
-type handleRegistrationI interface {
-	write(m *message) error
-	Id() uint64
-	serverConnectionManagerI
+func checkUpTimeOut(t1 time.Duration, to time.Duration) bool {
+	return time.Now().Unix() >= int64(t1.Seconds()+to.Seconds())
 }
 
-func serverConnectHandleRegistration(h handleRegistrationI, m *message) ([]uint32, error) {
-	var apiList []uint32
-	if err := jeans.DecodeSlice(m.data, &apiList); err != nil {
-		return nil, h.write(newMsgWithRegistrationResp(m, false, "invalid Registration content", []uint32{}))
-	}
-	if len(apiList) == 0 {
-		return nil, h.write(newMsgWithRegistrationResp(m, false, "invalid Registration not api", []uint32{}))
-	}
-	var badApiList = make([]uint32, 0, len(apiList))
+func filterApi(srcApis []uint32, filterApis []uint32) []uint32 {
+	var newSrcApis = make([]uint32, 0, len(srcApis))
 	var ok bool
-	for _, u := range apiList {
-		if _, ok = h.GetServerConnectionManager().registrationApi.Get(u); ok {
-			badApiList = append(badApiList, u)
-			continue
-		}
-		h.GetServerConnectionManager().registrationApi.Set(u, h.Id())
-	}
-	var regErr error
-	if len(badApiList) == 0 {
-		newMsgWithRegistrationResp(m, true, "", nil)
-	} else {
-		newMsgWithRegistrationResp(m, false, "api exist", badApiList)
-		regErr = errors.New("api reg fail")
-	}
-	if err := h.write(m); err != nil {
-		return nil, err
-	}
-	return apiList, regErr
-}
-
-func handleMapToSlice(handler map[uint32]HandleFunc, filter ...uint32) []uint32 {
-	res := make([]uint32, 0, len(handler))
-	var ok bool
-	for u, _ := range handler {
+	for _, api := range srcApis {
 		ok = true
-		for _, u2 := range filter {
-			if u == u2 {
+		for _, u := range filterApis {
+			if api == u {
 				ok = false
-				break
 			}
 		}
 		if ok {
-			res = append(res, u)
+			newSrcApis = append(newSrcApis, api)
 		}
 	}
-	return res
-}
-
-func checkUpTimeOut(t1 time.Duration, to time.Duration) bool {
-	return time.Now().Unix() >= int64(t1.Seconds()+to.Seconds())
+	return newSrcApis
 }

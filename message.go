@@ -1,6 +1,7 @@
 package node
 
 import (
+	"errors"
 	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
 	"sync"
@@ -14,44 +15,25 @@ const (
 
 	//仅发送消息
 	msgType_Send
-
-	//请求消息：需要回复的消息
-	msgType_Req
-	msgType_RespFail
-	msgType_RespSuccess
-
-	//转发请求消息：转发后需要回复的消息
-	msgType_Forward
-	msgType_ForwardSuccess
-	msgType_ForwardFail
+	msgType_Reply
+	msgType_ReplyErr
 
 	msgType_Registration
-	msgType_RegistrationSucccess
-	msgType_RegistrationFail
+	msgType_RegistrationResp
 )
 
 var msgTypeMap = map[uint8]string{
-	msgType_Send: "msgType_Send",
-
-	msgType_Req:         "msgType_Req",
-	msgType_RespSuccess: "msgType_RespSuccess",
-	msgType_RespFail:    "msgType_RespFail",
-
-	msgType_Forward:        "msgType_Forward",
-	msgType_ForwardSuccess: "msgType_Forward",
-	msgType_ForwardFail:    "msgType_ForwardFail",
-
+	msgType_Send:     "msgType_Send",
+	msgType_Reply:    "msgType_Reply",
+	msgType_ReplyErr: "msgType_ReplyErr",
 	msgType_Tick:     "Tick",
 	msgType_TickResp: "TickRespOk",
 
-	msgType_Registration:         "msgType_Registration",
-	msgType_RegistrationSucccess: "msgType_RegistrationSucccess",
-	msgType_RegistrationFail:     "msgType_RegistrationFail",
+	msgType_Registration:     "msgType_Registration",
+	msgType_RegistrationResp: "msgType_RegistrationResp",
 }
 
 var msgCounter uint32
-
-//var _msgPoolCount uint32
 
 var msgPool = sync.Pool{New: func() any {
 	return new(message)
@@ -76,7 +58,7 @@ func (m *message) recycle() {
 	msgPool.Put(m)
 }
 
-func (m *message) marshalV1() []byte {
+func (m *message) marshal() []byte {
 	buf, err := jeans.Encode(m.typ, m.id, m.api, m.data, m.srcId, m.dstId)
 	if err != nil {
 		panic(any(err))
@@ -84,61 +66,34 @@ func (m *message) marshalV1() []byte {
 	return buf
 }
 
-func (m *message) unmarshalV1(buf []byte) {
+func (m *message) unmarshal(buf []byte) {
 	err := jeans.Decode(buf, &m.typ, &m.id, &m.api, &m.data, &m.srcId, &m.dstId)
 	if err != nil {
 		panic(any(err))
 	}
 }
 
-func newMsgWithUnmarshalV1(b []byte) *message {
+func unmarshalMsg(b []byte) *message {
 	m := msgPool.Get().(*message)
-	m.unmarshalV1(b)
+	m.unmarshal(b)
 	return m
 }
 
-// newMsgWithReq 新建一个关于请求的数据包
-func newMsgWithReq(api uint32, data []byte) *message {
+func newMsg() *message {
 	m := msgPool.Get().(*message)
 	m.id = atomic.AddUint32(&msgCounter, 1)
-	m.typ = msgType_Req
-	m.api = api
-	m.data = data
-	return m
-}
-
-func newMsgWithForward(srcId, destId uint64, api uint32, data []byte) *message {
-	m := msgPool.Get().(*message)
-	m.id = atomic.AddUint32(&msgCounter, 1)
-	m.typ = msgType_Forward
-	m.srcId = srcId
-	m.dstId = destId
-	m.api = api
-	m.data = data
 	return m
 }
 
 // newMsgWithReq 新建一个关于请求的数据包
 func newMsgWithTick() *message {
 	m := msgPool.Get().(*message)
-	m.id = atomic.AddUint32(&msgCounter, 1)
 	m.typ = msgType_Tick
-	return m
-}
-
-// msgType_Send 新建一个关于单次发送的数据包包
-func newMsgWithSend(api uint32, data []byte) *message {
-	m := msgPool.Get().(*message)
-	m.id = atomic.AddUint32(&msgCounter, 1)
-	m.typ = msgType_Send
-	m.api = api
-	m.data = data
 	return m
 }
 
 func newMsgWithRegistration(apiList []uint32) *message {
 	m := msgPool.Get().(*message)
-	m.id = atomic.AddUint32(&msgCounter, 1)
 	m.typ = msgType_Registration
 	buf, err := jeans.EncodeSlice(apiList)
 	if err != nil {
@@ -148,142 +103,130 @@ func newMsgWithRegistration(apiList []uint32) *message {
 	return m
 }
 
-func newMsgWithRegistrationResp(m *message, ok bool, text string, badApiList []uint32) *message {
-	if ok {
-		m.typ = msgType_RegistrationSucccess
-	} else {
-		m.typ = msgType_RegistrationFail
-	}
-	buf, err := jeans.EncodeSlice(badApiList)
-	if err != nil {
-		panic(err)
-	}
-	buf, err = jeans.Encode(text, buf)
-	if err != nil {
-		panic(err)
-	}
-	m.data = buf
-	return m
-}
-
-func newMsgWithUnmarshalV2(b []byte) *message {
-	m := msgPool.Get().(*message)
-	m.unmarshalV2(b)
-	return m
-}
-
-func (m *message) marshalV2() []byte {
-	switch m.typ {
-	case msgType_Send:
-		return m.marshalWithSend()
-	case msgType_Req, msgType_RespSuccess, msgType_RespFail:
-		return m.marshalWithReq()
-	case msgType_Forward, msgType_ForwardSuccess, msgType_ForwardFail:
-		return m.marshalWithForward()
-	case msgType_Tick, msgType_TickResp:
-		return m.marshalWithTick()
-	case msgType_Registration, msgType_RegistrationSucccess, msgType_RegistrationFail:
-		return m.marshalRegistration()
-	default:
-		panic("marshal err: msg type unlawfulness")
-	}
-}
-
-func (m *message) unmarshalV2(buf []byte) {
-	switch buf[0] {
-	case msgType_Send:
-		m.unmarshalWithSend(buf)
-	case msgType_Req, msgType_RespSuccess, msgType_RespFail:
-		m.unmarshalWithReq(buf)
-	case msgType_Forward, msgType_ForwardSuccess, msgType_ForwardFail:
-		m.unmarshalWithForward(buf)
-	case msgType_Tick, msgType_TickResp:
-		m.unmarshalWithTick(buf)
-	case msgType_Registration, msgType_RegistrationSucccess, msgType_RegistrationFail:
-		m.unmarshalRegistration(buf)
-	default:
-		panic("unmarshal err: msg type unlawfulness")
-	}
-}
-
-func (m *message) marshalWithReq() []byte {
-	buf, err := jeans.Encode(m.typ, m.id, m.api, m.data)
-	if err != nil {
-		panic(any(err))
-	}
-	return buf
-}
-func (m *message) unmarshalWithReq(buf []byte) {
-	err := jeans.Decode(buf, &m.typ, &m.id, &m.api, &m.data)
-	if err != nil {
-		panic(any(err))
-	}
-}
-
-func (m *message) marshalWithForward() []byte {
-	buf, err := jeans.Encode(m.typ, m.id, m.api, m.srcId, m.dstId, m.data)
-	if err != nil {
-		panic(any(err))
-	}
-	return buf
-}
-func (m *message) unmarshalWithForward(buf []byte) {
-	err := jeans.Decode(buf, &m.typ, &m.id, &m.api, &m.srcId, &m.dstId, &m.data)
-	if err != nil {
-		panic(any(err))
-	}
-}
-
-func (m *message) marshalWithTick() []byte {
-	buf, err := jeans.Encode(m.typ, m.id, m.data)
-	if err != nil {
-		panic(any(err))
-	}
-	return buf
-}
-func (m *message) unmarshalWithTick(buf []byte) {
-	err := jeans.Decode(buf, &m.typ, &m.id, &m.data)
-	if err != nil {
-		panic(any(err))
-	}
-}
-
-func (m *message) marshalWithSend() []byte {
-	buf, err := jeans.Encode(m.typ, m.id, m.api, m.data)
-	if err != nil {
-		panic(any(err))
-	}
-	return buf
-}
-func (m *message) unmarshalWithSend(buf []byte) {
-	err := jeans.Decode(buf, &m.typ, &m.id, &m.api, &m.data)
-	if err != nil {
-		panic(any(err))
-	}
-}
-
-func (m *message) marshalRegistration() []byte {
-	buf, err := jeans.Encode(m.typ, m.id, m.data)
-	if err != nil {
-		panic(any("err1 " + err.Error()))
-	}
-	return buf
-}
-
-func (m *message) unmarshalRegistration(buf []byte) {
-	err := jeans.Decode(buf, &m.typ, &m.id, &m.data)
-	if err != nil {
-		panic(any("err2 " + err.Error()))
-	}
+type RegistrationRespMsg struct {
+	badApis []uint32
+	err     error
 }
 
 func (m *message) String() string {
 	if m == nil {
 		return "nil"
 	}
-	return fmt.Sprintf("message : id [%d] api [%d] type [%s] data %s", m.id, m.api, msgTypeMap[m.typ], m.data)
+	return fmt.Sprintf("message : id [%d] api [%d] src [%d] dst [%d] type [%s] data %s", m.id, m.api, m.srcId, m.dstId, msgTypeMap[m.typ], m.data)
 }
 
 func (m *message) debug() {
 	fmt.Println(m.String())
+}
+
+type msgDataWithErr struct {
+	errStr string
+	data   []byte
+}
+
+func (m *msgDataWithErr) Error() string {
+	return m.errStr
+}
+func newMsgDataWithErr(m *message) *msgDataWithErr {
+	mde := new(msgDataWithErr)
+	err := jeans.Decode(m.data, &mde.errStr, &mde.data)
+	if err != nil {
+		panic(err)
+	}
+	return mde
+}
+
+func encodeErrReplyMsgData(err error, data []byte) []byte {
+	buf, err := jeans.Encode(err.Error(), data)
+	if err != nil {
+		panic(err)
+	}
+	return buf
+}
+
+func encodeAuthReq(id uint64, data []byte) []byte {
+	buf, err := jeans.Encode(id, data)
+	if err != nil {
+		panic(err)
+	}
+	return buf
+}
+
+func decodeAuthReq(buf []byte) (id uint64, data []byte) {
+	err := jeans.Decode(buf, &id, &data)
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func encodeAuthResp(data []byte, err error) []byte {
+	var errStr string
+	if err != nil {
+		errStr = err.Error()
+	}
+	buf, err := jeans.Encode(data, errStr)
+	if err != nil {
+		panic(err)
+	}
+	return buf
+}
+
+func decodeAuthResp(buf []byte) (data []byte, err error) {
+	var errStr string
+	err2 := jeans.Decode(buf, &data, &errStr)
+	if err2 != nil {
+		panic(err2)
+	}
+	if errStr != "" {
+		err = errors.New(errStr)
+	}
+	return
+}
+
+func encodeRegistrationApiReq(apis []uint32) []byte {
+	buf, err := jeans.EncodeSlice(apis)
+	if err != nil {
+		panic(err)
+	}
+	return buf
+}
+
+func decodeRegistrationApiReq(data []byte) (apis []uint32) {
+	err := jeans.DecodeSlice(data, &apis)
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func encodeRegistrationApiResp(_err error, badApi []uint32) []byte {
+	buf, err := jeans.EncodeSlice(badApi)
+	if err != nil {
+		panic(err)
+	}
+	var errStr string
+	if _err != nil {
+		errStr = _err.Error()
+	}
+	data, err := jeans.Encode(errStr, buf)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
+func decodeRegistrationApiResp(data []byte) (badApis []uint32, err error) {
+	var errStr string
+	var buf []byte
+	if _err := jeans.Decode(data, &errStr, &buf); _err != nil {
+		panic(_err)
+	}
+	if _err := jeans.DecodeSlice(buf, &badApis); _err != nil {
+		panic(_err)
+	}
+	if errStr != "" {
+		err = errors.New(errStr)
+	}
+	return
 }
