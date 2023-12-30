@@ -2,6 +2,7 @@ package node
 
 import (
 	"errors"
+	"log"
 	"net"
 	"time"
 )
@@ -28,23 +29,12 @@ func newConnect(id uint64, conn *net.TCPConn, s iStorageMsgChan) *connect {
 	}
 }
 
-func (c *connect) send(srcId uint64, typ uint8, api uint32, data []byte) error {
-	m := newMsg()
-	m.api = api
-	m.data = data
-	m.srcId = srcId
-	m.typ = typ
-	return c.writeMsg(m)
+func (c *connect) send(srcId, dstId uint64, typ uint8, api uint32, data []byte) error {
+	return c.writeMsg(newMsg(srcId, dstId, typ, api, data))
 }
 
-func (c *connect) request(timeout time.Duration, typ uint8, srcId, dstId uint64, api uint32, data []byte) (respData []byte, err error) {
-	m := newMsg()
-	m.api = api
-	m.typ = typ
-	m.data = data
-	m.srcId = srcId
-	m.dstId = dstId
-
+func (c *connect) request(timeout time.Duration, srcId, dstId uint64, typ uint8, api uint32, data []byte) (respData []byte, err error) {
+	m := newMsg(srcId, dstId, typ, api, data)
 	mChan := make(chan *message)
 	c.storageMsgChan(m.id, mChan)
 	if err = c.writeMsg(m); err != nil {
@@ -52,7 +42,11 @@ func (c *connect) request(timeout time.Duration, typ uint8, srcId, dstId uint64,
 	}
 	select {
 	case reply := <-mChan:
+		log.Println("debug ", reply.String())
 		defer reply.recycle()
+		if reply.typ == msgType_ReplyErr {
+			return decodeErrReplyMsgData(reply.data)
+		}
 		return reply.data, nil
 	case <-time.After(timeout):
 		return nil, errors.New("timeout")

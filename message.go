@@ -23,12 +23,11 @@ const (
 )
 
 var msgTypeMap = map[uint8]string{
-	msgType_Send:     "msgType_Send",
-	msgType_Reply:    "msgType_Reply",
-	msgType_ReplyErr: "msgType_ReplyErr",
-	msgType_Tick:     "Tick",
-	msgType_TickResp: "TickRespOk",
-
+	msgType_Send:             "msgType_Send",
+	msgType_Reply:            "msgType_Reply",
+	msgType_ReplyErr:         "msgType_ReplyErr",
+	msgType_Tick:             "Tick",
+	msgType_TickResp:         "TickRespOk",
 	msgType_Registration:     "msgType_Registration",
 	msgType_RegistrationResp: "msgType_RegistrationResp",
 }
@@ -79,33 +78,15 @@ func unmarshalMsg(b []byte) *message {
 	return m
 }
 
-func newMsg() *message {
+func newMsg(srcId, dstId uint64, typ uint8, api uint32, data []byte) *message {
 	m := msgPool.Get().(*message)
 	m.id = atomic.AddUint32(&msgCounter, 1)
+	m.srcId = srcId
+	m.dstId = dstId
+	m.typ = typ
+	m.api = api
+	m.data = data
 	return m
-}
-
-// newMsgWithReq 新建一个关于请求的数据包
-func newMsgWithTick() *message {
-	m := msgPool.Get().(*message)
-	m.typ = msgType_Tick
-	return m
-}
-
-func newMsgWithRegistration(apiList []uint32) *message {
-	m := msgPool.Get().(*message)
-	m.typ = msgType_Registration
-	buf, err := jeans.EncodeSlice(apiList)
-	if err != nil {
-		panic(err)
-	}
-	m.data = buf
-	return m
-}
-
-type RegistrationRespMsg struct {
-	badApis []uint32
-	err     error
 }
 
 func (m *message) String() string {
@@ -119,29 +100,21 @@ func (m *message) debug() {
 	fmt.Println(m.String())
 }
 
-type msgDataWithErr struct {
-	errStr string
-	data   []byte
-}
-
-func (m *msgDataWithErr) Error() string {
-	return m.errStr
-}
-func newMsgDataWithErr(m *message) *msgDataWithErr {
-	mde := new(msgDataWithErr)
-	err := jeans.Decode(m.data, &mde.errStr, &mde.data)
-	if err != nil {
-		panic(err)
-	}
-	return mde
-}
-
 func encodeErrReplyMsgData(err error, data []byte) []byte {
 	buf, err := jeans.Encode(err.Error(), data)
 	if err != nil {
 		panic(err)
 	}
 	return buf
+}
+
+func decodeErrReplyMsgData(data []byte) ([]byte, error) {
+	var errStr string
+	var buf []byte
+	if err := jeans.Decode(data, &errStr, &buf); err != nil {
+		panic(err)
+	}
+	return buf, errors.New(errStr)
 }
 
 func encodeAuthReq(id uint64, data []byte) []byte {

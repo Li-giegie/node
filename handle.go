@@ -31,11 +31,9 @@ func (c *Context) GetData() []byte {
 }
 
 func (c *Context) Reply(data []byte) error {
-	c.srcId, c.dstId = c.dstId, c.srcId
 	return c.iContext.reply(c.message, msgType_Reply, data)
 }
 func (c *Context) ReplyErr(err error, data []byte) error {
-	c.srcId, c.dstId = c.dstId, c.srcId
 	return c.iContext.reply(c.message, msgType_ReplyErr, encodeErrReplyMsgData(err, data))
 }
 

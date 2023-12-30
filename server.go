@@ -9,7 +9,7 @@ import (
 type ServerI interface {
 	HandleFunc(api uint32, handler HandlerFunc)
 	ListenAndServer() error
-	CloseConn(id uint64)
+	CloseConnect(id uint64)
 	ConnList() []ISrvConn
 	FindConn(id uint64) (ISrvConn, bool)
 	Shutdown()
@@ -129,8 +129,8 @@ func (s *Server) ListenAndServer() error {
 	return nil
 }
 
-func (s *Server) CloseConn(id uint64) {
-	s.srvConnMgmt.CloseConn(id)
+func (s *Server) CloseConnect(id uint64) {
+	s.srvConnMgmt.CloseConnect(id)
 }
 
 func (s *Server) ConnList() []ISrvConn {

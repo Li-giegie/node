@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"flag"
+	"fmt"
 	"github.com/Li-giegie/node"
 	"log"
 	"time"
@@ -13,11 +15,11 @@ const (
 )
 const serverAddr = "39.101.193.248:8088"
 
-var srvaddr = flag.String("rip", "127.0.0.1:8088", "remote ip")
+var srvaddr = flag.String("rip", serverAddr, "remote ip")
 
 func main() {
 	flag.Parse()
-	Client("0.0.0.0:8989", *srvaddr, 100)
+	Client("0.0.0.0:8989", *srvaddr, 1)
 }
 
 func Client(lAddr, rAddr string, id uint64) {
@@ -25,27 +27,32 @@ func Client(lAddr, rAddr string, id uint64) {
 		rAddr,
 		node.WithClientId(id),
 		node.WithClientLocalIpAddr(lAddr),
-		node.WithClientKeepAlive(time.Second*5),
+		node.WithClientKeepAlive(time.Second*3),
 	)
-	_, err := client.Connect()
+	_, err := client.Connect(nil)
 	if err != nil {
 		log.Println(err)
 		return
 	}
 	defer client.Close(true)
-	client.HandleFunc(clientSendApi, func(id uint64, data []byte) (out []byte, err error) {
-		log.Println("client send: ", id, string(data))
-		return nil, nil
+	client.HandleFunc(10, func(ctx *node.Context) {
+		fmt.Println("receive msg with handle 10: ", ctx.String())
 	})
-	client.HandleFunc(clientReqApi, func(id uint64, data []byte) (out []byte, err error) {
-		log.Println("client req: ", id, string(data))
-		return []byte("client req api handle success"), nil
+	client.HandleFunc(20, func(ctx *node.Context) {
+		fmt.Println("receive msg with handle 20: ", ctx.String())
+		rep := append([]byte("handle 20 success: "), ctx.GetData()...)
+		_ = ctx.Reply(rep)
+	})
+	client.HandleFunc(30, func(ctx *node.Context) {
+		fmt.Println("receive msg with handle 30: ", ctx.String())
+		_ = ctx.ReplyErr(errors.New("err: test error reply"), append([]byte("handle 30 error: "), ctx.GetData()...))
 	})
 	badApi, err := client.Registration()
 	if err != nil {
 		log.Println(err, badApi)
 		return
 	}
-
-	client.Run()
+	if err = client.Run(); err != nil {
+		log.Println(err)
+	}
 }

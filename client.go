@@ -151,10 +151,10 @@ func (c *Client) authentication(conn *net.TCPConn, data []byte) ([]byte, error) 
 	return decodeAuthResp(buf)
 }
 
-// registration 注册Api：noExposure 不注册API列表,error 不为空时返回注册失败的api
+// Registration 注册Api：noExposure 不注册API列表,error 不为空时返回注册失败的api
 func (c *Client) Registration(noExposure ...uint32) ([]uint32, error) {
 	apis := filterApi(c.handler.cache.KeyToSlice(), noExposure)
-	data, err := c.request(c.keepAlive, msgType_Registration, c.id, 0, 0, encodeRegistrationApiReq(apis))
+	data, err := c.request(c.keepAlive, c.id, 0, msgType_Registration, 0, encodeRegistrationApiReq(apis))
 	if err != nil {
 		return nil, err
 	}
@@ -166,8 +166,7 @@ func (c *Client) tick(keepAlive time.Duration) {
 	for c.Status {
 		time.Sleep(time.Second)
 		if time.Now().Unix() >= c.activation+keepNum {
-			log.Println("超时")
-			_, err := c.request(c.keepAlive, msgType_Tick, c.id, 0, 0, nil)
+			_, err := c.request(c.keepAlive, c.id, 0, msgType_Tick, 0, nil)
 			if err != nil {
 				log.Println(err)
 				c.Close(true)
@@ -194,17 +193,13 @@ func (c *Client) Close(nowait ...bool) {
 }
 
 func (c *Client) Send(api uint32, data []byte) error {
-	return c.send(c.id, msgType_Send, api, data)
+	return c.send(c.id, 0, msgType_Send, api, data)
 }
 
 func (c *Client) Request(timeout time.Duration, api uint32, data []byte) (replyData []byte, err error) {
-	return c.request(timeout, msgType_Send, c.Id, 0, api, data)
+	return c.request(timeout, c.id, 0, msgType_Send, api, data)
 }
 
 func (c *Client) Forward(timeout time.Duration, dstId uint64, api uint32, data []byte) (replyData []byte, err error) {
-	return c.request(timeout, msgType_Send, c.Id, dstId, api, data)
-}
-
-func (c *Client) reply(m *message, typ uint8, data []byte) error {
-	return c.reply(m, typ, data)
+	return c.request(timeout, c.id, dstId, msgType_Send, api, data)
 }

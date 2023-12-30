@@ -13,10 +13,6 @@ import (
 // ConnectionEnableFunc  钩子函数 身份验证通过、连接启用后回调
 type ConnectionEnableFunc func(conn ISrvConn)
 
-type serverConnectionManagerI interface {
-	GetServerConnectionManager() *serverConnectionManager
-}
-
 // serverConnectionManager
 type serverConnectionManager struct {
 	minGoroutine int
@@ -78,12 +74,14 @@ func (s *serverConnectionManager) handle(i interface{}) {
 				_ = ctx.conn.reply(ctx.msg, msgType_Reply, []byte(ErrNoApi.Error()))
 				return
 			}
+			ctx.msg.dstId = conn.Id
 			if err := conn.writeMsg(ctx.msg); err != nil {
 				log.Println("conn.process.localHandle.forward err: ", err)
 			}
 		default: //转发处理
 			conn, ok := s.GetConnect(ctx.msg.dstId)
 			if !ok || conn == nil || !conn.Status {
+				ctx.msg.srcId = ctx.conn.Id
 				_ = ctx.conn.reply(ctx.msg, msgType_Reply, []byte(ErrConnNotExist.Error()))
 				return
 			}
@@ -91,7 +89,7 @@ func (s *serverConnectionManager) handle(i interface{}) {
 				log.Println("conn.process.forward err: ", err)
 			}
 		}
-	case msgType_Reply, msgType_RegistrationResp, msgType_TickResp:
+	case msgType_Reply, msgType_ReplyErr, msgType_RegistrationResp, msgType_TickResp:
 		switch ctx.msg.dstId {
 		case s.ServerId(), 0:
 			obj, ok := ctx.conn.msgChan.Get(ctx.msg.id)
@@ -133,6 +131,7 @@ func (s *serverConnectionManager) handle(i interface{}) {
 		ctx.conn.apis = apis
 		for _, api := range apis {
 			s.RegisterApiConn.Set(api, ctx.conn)
+			log.Println("RegisterApi: ", api)
 		}
 		_ = ctx.conn.reply(ctx.msg, msgType_RegistrationResp, encodeRegistrationApiResp(nil, nil))
 	case msgType_Tick:
@@ -164,10 +163,20 @@ func (s *serverConnectionManager) GetConnect(id uint64) (*srvConn, bool) {
 	return conn, true
 }
 
-func (s *serverConnectionManager) ConnectEvent(cet ConnectEventType, arg interface{}) {
+func (s *serverConnectionManager) ConnectEvent(cet connectEventType, arg ...interface{}) {
 	switch cet {
-	case ConnectEventType_Close:
-
+	case connectEventType_Close, connectEventType_TimeOutClose:
+		conn, ok := arg[0].(*srvConn)
+		if ok && conn != nil {
+			for _, api := range conn.apis {
+				s.RegisterApiConn.Delete(api)
+			}
+			conn.close(arg[1].(bool))
+		}
+		s.connList.Delete(conn.Id)
+		log.Printf("%s: id %d\n", connectEventMap[cet], conn.Id)
+	default:
+		log.Println("invalid event: ", cet)
 	}
 }
 
@@ -213,21 +222,6 @@ func (s *serverConnectionManager) authentication(conn *net.TCPConn) (uint64, err
 	return id, write(conn, encodeAuthResp(b, nil))
 }
 
-func (s *serverConnectionManager) write(msg *message) error {
-	intfc, ok := s.connList.Get(msg.dstId)
-	if !ok {
-		return ErrConnNotExist
-	}
-	conn := intfc.(*srvConn)
-	if !conn.Status {
-		return ErrDisconnect
-	}
-	if err := conn.writeMsg(msg); err != nil {
-		return ErrDisconnect
-	}
-	return nil
-}
-
 func (s *serverConnectionManager) CloseAllConn() {
 	s.connList.RWMutex.Lock()
 	defer s.connList.RWMutex.Unlock()
@@ -236,7 +230,7 @@ func (s *serverConnectionManager) CloseAllConn() {
 	}
 }
 
-func (s *serverConnectionManager) CloseConn(id uint64) {
+func (s *serverConnectionManager) CloseConnect(id uint64) {
 	intfc, ok := s.connList.Get(id)
 	if ok {
 		intfc.(*srvConn).Close()
@@ -245,22 +239,20 @@ func (s *serverConnectionManager) CloseConn(id uint64) {
 
 func (s *serverConnectionManager) checkUp() {
 	var invalidConn []*srvConn
-	var l int
 	for {
 		time.Sleep(s.connTimeOut)
-		l = len(s.connList.GetMap())
-		if l == 0 {
+		if len(s.connList.GetMap()) == 0 {
 			continue
 		}
-		invalidConn = make([]*srvConn, 0, l/10+1)
+		invalidConn = make([]*srvConn, 0, 10)
 		s.connList.Range(func(k uint64, v interface{}) {
 			conn := v.(*srvConn)
-			if checkUpTimeOut(time.Duration(conn.activation)*time.Second, s.connTimeOut) {
+			if time.Now().Unix() >= conn.activation+int64(s.connTimeOut.Seconds()) {
 				invalidConn = append(invalidConn, conn)
 			}
 		})
 		for _, conn := range invalidConn {
-			conn.Close()
+			s.ConnectEvent(connectEventType_TimeOutClose, conn, true)
 		}
 	}
 }

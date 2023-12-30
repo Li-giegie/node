@@ -14,17 +14,24 @@ type ISrvConn interface {
 	Request(timeout time.Duration, api uint32, data []byte) (replyData []byte, err error)
 	reply(m *message, typ uint8, data []byte) error
 	Forward(timeout time.Duration, dstId uint64, api uint32, data []byte) (replyData []byte, err error)
+	GetId() uint64
 }
 
-type ConnectEventType uint8
+type connectEventType uint8
 
 const (
-	ConnectEventType_Close ConnectEventType = 1 + iota
+	connectEventType_Close connectEventType = 1 + iota
+	connectEventType_TimeOutClose
 )
+
+var connectEventMap = map[connectEventType]string{
+	connectEventType_Close:        "connect close event",
+	connectEventType_TimeOutClose: "connect timeout close event",
+}
 
 type iConnMgmt interface {
 	GetConnect(id uint64) (*srvConn, bool)
-	ConnectEvent(cet ConnectEventType, arg interface{})
+	ConnectEvent(cet connectEventType, arg ...interface{})
 	Invoke(args interface{}) error
 	ServerId() uint64
 }
@@ -49,6 +56,10 @@ type srvConnCtx struct {
 	conn *srvConn
 }
 
+func (c *srvConn) GetId() uint64 {
+	return c.Id
+}
+
 func (c *srvConn) Start() error {
 	defer c.Close()
 	for c.Status {
@@ -70,11 +81,11 @@ func (c *srvConn) Start() error {
 }
 
 func (c *srvConn) Send(api uint32, data []byte) error {
-	return c.send(c.ServerId(), msgType_Send, api, data)
+	return c.send(c.ServerId(), c.Id, msgType_Send, api, data)
 }
 
 func (c *srvConn) Request(timeout time.Duration, api uint32, data []byte) (replyData []byte, err error) {
-	return c.request(timeout, msgType_Send, c.ServerId(), c.Id, api, data)
+	return c.request(timeout, c.ServerId(), c.Id, msgType_Send, api, data)
 }
 
 func (c *srvConn) Forward(timeout time.Duration, dstId uint64, api uint32, data []byte) (replyData []byte, err error) {
@@ -90,7 +101,9 @@ func (c *srvConn) storageMsgChan(id uint32, mshChan chan *message) {
 }
 
 func (c *srvConn) Close(nowait ...bool) {
-	c.ConnectEvent(ConnectEventType_Close, c)
-	c.connect.close(nowait...)
-	log.Println("close connect: ", c.Id)
+	if len(nowait) > 0 && nowait[0] {
+		c.ConnectEvent(connectEventType_Close, c, true)
+		return
+	}
+	c.ConnectEvent(connectEventType_Close, c, false)
 }
