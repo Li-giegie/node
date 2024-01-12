@@ -2,13 +2,13 @@ package node
 
 import (
 	"errors"
-	"log"
 	"net"
 	"time"
 )
 
 type iStorageMsgChan interface {
 	storageMsgChan(id uint32, mshChan chan *message)
+	delMsgChan(id uint32)
 }
 
 type connect struct {
@@ -33,21 +33,26 @@ func (c *connect) send(srcId, dstId uint64, typ uint8, api uint32, data []byte) 
 	return c.writeMsg(newMsg(srcId, dstId, typ, api, data))
 }
 
-func (c *connect) request(timeout time.Duration, srcId, dstId uint64, typ uint8, api uint32, data []byte) (respData []byte, err error) {
+func (c *connect) request(timeout time.Duration, srcId, dstId uint64, typ uint8, api uint32, data []byte) (msg *message, err error) {
 	m := newMsg(srcId, dstId, typ, api, data)
 	mChan := make(chan *message)
 	c.storageMsgChan(m.id, mChan)
+	defer func() {
+		c.delMsgChan(m.id)
+		close(mChan)
+		mChan = nil
+	}()
 	if err = c.writeMsg(m); err != nil {
 		return nil, err
 	}
 	select {
 	case reply := <-mChan:
-		log.Println("debug ", reply.String())
-		defer reply.recycle()
 		if reply.typ == msgType_ReplyErr {
-			return decodeErrReplyMsgData(reply.data)
+			data, err = decodeErrReplyMsgData(reply.data)
+			reply.data = data
+			return reply, err
 		}
-		return reply.data, nil
+		return reply, nil
 	case <-time.After(timeout):
 		return nil, errors.New("timeout")
 	}
@@ -55,14 +60,16 @@ func (c *connect) request(timeout time.Duration, srcId, dstId uint64, typ uint8,
 
 func (c *connect) writeMsg(m *message) error {
 	c.activation = time.Now().Unix()
-	return writeMessage(c.conn, m)
+	_, err := c.conn.Write(m.marshal())
+	m.recycle()
+	return err
 }
 
 func (c *connect) reply(m *message, typ uint8, data []byte) error {
 	m.typ = typ
 	m.data = data
 	m.srcId, m.dstId = m.dstId, m.srcId
-	return writeMessage(c.conn, m)
+	return c.writeMsg(m)
 }
 
 func (c *connect) close(nowait ...bool) {

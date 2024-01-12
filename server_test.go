@@ -9,10 +9,16 @@ import (
 )
 
 func TestServer(t *testing.T) {
-	srv := NewServer(DEFAULT_ServerAddress, WithSrvConnTimeout(time.Second*5), WithSrvAuthentication(func(id uint64, data []byte) (ok bool, reply []byte) {
-		log.Println(id, string(data))
-		return true, nil
-	}))
+	srv := NewServer(DEFAULT_ServerAddress,
+		WithSrvConnTimeout(time.Second*5),
+		WithSrvAuthentication(func(id uint64, data []byte) (reply []byte, err error) {
+			log.Println("auth: ", id, string(data))
+			if len(data) == 0 {
+				return []byte("data "), errors.New("deny pass")
+			}
+			return nil, nil
+		},
+		))
 	srv.HandleFunc(1, func(ctx *Context) {
 		//if err := ctx.Reply([]byte("1")); err != nil {
 		//	fmt.Println(err)
@@ -30,7 +36,7 @@ func TestServer(t *testing.T) {
 			log.Println("reply err: ", err)
 		}
 	})
-	if err := srv.ListenAndServer(); err != nil {
+	if err := srv.ListenAndServer(true); err != nil {
 		fmt.Println(err)
 	}
 }

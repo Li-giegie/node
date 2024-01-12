@@ -11,12 +11,9 @@ func Server(addr string, id uint64) {
 	srv := node.NewServer(addr,
 		node.WithSrvId(id),
 		node.WithSrvConnTimeout(time.Second*10),
-		node.WithSrvConnectionEnableFunc(func(conn node.ISrvConn) {
-			log.Println("authentication success new connect ---", conn.GetId())
-		}),
-		node.WithSrvAuthentication(func(id uint64, data []byte) (ok bool, reply []byte) {
+		node.WithSrvAuthentication(func(id uint64, data []byte) (reply []byte, err error) {
 			log.Println("authentication: ", id, string(data))
-			return true, nil
+			return nil, nil
 		}),
 	)
 	srv.HandleFunc(1, func(ctx *node.Context) {
@@ -27,7 +24,7 @@ func Server(addr string, id uint64) {
 		_ = ctx.Reply(append([]byte("receive success"), ctx.GetData()...))
 	})
 	defer srv.Shutdown()
-	if err := srv.ListenAndServer(); err != nil {
+	if err := srv.ListenAndServer(true); err != nil {
 		log.Fatalln(err)
 	}
 }

@@ -18,15 +18,16 @@ import (
 )
 
 type ClientI interface {
-	Registration(noExposure ...uint32) ([]uint32, error)   //将handle API注册到服务端，只有error返回值不为nil时，[]uint32返回失败列表
-	HandleFunc(api uint32, handle HandlerFunc)             //添加处理函数 	//添加多个处理函数接口
-	Connect(authData []byte) (authReply []byte, err error) //发起连接：authReply 服务端认证回复 err 是否连接成功
-	Run() error                                            //如果客户端仅作为请求用途此方法效果仅为阻塞主协程，当客户端挂载有handle接口推荐使用
+	Registration(noExposure ...uint32) ([]uint32, error)                 //将handle API注册到服务端，只有error返回值不为nil时，[]uint32返回失败列表
+	HandleFunc(api uint32, handle HandlerFunc)                           //添加处理函数 	//添加多个处理函数接口
+	Connect(dstId uint64, authData []byte) (authReply []byte, err error) //发起连接：authReply 服务端认证回复 err 是否连接成功
+	Run() error                                                          //如果客户端仅作为请求用途此方法效果仅为阻塞主协程，当客户端挂载有handle接口推荐使用
 	Close(nowait ...bool)
 	Send(api uint32, data []byte) error
 	Request(timeout time.Duration, api uint32, data []byte) (replyData []byte, err error)
 	reply(m *message, typ uint8, data []byte) error
 	Forward(timeout time.Duration, dstId uint64, api uint32, data []byte) (replyData []byte, err error)
+	getConn() *net.TCPConn
 }
 
 type Client struct {
@@ -38,6 +39,10 @@ type Client struct {
 	msgChan    *utils.MapUint32
 	closeChan  chan error
 	*connect
+}
+
+func (c *Client) getConn() *net.TCPConn {
+	return c.connect.conn
 }
 
 type OptionClient func(*Client) *Client
@@ -82,7 +87,7 @@ func (c *Client) HandleFunc(api uint32, handle HandlerFunc) {
 	c.handler.Add(api, handle)
 }
 
-func (c *Client) Connect(authData []byte) ([]byte, error) {
+func (c *Client) Connect(dstId uint64, authData []byte) ([]byte, error) {
 	addr, err := parseAddress("tcp", c.localAddr, c.remoteAddr)
 	if err != nil {
 		return nil, err
@@ -91,11 +96,11 @@ func (c *Client) Connect(authData []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	reply, err := c.authentication(conn, authData)
+	reply, err := c.authentication(conn, dstId, authData)
 	if err != nil {
 		_ = conn.SetLinger(0)
 		_ = conn.Close()
-		return nil, err
+		return reply, err
 	}
 	c.connect = newConnect(c.id, conn, c)
 	go c.process()
@@ -105,7 +110,7 @@ func (c *Client) Connect(authData []byte) ([]byte, error) {
 
 func (c *Client) process() {
 	for c.Status {
-		tmp, err := readMessage(c.conn)
+		tmp, err := c.read()
 		if err != nil {
 			c.closeChan <- err
 			break
@@ -139,26 +144,36 @@ func (c *Client) process() {
 		}(tmp)
 	}
 }
-
-func (c *Client) authentication(conn *net.TCPConn, data []byte) ([]byte, error) {
-	if err := write(conn, encodeAuthReq(c.id, data)); err != nil {
+func (c *Client) read() (*message, error) {
+	buf, err := readAtLeast(c.conn, msg_headerLen)
+	if err != nil {
+		return nil, err
+	}
+	m := msgPool.Get().(*message)
+	dl := m.header.unmarshal(buf)
+	m.data, err = readAtLeast(c.conn, int(dl))
+	return m, err
+}
+func (c *Client) authentication(conn *net.TCPConn, dst uint64, data []byte) ([]byte, error) {
+	if _, err := conn.Write(newAuthMsg(c.id, dst, data).marshal()); err != nil {
 		return nil, fmt.Errorf("%v %v", auth_err_head, err)
 	}
 	buf, err := jeans.Unpack(conn)
 	if err != nil {
 		return nil, fmt.Errorf("%v %v", auth_err_head, err)
 	}
-	return decodeAuthResp(buf)
+	return decodeErrReplyMsgData(buf)
 }
 
 // Registration 注册Api：noExposure 不注册API列表,error 不为空时返回注册失败的api
 func (c *Client) Registration(noExposure ...uint32) ([]uint32, error) {
 	apis := filterApi(c.handler.cache.KeyToSlice(), noExposure)
-	data, err := c.request(c.keepAlive, c.id, 0, msgType_Registration, 0, encodeRegistrationApiReq(apis))
+	msg, err := c.request(c.keepAlive, c.id, 0, msgType_Registration, 0, encodeRegistrationApiReq(apis))
 	if err != nil {
 		return nil, err
 	}
-	return decodeRegistrationApiResp(data)
+	defer msg.recycle()
+	return decodeRegistrationApiResp(msg.data)
 }
 
 func (c *Client) tick(keepAlive time.Duration) {
@@ -188,6 +203,10 @@ func (c *Client) storageMsgChan(id uint32, mshChan chan *message) {
 	c.msgChan.Set(id, mshChan)
 }
 
+func (c *Client) delMsgChan(id uint32) {
+	c.msgChan.Delete(id)
+}
+
 func (c *Client) Close(nowait ...bool) {
 	c.connect.close(nowait...)
 }
@@ -197,9 +216,19 @@ func (c *Client) Send(api uint32, data []byte) error {
 }
 
 func (c *Client) Request(timeout time.Duration, api uint32, data []byte) (replyData []byte, err error) {
-	return c.request(timeout, c.id, 0, msgType_Send, api, data)
+	msg, err := c.request(timeout, c.id, 0, msgType_Send, api, data)
+	if err != nil {
+		return nil, err
+	}
+	defer msg.recycle()
+	return msg.data, nil
 }
 
 func (c *Client) Forward(timeout time.Duration, dstId uint64, api uint32, data []byte) (replyData []byte, err error) {
-	return c.request(timeout, c.id, dstId, msgType_Send, api, data)
+	msg, err := c.request(timeout, c.id, dstId, msgType_Send, api, data)
+	if err != nil {
+		return nil, err
+	}
+	defer msg.recycle()
+	return msg.data, nil
 }

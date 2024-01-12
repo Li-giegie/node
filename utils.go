@@ -1,34 +1,43 @@
 package node
 
 import (
+	"crypto/md5"
+	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
+	"hash/crc32"
+	"io"
 	"math/rand"
 	"net"
+	"os"
 	"strconv"
 	"time"
 )
 
 var _rnd *rand.Rand
 
-type AuthenticationFunc func(id uint64, data []byte) (ok bool, reply []byte)
+type AuthenticationFunc func(id uint64, data []byte) (reply []byte, err error)
+
+var debugFile *os.File
 
 func init() {
 	_rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
+	var err error
+	debugFile, err = os.OpenFile("./debug_read_connect.log", os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
+	if err != nil {
+		fmt.Println("启动失败，打开调试文件错误：", err)
+		os.Exit(1)
+	}
 }
 
 // 1024-49151
 func getPort() string {
 	return strconv.Itoa(_rnd.Intn(49152-1024) + 1024)
 }
-
-func readMessage(conn *net.TCPConn) (*message, error) {
-	buf, err := jeans.Unpack(conn)
-	if err != nil {
-		return nil, err
-	}
-	return unmarshalMsg(buf), nil
+func readAtLeast(r io.Reader, n int) ([]byte, error) {
+	buf := make([]byte, n)
+	_, err := io.ReadAtLeast(r, buf, n)
+	return buf, err
 }
-
 func writeMessage(conn *net.TCPConn, m *message) error {
 	buf := m.marshal()
 	m.recycle()
@@ -72,4 +81,15 @@ func filterApi(srcApis []uint32, filterApis []uint32) []uint32 {
 		}
 	}
 	return newSrcApis
+}
+
+// checksum crc32
+func Checksum(data []byte) uint32 {
+	return crc32.ChecksumIEEE(data)
+}
+
+func checksumMd5(data []byte) []byte {
+	h := md5.New()
+	h.Write(data)
+	return h.Sum(nil)
 }

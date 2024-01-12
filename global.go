@@ -7,7 +7,7 @@ import (
 
 const (
 	DEFAULT_ServerAddress  = "0.0.0.0:8088"
-	DEFAULT_ClientAddress  = "127.0.0.1:20239"
+	DEFAULT_ClientAddress  = "0.0.0.0:20239"
 	DEFAULT_ClientID       = 20230
 	DEFAULT_ServerID       = 20240
 	DEFAULT_MAXCONNNUM     = 10 * 10000
@@ -31,4 +31,13 @@ var (
 	ErrDisconnect           = errors.New("err: disconnect")
 	ErrInvalid              = errors.New("err: invalid request or send")
 	ErrRegistrationApiExist = errors.New("err: Registration api exist")
+)
+
+// server error list
+var (
+	ErrServerConnectOverFlow  = errors.New("server busy Please try again later")
+	ErrReadConnectErr         = errors.New("read buf error")
+	ErrAuthIdEqual0OrServerId = errors.New("auth id equal 0 or equal server id")
+	ErrAuthIdExist            = errors.New("auth id exist")
+	ErrInvalidConnect         = errors.New("invalid connect")
 )

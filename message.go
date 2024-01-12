@@ -4,6 +4,9 @@ import (
 	"errors"
 	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
+	"io"
+	"log"
+	"math"
 	"sync"
 	"sync/atomic"
 )
@@ -38,13 +41,45 @@ var msgPool = sync.Pool{New: func() any {
 	return new(message)
 }}
 
-type message struct {
+const msg_headerLen = 29 //id+api+typ+src+dst+dataLen
+
+type header struct {
 	id    uint32
 	api   uint32
 	typ   uint8
 	srcId uint64
 	dstId uint64
-	data  []byte
+}
+
+func (m *header) marshal(dataLen uint32) []byte {
+	buf, err := jeans.Encode(m.srcId, m.dstId, m.typ, m.id, m.api, dataLen)
+	if err != nil {
+		panic(any(err))
+	}
+	return buf
+}
+
+func (m *header) unmarshal(buf []byte) (dataLen uint32) {
+	err := jeans.Decode(buf, &m.srcId, &m.dstId, &m.typ, &m.id, &m.api, &dataLen)
+	if err != nil {
+		panic(any(err))
+	}
+	return
+}
+
+type message struct {
+	header
+	data []byte
+}
+
+func (m *message) reply(typ uint8, data []byte) {
+	m.header.typ = typ
+	m.data = data
+}
+
+func (m *message) replyErr(typ uint8, data []byte, err error) {
+	buf, _ := jeans.Encode(err.Error(), data)
+	m.reply(typ, buf)
 }
 
 func (m *message) recycle() {
@@ -58,18 +93,11 @@ func (m *message) recycle() {
 }
 
 func (m *message) marshal() []byte {
-	buf, err := jeans.Encode(m.typ, m.id, m.api, m.data, m.srcId, m.dstId)
-	if err != nil {
-		panic(any(err))
-	}
-	return buf
+	return append(m.header.marshal(uint32(len(m.data))), m.data...)
 }
 
 func (m *message) unmarshal(buf []byte) {
-	err := jeans.Decode(buf, &m.typ, &m.id, &m.api, &m.data, &m.srcId, &m.dstId)
-	if err != nil {
-		panic(any(err))
-	}
+	m.data = buf
 }
 
 func unmarshalMsg(b []byte) *message {
@@ -97,11 +125,17 @@ func (m *message) String() string {
 }
 
 func (m *message) debug() {
-	fmt.Println(m.String())
+	log.Println(m.String())
 }
 
-func encodeErrReplyMsgData(err error, data []byte) []byte {
-	buf, err := jeans.Encode(err.Error(), data)
+func encodeErrReplyMsgData(_err error, data []byte) []byte {
+	var buf []byte
+	var err error
+	if _err != nil {
+		buf, err = jeans.Encode(_err.Error(), data)
+	} else {
+		buf, err = jeans.Encode("", data)
+	}
 	if err != nil {
 		panic(err)
 	}
@@ -114,47 +148,10 @@ func decodeErrReplyMsgData(data []byte) ([]byte, error) {
 	if err := jeans.Decode(data, &errStr, &buf); err != nil {
 		panic(err)
 	}
+	if errStr == "" {
+		return buf, nil
+	}
 	return buf, errors.New(errStr)
-}
-
-func encodeAuthReq(id uint64, data []byte) []byte {
-	buf, err := jeans.Encode(id, data)
-	if err != nil {
-		panic(err)
-	}
-	return buf
-}
-
-func decodeAuthReq(buf []byte) (id uint64, data []byte) {
-	err := jeans.Decode(buf, &id, &data)
-	if err != nil {
-		panic(err)
-	}
-	return
-}
-
-func encodeAuthResp(data []byte, err error) []byte {
-	var errStr string
-	if err != nil {
-		errStr = err.Error()
-	}
-	buf, err := jeans.Encode(data, errStr)
-	if err != nil {
-		panic(err)
-	}
-	return buf
-}
-
-func decodeAuthResp(buf []byte) (data []byte, err error) {
-	var errStr string
-	err2 := jeans.Decode(buf, &data, &errStr)
-	if err2 != nil {
-		panic(err2)
-	}
-	if errStr != "" {
-		err = errors.New(errStr)
-	}
-	return
 }
 
 func encodeRegistrationApiReq(apis []uint32) []byte {
@@ -202,4 +199,52 @@ func decodeRegistrationApiResp(data []byte) (badApis []uint32, err error) {
 		err = errors.New(errStr)
 	}
 	return
+}
+
+const Version uint8 = 1
+
+const auth_headerLen = 21 //version+srcid+dstid+datalen
+
+type authMsg struct {
+	version uint8
+	srcId   uint64
+	dstId   uint64
+	data    []byte
+}
+
+func newAuthMsg(srcId, dstId uint64, data []byte) *authMsg {
+	if len(data) > math.MaxUint16 {
+		panic("auth data length > 65535")
+	}
+	return &authMsg{
+		version: Version,
+		srcId:   srcId,
+		dstId:   dstId,
+		data:    data,
+	}
+}
+
+func (a *authMsg) marshal() []byte {
+	buf, err := jeans.Encode(a.version, a.srcId, a.dstId, a.data)
+	if err != nil {
+		panic(err)
+	}
+	return buf
+}
+func (a *authMsg) unmarshal(conn io.Reader) error {
+	buf, err := readAtLeast(conn, auth_headerLen)
+	if err != nil {
+		return fmt.Errorf("%v -0", ErrInvalidConnect)
+	}
+	var dataLen uint16
+	if err = jeans.Decode(buf, &a.version, &a.srcId, &a.dstId, &dataLen); err != nil {
+		return fmt.Errorf("%v -1", ErrInvalidConnect)
+	}
+	if dataLen > 0 {
+		a.data, err = readAtLeast(conn, int(dataLen))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
