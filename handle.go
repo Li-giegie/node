@@ -7,7 +7,7 @@ import (
 )
 
 type iContext interface {
-	reply(m *message, typ uint8, data []byte) error
+	writeMsg(m *message) error
 }
 
 type Context struct {
@@ -31,10 +31,12 @@ func (c *Context) GetData() []byte {
 }
 
 func (c *Context) Reply(data []byte) error {
-	return c.iContext.reply(c.message, msgType_Reply, data)
+	c.message.reply(msgType_Reply, data)
+	return c.iContext.writeMsg(c.message)
 }
 func (c *Context) ReplyErr(err error, data []byte) error {
-	return c.iContext.reply(c.message, msgType_ReplyErr, encodeErrReplyMsgData(err, data))
+	c.message.replyErr(msgType_ReplyErr, data, err)
+	return c.iContext.writeMsg(c.message)
 }
 
 type HandlerFunc func(ctx *Context)

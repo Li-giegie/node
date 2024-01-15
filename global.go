@@ -6,15 +6,15 @@ import (
 )
 
 const (
-	DEFAULT_ServerAddress  = "0.0.0.0:8088"
-	DEFAULT_ClientAddress  = "0.0.0.0:20239"
-	DEFAULT_ClientID       = 20230
-	DEFAULT_ServerID       = 20240
-	DEFAULT_MAXCONNNUM     = 10 * 10000
-	DEFAULT_MAX_GOROUTINE  = 10000
-	DEFAULT_MIN_GOROUTINE  = 5000
-	DEFAULT_KeepAlive      = time.Second * 30
-	DEFAULT_REQUESTTIMEOUT = time.Second * 6
+	DEFAULT_ServerAddress         = "0.0.0.0:8088"
+	DEFAULT_ClientAddress         = "0.0.0.0:20239"
+	DEFAULT_ClientID              = 20230
+	DEFAULT_ServerID              = 20240
+	DEFAULT_MAXCONNNUM            = 10 * 10000
+	DEFAULT_MAX_GOROUTINE         = 10000
+	DEFAULT_MIN_GOROUTINE         = 5000
+	DEFAULT_KeepAlive             = time.Second * 30
+	DEFAULT_AuthenticationTimeout = time.Second * 6
 )
 
 var auth_sucess = "authentication success:"
@@ -31,6 +31,7 @@ var (
 	ErrDisconnect           = errors.New("err: disconnect")
 	ErrInvalid              = errors.New("err: invalid request or send")
 	ErrRegistrationApiExist = errors.New("err: Registration api exist")
+	ErrTimeout              = errors.New("timeout")
 )
 
 // server error list

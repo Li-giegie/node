@@ -9,12 +9,13 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const (
 	//心跳消息
 	msgType_Tick uint8 = iota
-	msgType_TickResp
+	msgType_TickReply
 
 	//仅发送消息
 	msgType_Send
@@ -22,17 +23,17 @@ const (
 	msgType_ReplyErr
 
 	msgType_Registration
-	msgType_RegistrationResp
+	msgType_RegistrationReply
 )
 
 var msgTypeMap = map[uint8]string{
-	msgType_Send:             "msgType_Send",
-	msgType_Reply:            "msgType_Reply",
-	msgType_ReplyErr:         "msgType_ReplyErr",
-	msgType_Tick:             "Tick",
-	msgType_TickResp:         "TickRespOk",
-	msgType_Registration:     "msgType_Registration",
-	msgType_RegistrationResp: "msgType_RegistrationResp",
+	msgType_Send:              "msgType_Send",
+	msgType_Reply:             "msgType_Reply",
+	msgType_ReplyErr:          "msgType_ReplyErr",
+	msgType_Tick:              "Tick",
+	msgType_TickReply:         "TickRespOk",
+	msgType_Registration:      "msgType_Registration",
+	msgType_RegistrationReply: "msgType_RegistrationReply",
 }
 
 var msgCounter uint32
@@ -73,13 +74,13 @@ type message struct {
 }
 
 func (m *message) reply(typ uint8, data []byte) {
-	m.header.typ = typ
+	m.typ = typ
 	m.data = data
+	m.srcId, m.dstId = m.dstId, m.srcId
 }
 
 func (m *message) replyErr(typ uint8, data []byte, err error) {
-	buf, _ := jeans.Encode(err.Error(), data)
-	m.reply(typ, buf)
+	m.reply(typ, encodeErrReplyMsgData(err, data))
 }
 
 func (m *message) recycle() {
@@ -203,48 +204,88 @@ func decodeRegistrationApiResp(data []byte) (badApis []uint32, err error) {
 
 const Version uint8 = 1
 
-const auth_headerLen = 21 //version+srcid+dstid+datalen
+const auth_headerLen = 25 //version+srcid+dstid+datalen
 
-type authMsg struct {
-	version uint8
-	srcId   uint64
-	dstId   uint64
-	data    []byte
+type authHeader struct {
+	version    uint8
+	sessionId  uint32
+	srcId      uint64
+	dstId      uint64
+	dataLength uint32
 }
 
-func newAuthMsg(srcId, dstId uint64, data []byte) *authMsg {
+func (ah *authHeader) marshal() []byte {
+	buf, _ := jeans.Encode(ah.version, ah.sessionId, ah.srcId, ah.dstId)
+	return buf
+}
+
+func (ah *authHeader) unmarshal(conn io.Reader) (*authHeader, error) {
+	var errChan = make(chan []interface{})
+	go func() {
+		buf, err := readAtLeast(conn, auth_headerLen)
+		if err != nil {
+			errChan <- []interface{}{
+				err, []byte{},
+			}
+			return
+		}
+		errChan <- []interface{}{
+			nil, buf,
+		}
+	}()
+	select {
+	case intfcs := <-errChan:
+		err, ok := intfcs[0].(error)
+		if ok && err != nil {
+			return ah, err
+		}
+		return ah, jeans.Decode(intfcs[1].([]byte), &ah.version, &ah.sessionId, &ah.srcId, &ah.dstId, &ah.dataLength)
+	case <-time.After(DEFAULT_AuthenticationTimeout):
+		return ah, ErrTimeout
+	}
+}
+
+type authMsg struct {
+	*authHeader
+	data []byte
+}
+
+func newAuthMsg(srcId, dstId uint64, sessionId uint32, data []byte) *authMsg {
 	if len(data) > math.MaxUint16 {
 		panic("auth data length > 65535")
 	}
 	return &authMsg{
-		version: Version,
-		srcId:   srcId,
-		dstId:   dstId,
-		data:    data,
+		authHeader: &authHeader{
+			version:   Version,
+			sessionId: sessionId,
+			srcId:     srcId,
+			dstId:     dstId,
+		},
+		data: data,
 	}
 }
 
 func (a *authMsg) marshal() []byte {
-	buf, err := jeans.Encode(a.version, a.srcId, a.dstId, a.data)
-	if err != nil {
-		panic(err)
-	}
-	return buf
+	return append(a.authHeader.marshal(), append(uint32ToBytes(uint32(len(a.data))), a.data...)...)
 }
-func (a *authMsg) unmarshal(conn io.Reader) error {
-	buf, err := readAtLeast(conn, auth_headerLen)
-	if err != nil {
-		return fmt.Errorf("%v -0", ErrInvalidConnect)
+
+func (a *authMsg) unmarshal(conn io.Reader) (err error) {
+	if a.dataLength == 0 {
+		return nil
 	}
-	var dataLen uint16
-	if err = jeans.Decode(buf, &a.version, &a.srcId, &a.dstId, &dataLen); err != nil {
-		return fmt.Errorf("%v -1", ErrInvalidConnect)
-	}
-	if dataLen > 0 {
-		a.data, err = readAtLeast(conn, int(dataLen))
+	var ch = make(chan error)
+	go func() {
+		a.data, err = readAtLeast(conn, int(a.dataLength))
 		if err != nil {
-			return err
+			ch <- err
+			return
 		}
+		ch <- nil
+	}()
+	select {
+	case err = <-ch:
+		return err
+	case <-time.After(DEFAULT_AuthenticationTimeout):
+		return errors.New("timeout")
 	}
-	return nil
 }

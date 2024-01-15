@@ -2,6 +2,7 @@ package node
 
 import (
 	"crypto/md5"
+	"encoding/binary"
 	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
 	"hash/crc32"
@@ -92,4 +93,14 @@ func checksumMd5(data []byte) []byte {
 	h := md5.New()
 	h.Write(data)
 	return h.Sum(nil)
+}
+
+func uint32ToBytes(n uint32) []byte {
+	var b = make([]byte, 4)
+	binary.LittleEndian.PutUint32(b, n)
+	return b
+}
+
+func bytesToUint32(b []byte) uint32 {
+	return binary.LittleEndian.Uint32(b)
 }

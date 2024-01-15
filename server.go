@@ -35,6 +35,8 @@ type Server struct {
 	maxConnNum            int
 	connList              *utils.MapUint64
 	gPool                 *ants.Pool
+	listen                *net.TCPListener
+	session               *sessionCache
 	AuthenticationFunc
 }
 
@@ -47,6 +49,7 @@ func NewServer(addr string, opt ...Option) IServer {
 	srv.minGoroutine = DEFAULT_MIN_GOROUTINE
 	srv.connKeepAliveTime = DEFAULT_KeepAlive
 	srv.maxConnNum = DEFAULT_MAXCONNNUM
+	srv.session = newSessionCache(sessionCache_lifeTime, sessionCache_checktime)
 	srv.connList = utils.NewMapUint64()
 	srv.localHandle = NewHandler()
 	srv.registerHandleApiConn = utils.NewMapUint32()
@@ -78,22 +81,23 @@ func (s *Server) ListenAndServer(debug ...bool) error {
 	if err != nil {
 		return err
 	}
-	listen, err := net.ListenTCP("tcp", addr)
+	s.listen, err = net.ListenTCP("tcp", addr)
 	if err != nil {
 		return err
 	}
 	if err = s.gPool.Submit(s.checkUp); err != nil {
 		return err
 	}
-	defer listen.Close()
+	defer s.listen.Close()
 	if len(debug) > 0 && debug[0] {
 		log.Printf("server [%d] listen: %s\n", s.id, s.addr)
 	}
 	for s.state {
-		conn, err := listen.AcceptTCP()
+		conn, err := s.listen.AcceptTCP()
 		if err != nil {
 			return err
 		}
+		log.Printf("[debug] listen conntion: %s\n", conn.RemoteAddr().String())
 		err = s.gPool.Submit(func() {
 			s.newConnect(conn)
 		})
@@ -108,31 +112,57 @@ func (s *Server) newConnect(conn *net.TCPConn) {
 	if len(s.connList.GetMap()) > s.maxConnNum {
 		_ = write(conn, encodeErrReplyMsgData(ErrServerConnectOverFlow, nil))
 		_ = conn.Close()
+		log.Printf("[debug] close -1 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
-	am := new(authMsg)
-	err := am.unmarshal(conn)
+	addr := conn.RemoteAddr().String()
+	sessionId := s.session.create(addr)
+	defer s.session.delete(sessionId)
+	//发送一个session id uint32，接收消息时需要作为判断连接是否合法的依据之一，防止错误的连接建立造成意外情况
+	_, err := conn.Write(uint32ToBytes(sessionId))
+	if err != nil {
+		_ = conn.Close()
+		log.Printf("[debug] close -2 connection: %s\n", conn.RemoteAddr().String())
+		return
+	}
+	amHeader, err := new(authHeader).unmarshal(conn)
 	if err != nil {
 		_ = write(conn, encodeErrReplyMsgData(err, nil))
 		_ = conn.Close()
+		log.Printf("[debug] close -3 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
-	if am.version != Version || am.dstId != s.id || am.srcId == 0 {
-		_ = write(conn, encodeErrReplyMsgData(fmt.Errorf("%v -3 ", ErrInvalidConnect), nil))
+	sessionCont, ok := s.session.query(amHeader.sessionId)
+	if !ok || amHeader.version != Version || sessionCont.tag != addr || amHeader.dstId != s.id || amHeader.srcId == 0 {
+		tmpBuf := encodeErrReplyMsgData(fmt.Errorf("%v -3 ", ErrInvalidConnect), nil)
+		_ = write(conn, tmpBuf)
 		_ = conn.Close()
+		log.Printf("[debug] close -4 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
+	am := new(authMsg)
+	am.authHeader = amHeader
+	err = am.unmarshal(conn)
+	if err != nil {
+		_ = write(conn, encodeErrReplyMsgData(err, nil))
+		_ = conn.Close()
+		log.Printf("[debug] close -5 connection: %s\n", conn.RemoteAddr().String())
+		return
+	}
+
 	authData, err := s.authConnect(am)
 	if err != nil {
 		_ = write(conn, encodeErrReplyMsgData(err, authData))
 		_ = conn.Close()
+		log.Printf("[debug] close -6 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
 	if err = write(conn, encodeErrReplyMsgData(nil, authData)); err != nil {
 		_ = conn.Close()
-		log.Println("auth err: ", err)
+		log.Printf("[debug] close -7 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
+	log.Printf("[debug] success conntion: %d %s\n", am.srcId, addr)
 	sConn := newSrvConn(am.srcId, conn, s)
 	s.connList.Set(am.srcId, sConn)
 	err = s.gPool.Submit(sConn.Start)
@@ -143,8 +173,8 @@ func (s *Server) newConnect(conn *net.TCPConn) {
 
 // authConnect authentication connect
 func (s *Server) authConnect(auth *authMsg) ([]byte, error) {
-	_, ok := s.getConnect(auth.srcId)
-	if ok {
+	conn, ok := s.getConnect(auth.srcId)
+	if ok && conn.Status {
 		return nil, ErrAuthIdExist
 	}
 	if s.AuthenticationFunc == nil {
@@ -170,13 +200,14 @@ func (s *Server) process(ctx *srvConnCtx) error {
 				}
 				i, ok := s.registerHandleApiConn.Get(ctx.msg.api)
 				if !ok {
-
-					_ = ctx.conn.reply(ctx.msg, msgType_Reply, []byte(ErrNoApi.Error()))
+					ctx.msg.replyErr(msgType_ReplyErr, nil, ErrNoApi)
+					_ = ctx.conn.writeMsg(ctx.msg)
 					return
 				}
 				conn := i.(*srvConn)
 				if conn == nil || !conn.Status {
-					_ = ctx.conn.reply(ctx.msg, msgType_Reply, []byte(ErrNoApi.Error()))
+					ctx.msg.replyErr(msgType_ReplyErr, nil, ErrNoApi)
+					_ = ctx.conn.writeMsg(ctx.msg)
 					return
 				}
 				ctx.msg.dstId = conn.Id
@@ -186,14 +217,15 @@ func (s *Server) process(ctx *srvConnCtx) error {
 			default: //转发处理
 				conn, ok := s.getConnect(ctx.msg.dstId)
 				if !ok {
-					_ = ctx.conn.reply(ctx.msg, msgType_Reply, []byte(ErrConnNotExist.Error()))
+					ctx.msg.replyErr(msgType_ReplyErr, nil, ErrConnNotExist)
+					_ = ctx.conn.writeMsg(ctx.msg)
 					return
 				}
 				if err := conn.writeMsg(ctx.msg); err != nil {
 					log.Println("conn.process.forward err: ", err)
 				}
 			}
-		case msgType_Reply, msgType_ReplyErr, msgType_RegistrationResp, msgType_TickResp:
+		case msgType_Reply, msgType_ReplyErr, msgType_RegistrationReply, msgType_TickReply:
 			switch ctx.msg.dstId {
 			case s.id, 0:
 				obj, ok := ctx.conn.msgChan.Get(ctx.msg.id)
@@ -232,17 +264,19 @@ func (s *Server) process(ctx *srvConnCtx) error {
 				}
 			}
 			if len(badApis) > 0 {
-				_ = ctx.conn.reply(ctx.msg, msgType_RegistrationResp, encodeRegistrationApiResp(ErrRegistrationApiExist, badApis))
+				ctx.msg.reply(msgType_RegistrationReply, encodeRegistrationApiResp(ErrRegistrationApiExist, badApis))
+				_ = ctx.conn.writeMsg(ctx.msg)
 				return
 			}
-			ctx.conn.apis = apis
 			for _, api := range apis {
 				s.registerHandleApiConn.Set(api, ctx.conn)
-				log.Println("RegisterApi: ", api)
 			}
-			_ = ctx.conn.reply(ctx.msg, msgType_RegistrationResp, encodeRegistrationApiResp(nil, nil))
+			ctx.conn.apis = apis
+			ctx.msg.reply(msgType_RegistrationReply, encodeRegistrationApiResp(nil, nil))
+			_ = ctx.conn.writeMsg(ctx.msg)
 		case msgType_Tick:
-			_ = ctx.conn.reply(ctx.msg, msgType_TickResp, nil)
+			ctx.msg.reply(msgType_TickReply, nil)
+			_ = ctx.conn.writeMsg(ctx.msg)
 		}
 	})
 }
@@ -315,6 +349,7 @@ func (s *Server) GetConnList() []ISrvConn {
 }
 
 func (s *Server) Shutdown() {
+	_ = s.listen.Close()
 	s.state = false
 }
 

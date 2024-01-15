@@ -11,7 +11,8 @@ import (
 )
 
 func TestClient_Auth(t *testing.T) {
-	cli := NewClient(DEFAULT_ServerAddress, WithClientKeepAlive(time.Second*5))
+	cli := NewClient("39.101.193.248:8088",
+		WithClientKeepAlive(time.Second*5))
 	reply, err := cli.Connect(DEFAULT_ServerID, []byte{1})
 	if err != nil {
 		t.Error(err, string(reply))
@@ -22,9 +23,9 @@ func TestClient_Auth(t *testing.T) {
 }
 
 func TestClient_Registration(t *testing.T) {
-	cli := NewClient(DEFAULT_ServerAddress,
+	cli := NewClient("39.101.193.248:8088",
 		WithClientId(3790),
-		WithClientLocalIpAddr("127.0.0.1:6667"),
+		WithClientLocalIpAddr("0.0.0.0:6667"),
 		WithClientKeepAlive(time.Second*2))
 	authReply, err := cli.Connect(DEFAULT_ServerID, []byte("hello"))
 	if err != nil {

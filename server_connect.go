@@ -13,7 +13,6 @@ type ISrvConn interface {
 	Close(nowait ...bool)
 	Send(api uint32, data []byte) error
 	Request(timeout time.Duration, api uint32, data []byte) (replyData []byte, err error)
-	reply(m *message, typ uint8, data []byte) error
 	Forward(timeout time.Duration, dstId uint64, api uint32, data []byte) (replyData []byte, err error)
 	GetId() uint64
 }

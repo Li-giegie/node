@@ -65,13 +65,6 @@ func (c *connect) writeMsg(m *message) error {
 	return err
 }
 
-func (c *connect) reply(m *message, typ uint8, data []byte) error {
-	m.typ = typ
-	m.data = data
-	m.srcId, m.dstId = m.dstId, m.srcId
-	return c.writeMsg(m)
-}
-
 func (c *connect) close(nowait ...bool) {
 	if c.conn != nil {
 		if len(nowait) > 0 && nowait[0] {

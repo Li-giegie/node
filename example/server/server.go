@@ -2,12 +2,32 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"github.com/Li-giegie/node"
 	"log"
+	"os"
 	"time"
 )
 
+type logWriter struct {
+	f *os.File
+}
+
+func newLogWriter(name string) *logWriter {
+	f, err := os.OpenFile(name, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0666)
+	if err != nil {
+		panic(err)
+	}
+	return &logWriter{f: f}
+}
+
+func (w *logWriter) Write(p []byte) (n int, err error) {
+	fmt.Println(string(p))
+	return w.f.Write(p)
+}
+
 func Server(addr string, id uint64) {
+	log.SetOutput(newLogWriter("./server-debug.log"))
 	srv := node.NewServer(addr,
 		node.WithSrvId(id),
 		node.WithSrvConnTimeout(time.Second*10),

@@ -25,7 +25,6 @@ type ClientI interface {
 	Close(nowait ...bool)
 	Send(api uint32, data []byte) error
 	Request(timeout time.Duration, api uint32, data []byte) (replyData []byte, err error)
-	reply(m *message, typ uint8, data []byte) error
 	Forward(timeout time.Duration, dstId uint64, api uint32, data []byte) (replyData []byte, err error)
 	getConn() *net.TCPConn
 }
@@ -126,7 +125,7 @@ func (c *Client) process() {
 					return
 				}
 				hf(ctx)
-			case msgType_Reply, msgType_ReplyErr, msgType_RegistrationResp, msgType_TickResp:
+			case msgType_Reply, msgType_ReplyErr, msgType_RegistrationReply, msgType_TickReply:
 				v, ok := c.msgChan.Get(msg.id)
 				if !ok {
 					log.Println("receive channel not exit msg drop:", msg.String())
@@ -155,10 +154,15 @@ func (c *Client) read() (*message, error) {
 	return m, err
 }
 func (c *Client) authentication(conn *net.TCPConn, dst uint64, data []byte) ([]byte, error) {
-	if _, err := conn.Write(newAuthMsg(c.id, dst, data).marshal()); err != nil {
+	buf, err := readAtLeast(conn, 4)
+	if err != nil {
 		return nil, fmt.Errorf("%v %v", auth_err_head, err)
 	}
-	buf, err := jeans.Unpack(conn)
+	sessionId := bytesToUint32(buf)
+	if _, err := conn.Write(newAuthMsg(c.id, dst, sessionId, data).marshal()); err != nil {
+		return nil, fmt.Errorf("%v %v", auth_err_head, err)
+	}
+	buf, err = jeans.Unpack(conn)
 	if err != nil {
 		return nil, fmt.Errorf("%v %v", auth_err_head, err)
 	}
