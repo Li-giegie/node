@@ -1,8 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"flag"
-	"fmt"
 	"github.com/Li-giegie/node"
 	"log"
 	"os"
@@ -22,7 +23,7 @@ func newLogWriter(name string) *logWriter {
 }
 
 func (w *logWriter) Write(p []byte) (n int, err error) {
-	fmt.Println(string(p))
+	//fmt.Println(string(p))
 	return w.f.Write(p)
 }
 
@@ -41,8 +42,30 @@ func Server(addr string, id uint64) {
 	})
 	srv.HandleFunc(2, func(ctx *node.Context) {
 		log.Println("receive msg with handle 2: ", ctx.String())
-		_ = ctx.Reply(append([]byte("receive success"), ctx.GetData()...))
+		_ = ctx.Reply(append([]byte("receive success"), ctx.Data()...))
 	})
+	srv.HandleFunc(3, func(ctx *node.Context) {
+		log.Println("receive msg with handle 3: ", ctx.String())
+		var dstId uint64
+		err := json.Unmarshal(ctx.Data(), &dstId)
+		if err != nil {
+			ctx.ReplyErr(errors.New("json unmarshal err: "+err.Error()), nil)
+			return
+		}
+
+		conn, ok := srv.GetConnect(dstId)
+		if !ok {
+			ctx.ReplyErr(errors.New("connect not exist err: "+err.Error()), nil)
+			return
+		}
+
+		err = conn.Forward(ctx, ctx.Api(), []byte("hello"))
+		if err != nil {
+			ctx.ReplyErr(err, nil)
+			return
+		}
+	})
+
 	defer srv.Shutdown()
 	if err := srv.ListenAndServer(true); err != nil {
 		log.Fatalln(err)

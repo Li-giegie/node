@@ -1,11 +1,8 @@
 package node
 
 import (
+	"encoding/json"
 	"fmt"
-	utils "github.com/Li-giegie/go-utils"
-	"log"
-	"math"
-	"os"
 	"testing"
 	"time"
 )
@@ -58,7 +55,6 @@ func TestClientSend(t *testing.T) {
 		return
 	}
 
-	var i int
 	for {
 		reply, err := cli.Request(time.Second*3, 200, []byte("hello"))
 		if err != nil {
@@ -68,22 +64,8 @@ func TestClientSend(t *testing.T) {
 		fmt.Printf("reply: %s\n", reply)
 		time.Sleep(time.Second)
 		continue
-		utils.AsyncRun(100000, func() {
-			if err = cli.Send(100, []byte("send 1")); err != nil {
-				log.Println(err)
-			}
-		}).Debug()
-		i += 10000
-		if i >= math.MaxInt {
-			break
-		}
 	}
-	//result: sum duration: [2.7612166s], avg time: [27.612µs], num: [100000], mode: [AsyncRun]
-	utils.AsyncRun(100000, func() {
-		if err = cli.Send(100, []byte("send 1")); err != nil {
-			log.Println(err)
-		}
-	}).Debug()
+
 }
 
 func TestClientRequest(t *testing.T) {
@@ -93,19 +75,33 @@ func TestClientRequest(t *testing.T) {
 		t.Error("auth err: ", err, string(authReply))
 		return
 	}
-	reply, err := cli.Request(time.Second*60, 2, []byte("send 2"))
+	apis := []uint32{1, 2, 3, 10, 20, 100, 200}
+	for _, api := range apis {
+		reply, err := cli.Request(time.Second*2, api, []byte("send 2"))
+		if err != nil {
+			fmt.Println(api, string(reply), err)
+			continue
+		}
+		fmt.Println(api, string(reply), err)
+	}
+	return
+	reply, err := cli.Request(time.Second*3, 2, []byte("req 2"))
 	if err != nil {
 		t.Error(err)
 		return
 	}
 	fmt.Println("req success:", string(reply), err)
-	//result: sum duration: [3.1033841s], avg time: [31.033µs], num: [100000], mode: [AsyncRun]
-	utils.AsyncRun(100000, func() {
-		reply, err := cli.Request(time.Second*60, 2, []byte("send 2"))
-		if err != nil {
-			fmt.Println(err, string(reply))
-			os.Exit(1)
-		}
-		//fmt.Println(string(reply))
-	}).Debug()
+	var dstId uint64 = 1
+	buf, err := json.Marshal(dstId)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	reply, err = cli.Request(time.Second*3, 3, buf)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Println("forward success:", string(reply), err)
+
 }

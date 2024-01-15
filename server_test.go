@@ -25,13 +25,13 @@ func TestServer(t *testing.T) {
 		//}
 	})
 	srv.HandleFunc(2, func(ctx *Context) {
-		log.Println("handle 2: ", ctx.GetSrcId(), string(ctx.GetData()))
+		log.Println("handle 2: ", ctx.SrcId(), string(ctx.Data()))
 		if err := ctx.Reply([]byte("ok---2")); err != nil {
 			log.Println("reply err: ", err)
 		}
 	})
 	srv.HandleFunc(3, func(ctx *Context) {
-		log.Println("handle 3: ", ctx.GetSrcId(), string(ctx.GetData()))
+		log.Println("handle 3: ", ctx.SrcId(), string(ctx.Data()))
 		if err := ctx.ReplyErr(errors.New("err: error test"), []byte("ok---2")); err != nil {
 			log.Println("reply err: ", err)
 		}

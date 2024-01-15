@@ -22,11 +22,15 @@ func newContext(m *message, iCtx iContext) *Context {
 	}
 }
 
-func (c *Context) GetSrcId() uint64 {
+func (c *Context) SrcId() uint64 {
 	return c.srcId
 }
 
-func (c *Context) GetData() []byte {
+func (c *Context) Api() uint32 {
+	return c.api
+}
+
+func (c *Context) Data() []byte {
 	return c.data
 }
 

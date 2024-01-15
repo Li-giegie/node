@@ -16,7 +16,7 @@ type IServer interface {
 	newConnect(conn *net.TCPConn)
 	authConnect(msg *authMsg) ([]byte, error)
 	process(ctx *srvConnCtx) error
-	GetConnect(id uint64) (ISrvConn, bool)
+	GetConnect(id uint64) (ISrvConn, bool) //获取一个连接
 	GetConnList() []ISrvConn
 	Shutdown()
 }
@@ -165,7 +165,7 @@ func (s *Server) newConnect(conn *net.TCPConn) {
 	log.Printf("[debug] success conntion: %d %s\n", am.srcId, addr)
 	sConn := newSrvConn(am.srcId, conn, s)
 	s.connList.Set(am.srcId, sConn)
-	err = s.gPool.Submit(sConn.Start)
+	err = s.gPool.Submit(sConn.start)
 	if err != nil {
 		log.Println("ants pool err: ", err)
 	}
@@ -173,8 +173,8 @@ func (s *Server) newConnect(conn *net.TCPConn) {
 
 // authConnect authentication connect
 func (s *Server) authConnect(auth *authMsg) ([]byte, error) {
-	conn, ok := s.getConnect(auth.srcId)
-	if ok && conn.Status {
+	conn, ok := s.GetConnect(auth.srcId)
+	if ok && conn.(*srvConn).Status {
 		return nil, ErrAuthIdExist
 	}
 	if s.AuthenticationFunc == nil {
@@ -215,13 +215,13 @@ func (s *Server) process(ctx *srvConnCtx) error {
 					log.Println("conn.process.localHandle.forward err: ", err)
 				}
 			default: //转发处理
-				conn, ok := s.getConnect(ctx.msg.dstId)
+				iConn, ok := s.GetConnect(ctx.msg.dstId)
 				if !ok {
 					ctx.msg.replyErr(msgType_ReplyErr, nil, ErrConnNotExist)
 					_ = ctx.conn.writeMsg(ctx.msg)
 					return
 				}
-				if err := conn.writeMsg(ctx.msg); err != nil {
+				if err := iConn.(*srvConn).writeMsg(ctx.msg); err != nil {
 					log.Println("conn.process.forward err: ", err)
 				}
 			}
@@ -240,14 +240,14 @@ func (s *Server) process(ctx *srvConnCtx) error {
 				}
 				mChan <- ctx.msg
 			default:
-				conn, ok := s.getConnect(ctx.msg.dstId)
+				conn, ok := s.GetConnect(ctx.msg.dstId)
 				if ok {
-					if err := conn.writeMsg(ctx.msg); err != nil {
+					if err := conn.(*srvConn).writeMsg(ctx.msg); err != nil {
 						log.Println("srvConn.process.forward err: ", err)
 					}
 					return
 				}
-				fmt.Println("drop reply message: ", ctx.msg.String())
+				log.Println("drop reply message: ", ctx.msg.String())
 			}
 		case msgType_Registration:
 			var ok bool
@@ -301,7 +301,7 @@ func (s *Server) ConnectEvent(cet connectEventType, arg ...interface{}) {
 	}
 }
 
-func (s *Server) getConnect(id uint64) (*srvConn, bool) {
+func (s *Server) GetConnect(id uint64) (ISrvConn, bool) {
 	i, ok := s.connList.Get(id)
 	if !ok {
 		return nil, false
@@ -321,9 +321,9 @@ func (s *Server) checkUp() {
 			continue
 		}
 		for _, id := range keys {
-			conn, ok := s.getConnect(id)
+			conn, ok := s.GetConnect(id)
 			if ok {
-				if time.Now().Unix() > conn.activation+int64(s.connKeepAliveTime.Seconds()) {
+				if time.Now().Unix() > conn.(*srvConn).activation+int64(s.connKeepAliveTime.Seconds()) {
 					log.Println("超时一个连接关闭", id)
 					conn.Close(true)
 				}
@@ -332,15 +332,11 @@ func (s *Server) checkUp() {
 	}
 }
 
-func (s *Server) GetConnect(id uint64) (ISrvConn, bool) {
-	return s.getConnect(id)
-}
-
 func (s *Server) GetConnList() []ISrvConn {
 	key := s.connList.KeyToSlice()
 	list := make([]ISrvConn, 0, len(key))
 	for _, id := range key {
-		conn, ok := s.getConnect(id)
+		conn, ok := s.GetConnect(id)
 		if ok {
 			list = append(list, conn)
 		}

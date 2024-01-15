@@ -29,7 +29,7 @@ func Client(lAddr, rAddr string, id uint64) {
 		node.WithClientLocalIpAddr(lAddr),
 		node.WithClientKeepAlive(time.Second*3),
 	)
-	_, err := client.Connect(nil)
+	_, err := client.Connect(node.DEFAULT_ServerID, []byte{})
 	if err != nil {
 		log.Println(err)
 		return
@@ -38,16 +38,17 @@ func Client(lAddr, rAddr string, id uint64) {
 	client.HandleFunc(10, func(ctx *node.Context) {
 		fmt.Println("receive msg with handle 10: ", ctx.String())
 	})
+
 	client.HandleFunc(20, func(ctx *node.Context) {
 		fmt.Println("receive msg with handle 20: ", ctx.String())
-		rep := append([]byte("handle 20 success: "), ctx.GetData()...)
+		rep := append([]byte("handle 20 success: "), ctx.Data()...)
 		_ = ctx.Reply(rep)
 	})
-	client.HandleFunc(30, func(ctx *node.Context) {
+	client.HandleFunc(3, func(ctx *node.Context) {
 		fmt.Println("receive msg with handle 30: ", ctx.String())
-		_ = ctx.ReplyErr(errors.New("err: test error reply"), append([]byte("handle 30 error: "), ctx.GetData()...))
+		_ = ctx.ReplyErr(errors.New("err: test error reply"), append([]byte("handle 30 error: "), ctx.Data()...))
 	})
-	badApi, err := client.Registration()
+	badApi, err := client.Registration(3)
 	if err != nil {
 		log.Println(err, badApi)
 		return

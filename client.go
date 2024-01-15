@@ -26,7 +26,6 @@ type ClientI interface {
 	Send(api uint32, data []byte) error
 	Request(timeout time.Duration, api uint32, data []byte) (replyData []byte, err error)
 	Forward(timeout time.Duration, dstId uint64, api uint32, data []byte) (replyData []byte, err error)
-	getConn() *net.TCPConn
 }
 
 type Client struct {
@@ -38,10 +37,6 @@ type Client struct {
 	msgChan    *utils.MapUint32
 	closeChan  chan error
 	*connect
-}
-
-func (c *Client) getConn() *net.TCPConn {
-	return c.connect.conn
 }
 
 type OptionClient func(*Client) *Client
@@ -198,7 +193,7 @@ func (c *Client) Run() error {
 	c.handler.Range(func(api uint32, ih HandlerFunc) {
 		log.Printf("[api] %v\n", api)
 	})
-	log.Println("client listen ------")
+	log.Printf("client [%d] listen ------\n", c.id)
 	err := <-c.closeChan
 	return err
 }

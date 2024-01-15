@@ -3,18 +3,18 @@ package node
 import (
 	"errors"
 	utils "github.com/Li-giegie/go-utils"
-	"log"
 	"net"
 	"time"
 )
 
 type ISrvConn interface {
-	Start()
-	Close(nowait ...bool)
-	Send(api uint32, data []byte) error
-	Request(timeout time.Duration, api uint32, data []byte) (replyData []byte, err error)
-	Forward(timeout time.Duration, dstId uint64, api uint32, data []byte) (replyData []byte, err error)
-	GetId() uint64
+	start()
+	Close(nowait ...bool)                                                                 //断开连接，可选值nowait表示是否立即关闭，不等待数据是否发送接收完毕
+	Send(api uint32, data []byte) error                                                   //用于发送数据到当前连接中，不需要回复
+	Request(timeout time.Duration, api uint32, data []byte) (replyData []byte, err error) //用于发送数据到当前连接中，等待回复
+	Forward(ctx *Context, api uint32, data []byte) (err error)                            //将Context内容转发到当前的连接中，当前连接如果具有回复内容将直接回复到发起请求的连接,并提供重写api、data能力，返回值error连接发送成功是否，如果有错误即连接断开，一旦发送成功响应不会返回到代理端
+	GetId() uint64                                                                        //获取连接的Id
+	GetStatus() bool                                                                      //获取连接状态，true表示可用，false表示不可用
 }
 
 type connectEventType uint8
@@ -31,7 +31,7 @@ var connectEventMap = map[connectEventType]string{
 	connectEventType_processClose: "connect process close event",
 }
 
-type iConnMgmt interface {
+type iServer interface {
 	GetConnect(id uint64) (ISrvConn, bool)
 	ConnectEvent(cet connectEventType, arg ...interface{})
 	process(ctx *srvConnCtx) error
@@ -41,14 +41,14 @@ type iConnMgmt interface {
 type srvConn struct {
 	msgChan *utils.MapUint32
 	apis    []uint32
-	iConnMgmt
+	iServer
 	*connect
 }
 
-func newSrvConn(id uint64, tConn *net.TCPConn, cm iConnMgmt) *srvConn {
+func newSrvConn(id uint64, tConn *net.TCPConn, cm iServer) *srvConn {
 	conn := new(srvConn)
 	conn.msgChan = utils.NewMapUint32()
-	conn.iConnMgmt = cm
+	conn.iServer = cm
 	conn.connect = newConnect(id, tConn, conn)
 	return conn
 }
@@ -62,7 +62,11 @@ func (c *srvConn) GetId() uint64 {
 	return c.Id
 }
 
-func (c *srvConn) Start() {
+func (c *srvConn) GetStatus() bool {
+	return c.Status
+}
+
+func (c *srvConn) start() {
 	var _err error
 	defer c.ConnectEvent(connectEventType_processClose, _err)
 	for c.Status {
@@ -93,7 +97,6 @@ func (c *srvConn) read() (*message, error) {
 	m := msgPool.Get().(*message)
 	dl := m.header.unmarshal(buf)
 	if m.srcId != c.connect.Id {
-		log.Println("invalid msg drop: ", m.String())
 		return nil, errors.New("invalid message drop: " + m.String())
 	}
 	m.data, err = readAtLeast(c.conn, int(dl))
@@ -110,12 +113,11 @@ func (c *srvConn) Request(timeout time.Duration, api uint32, data []byte) (reply
 	return msg.data, err
 }
 
-func (c *srvConn) Forward(timeout time.Duration, dstId uint64, api uint32, data []byte) (replyData []byte, err error) {
-	conn, ok := c.GetConnect(dstId)
-	if !ok {
-		return nil, ErrConnNotExist
-	}
-	return conn.Request(timeout, api, data)
+func (c *srvConn) Forward(ctx *Context, api uint32, data []byte) (err error) {
+	ctx.dstId = c.Id
+	ctx.api = api
+	ctx.data = data
+	return c.writeMsg(ctx.message)
 }
 
 func (c *srvConn) storageMsgChan(id uint32, mshChan chan *message) {

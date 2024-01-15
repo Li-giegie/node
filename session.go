@@ -32,7 +32,6 @@ func newSessionCache(lifeTime time.Duration, checkTime time.Duration) *sessionCa
 	go func() {
 		for s.state {
 			time.Sleep(checkTime)
-			fmt.Println("检测")
 			key := s.cache.KeyToSlice()
 			for _, k := range key {
 				v, ok := s.cache.Get(k)
