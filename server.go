@@ -2,7 +2,6 @@ package node
 
 import (
 	"fmt"
-	utils "github.com/Li-giegie/go-utils"
 	"github.com/panjf2000/ants/v2"
 	"log"
 	"net"
@@ -24,35 +23,51 @@ type IServer interface {
 type Option func(server *Server) error
 
 type Server struct {
-	id                    uint64
-	state                 bool
-	addr                  string
-	localHandle           *Handler
-	registerHandleApiConn *utils.MapUint32
-	maxGoroutine          int
-	minGoroutine          int
-	connKeepAliveTime     time.Duration
-	maxConnNum            int
-	connList              *utils.MapUint64
-	gPool                 *ants.Pool
-	listen                *net.TCPListener
-	session               *sessionCache
+	id         uint64
+	state      bool
+	addr       string
+	maxConnNum int
+	gPool      *ants.Pool
+	listen     *net.TCPListener
+	iHandler
+	iConnectList
+	iRegisterHandle
 	AuthenticationFunc
+	*ServerTimeParameters
+	*ServerGoroutineParameters
+	*sessionCache
+}
+
+type ServerTimeParameters struct {
+	//最大连接空闲时间
+	MaxConnectionIdle time.Duration
+	//检查连接是否有效间隔时间
+	CheckInterval time.Duration
+}
+
+type ServerGoroutineParameters struct {
+	//开启的Goroutine数量
+	GoroutineNum int
+	//扩容Goroutine最大数量，MaxGoroutine > GoroutineNum 有效
+	MaxGoroutine int
 }
 
 func NewServer(addr string, opt ...Option) IServer {
 	srv := new(Server)
+	srv.ServerTimeParameters = new(ServerTimeParameters)
+	srv.ServerGoroutineParameters = new(ServerGoroutineParameters)
+	srv.CheckInterval = DEFAULT_CheckInterval
+	srv.MaxConnectionIdle = DEFAULT_KeepAlive
+	srv.MaxGoroutine = DEFAULT_MAX_GOROUTINE
+	srv.GoroutineNum = DEFAULT_MIN_GOROUTINE
 	srv.addr = addr
 	srv.state = true
 	srv.id = DEFAULT_ServerID
-	srv.maxGoroutine = DEFAULT_MAX_GOROUTINE
-	srv.minGoroutine = DEFAULT_MIN_GOROUTINE
-	srv.connKeepAliveTime = DEFAULT_KeepAlive
 	srv.maxConnNum = DEFAULT_MAXCONNNUM
-	srv.session = newSessionCache(sessionCache_lifeTime, sessionCache_checktime)
-	srv.connList = utils.NewMapUint64()
-	srv.localHandle = NewHandler()
-	srv.registerHandleApiConn = utils.NewMapUint32()
+	srv.sessionCache = newSessionCache(sessionCache_lifeTime, sessionCache_checktime)
+	srv.iConnectList = newConnectList()
+	srv.iHandler = newHandler()
+	srv.iRegisterHandle = newRegisterHandle()
 	for _, option := range opt {
 		_ = option(srv)
 	}
@@ -64,15 +79,19 @@ func (s *Server) ServerId() uint64 {
 }
 
 func (s *Server) HandleFunc(api uint32, handler HandlerFunc) {
-	s.localHandle.Add(api, handler)
+	s.AddHandle(api, handler)
+}
+
+func (s *Server) getMaxConnectionIdle() time.Duration {
+	return s.ServerTimeParameters.MaxConnectionIdle
 }
 
 func (s *Server) init() (addr *net.TCPAddr, err error) {
-	s.gPool, err = ants.NewPool(s.minGoroutine)
+	s.gPool, err = ants.NewPool(s.GoroutineNum)
 	if err != nil {
 		return
 	}
-	s.gPool.Tune(s.maxGoroutine)
+	s.gPool.Tune(s.MaxGoroutine)
 	return net.ResolveTCPAddr("tcp", s.addr)
 }
 
@@ -81,11 +100,7 @@ func (s *Server) ListenAndServer(debug ...bool) error {
 	if err != nil {
 		return err
 	}
-	s.listen, err = net.ListenTCP("tcp", addr)
-	if err != nil {
-		return err
-	}
-	if err = s.gPool.Submit(s.checkUp); err != nil {
+	if s.listen, err = net.ListenTCP("tcp", addr); err != nil {
 		return err
 	}
 	defer s.listen.Close()
@@ -109,15 +124,15 @@ func (s *Server) ListenAndServer(debug ...bool) error {
 }
 
 func (s *Server) newConnect(conn *net.TCPConn) {
-	if len(s.connList.GetMap()) > s.maxConnNum {
+	if s.maxConnNum > 0 && s.Len() > s.maxConnNum {
 		_ = write(conn, encodeErrReplyMsgData(ErrServerConnectOverFlow, nil))
 		_ = conn.Close()
 		log.Printf("[debug] close -1 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
 	addr := conn.RemoteAddr().String()
-	sessionId := s.session.create(addr)
-	defer s.session.delete(sessionId)
+	sessionId := s.create(addr)
+	defer s.delete(sessionId)
 	//发送一个session id uint32，接收消息时需要作为判断连接是否合法的依据之一，防止错误的连接建立造成意外情况
 	_, err := conn.Write(uint32ToBytes(sessionId))
 	if err != nil {
@@ -132,7 +147,7 @@ func (s *Server) newConnect(conn *net.TCPConn) {
 		log.Printf("[debug] close -3 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
-	sessionCont, ok := s.session.query(amHeader.sessionId)
+	sessionCont, ok := s.query(amHeader.sessionId)
 	if !ok || amHeader.version != Version || sessionCont.tag != addr || amHeader.dstId != s.id || amHeader.srcId == 0 {
 		tmpBuf := encodeErrReplyMsgData(fmt.Errorf("%v -3 ", ErrInvalidConnect), nil)
 		_ = write(conn, tmpBuf)
@@ -149,7 +164,6 @@ func (s *Server) newConnect(conn *net.TCPConn) {
 		log.Printf("[debug] close -5 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
-
 	authData, err := s.authConnect(am)
 	if err != nil {
 		_ = write(conn, encodeErrReplyMsgData(err, authData))
@@ -164,7 +178,7 @@ func (s *Server) newConnect(conn *net.TCPConn) {
 	}
 	log.Printf("[debug] success conntion: %d %s\n", am.srcId, addr)
 	sConn := newSrvConn(am.srcId, conn, s)
-	s.connList.Set(am.srcId, sConn)
+	s.Add(sConn)
 	err = s.gPool.Submit(sConn.start)
 	if err != nil {
 		log.Println("ants pool err: ", err)
@@ -193,18 +207,17 @@ func (s *Server) process(ctx *srvConnCtx) error {
 		case msgType_Send:
 			switch ctx.msg.dstId {
 			case s.id, 0: //本地处理
-				hi, ok := s.localHandle.Get(ctx.msg.api)
+				hi, ok := s.GetHandle(ctx.msg.api)
 				if ok {
 					hi(newContext(ctx.msg, ctx.conn))
 					return
 				}
-				i, ok := s.registerHandleApiConn.Get(ctx.msg.api)
+				conn, ok := s.QueryRegisterConn(ctx.msg.api)
 				if !ok {
 					ctx.msg.replyErr(msgType_ReplyErr, nil, ErrNoApi)
 					_ = ctx.conn.writeMsg(ctx.msg)
 					return
 				}
-				conn := i.(*srvConn)
 				if conn == nil || !conn.Status {
 					ctx.msg.replyErr(msgType_ReplyErr, nil, ErrNoApi)
 					_ = ctx.conn.writeMsg(ctx.msg)
@@ -228,13 +241,12 @@ func (s *Server) process(ctx *srvConnCtx) error {
 		case msgType_Reply, msgType_ReplyErr, msgType_RegistrationReply, msgType_TickReply:
 			switch ctx.msg.dstId {
 			case s.id, 0:
-				obj, ok := ctx.conn.msgChan.Get(ctx.msg.id)
+				mChan, ok := ctx.conn.GetMsgChan(ctx.msg.id)
 				if !ok {
 					log.Println("No recipient drop message", ctx.msg.String())
 					return
 				}
-				mChan, ok := obj.(chan *message)
-				if !ok || mChan == nil {
+				if mChan == nil {
 					log.Println("message channel close drop message", ctx.msg.String())
 					return
 				}
@@ -254,10 +266,9 @@ func (s *Server) process(ctx *srvConnCtx) error {
 			apis := decodeRegistrationApiReq(ctx.msg.data)
 			var badApis = make([]uint32, 0, len(apis))
 			for _, api := range apis {
-				if _, ok = s.localHandle.Get(api); ok {
+				if _, ok = s.GetHandle(api); ok {
 					badApis = append(badApis, api)
-				} else if i, ok := s.registerHandleApiConn.Get(api); ok {
-					conn := i.(*srvConn)
+				} else if conn, ok := s.QueryRegisterConn(api); ok {
 					if conn != nil && conn.Status {
 						badApis = append(badApis, api)
 					}
@@ -268,9 +279,7 @@ func (s *Server) process(ctx *srvConnCtx) error {
 				_ = ctx.conn.writeMsg(ctx.msg)
 				return
 			}
-			for _, api := range apis {
-				s.registerHandleApiConn.Set(api, ctx.conn)
-			}
+			s.AppendRegisterConn(ctx.conn, apis)
 			ctx.conn.apis = apis
 			ctx.msg.reply(msgType_RegistrationReply, encodeRegistrationApiResp(nil, nil))
 			_ = ctx.conn.writeMsg(ctx.msg)
@@ -283,57 +292,32 @@ func (s *Server) process(ctx *srvConnCtx) error {
 
 func (s *Server) ConnectEvent(cet connectEventType, arg ...interface{}) {
 	switch cet {
-	case connectEventType_Close, connectEventType_TimeOutClose:
+	//手动关闭、检测超时关闭、读写超时关闭
+	case connectEventType_Close, connectEventType_TimeOutClose, connectEventType_processClose:
 		conn, ok := arg[0].(*srvConn)
 		if ok && conn != nil {
 			for _, api := range conn.apis {
-				s.registerHandleApiConn.Delete(api)
+				s.DeleteRegisterConn(api)
 			}
 			conn.close(arg[1].(bool))
 		}
-		s.connList.Delete(conn.Id)
+		s.Delete(conn.Id)
 		log.Printf("close %s: id %d\n", connectEventMap[cet], conn.Id)
-	case connectEventType_processClose:
-		err, ok := arg[0].(error)
-		log.Printf("close connect err: %v %v %T", ok, err, arg[0])
 	default:
 		log.Println("invalid event: ", cet)
 	}
 }
 
 func (s *Server) GetConnect(id uint64) (ISrvConn, bool) {
-	i, ok := s.connList.Get(id)
+	i, ok := s.Query(id)
 	if !ok {
 		return nil, false
 	}
-	conn := i.(*srvConn)
-	if conn == nil || !conn.Status {
-		return nil, false
-	}
-	return conn, true
-}
-
-func (s *Server) checkUp() {
-	for s.state {
-		time.Sleep(s.connKeepAliveTime)
-		keys := s.connList.KeyToSlice()
-		if len(keys) == 0 {
-			continue
-		}
-		for _, id := range keys {
-			conn, ok := s.GetConnect(id)
-			if ok {
-				if time.Now().Unix() > conn.(*srvConn).activation+int64(s.connKeepAliveTime.Seconds()) {
-					log.Println("超时一个连接关闭", id)
-					conn.Close(true)
-				}
-			}
-		}
-	}
+	return i, true
 }
 
 func (s *Server) GetConnList() []ISrvConn {
-	key := s.connList.KeyToSlice()
+	key := s.Keys()
 	list := make([]ISrvConn, 0, len(key))
 	for _, id := range key {
 		conn, ok := s.GetConnect(id)
@@ -342,6 +326,23 @@ func (s *Server) GetConnList() []ISrvConn {
 		}
 	}
 	return list
+}
+
+func (s *Server) CheckConnect() {
+	mci := int64(s.ServerTimeParameters.MaxConnectionIdle)
+	for s.state {
+		time.Sleep(s.ServerTimeParameters.CheckInterval)
+		keys := s.Keys()
+		for _, key := range keys {
+			conn, ok := s.GetConnect(key)
+			if !ok {
+				continue
+			}
+			if time.Now().Unix() > mci+conn.(*srvConn).activation {
+				s.ConnectEvent(connectEventType_TimeOutClose, conn, true)
+			}
+		}
+	}
 }
 
 func (s *Server) Shutdown() {
@@ -356,17 +357,16 @@ func WithSrvId(id uint64) Option {
 	}
 }
 
-func WithSrvConnTimeout(t time.Duration) Option {
+func WithSrvTimeParameters(t ServerTimeParameters) Option {
 	return func(srv *Server) error {
-		srv.connKeepAliveTime = t
+		srv.ServerTimeParameters = &t
 		return nil
 	}
 }
 
-func WithSrvGoroutine(min, max int) Option {
+func WithSrvGoroutine(g ServerGoroutineParameters) Option {
 	return func(srv *Server) error {
-		srv.maxGoroutine = max
-		srv.minGoroutine = min
+		srv.ServerGoroutineParameters = &g
 		return nil
 	}
 }
@@ -379,7 +379,7 @@ func WithSrvAuthentication(authFunc AuthenticationFunc) Option {
 	}
 }
 
-// WithSrvMaxConnectNum <= 0 disable The number of connections is not limited
+// WithSrvMaxConnectNum <= 0 不限制连接数量
 func WithSrvMaxConnectNum(maxNum int) Option {
 	return func(srv *Server) error {
 		srv.maxConnNum = maxNum

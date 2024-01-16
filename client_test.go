@@ -1,15 +1,16 @@
 package node
 
 import (
-	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 )
 
+var addr = "39.101.193.248:8088"
+
 func TestClient_Auth(t *testing.T) {
-	cli := NewClient("39.101.193.248:8088",
-		WithClientKeepAlive(time.Second*5))
+	cli := NewClient(DEFAULT_ServerAddress,
+		WithClientKeepAlive(time.Second*2))
 	reply, err := cli.Connect(DEFAULT_ServerID, []byte{1})
 	if err != nil {
 		t.Error(err, string(reply))
@@ -20,7 +21,7 @@ func TestClient_Auth(t *testing.T) {
 }
 
 func TestClient_Registration(t *testing.T) {
-	cli := NewClient("39.101.193.248:8088",
+	cli := NewClient(DEFAULT_ServerAddress,
 		WithClientId(3790),
 		WithClientLocalIpAddr("0.0.0.0:6667"),
 		WithClientKeepAlive(time.Second*2))
@@ -54,7 +55,6 @@ func TestClientSend(t *testing.T) {
 		t.Error(err, string(authReply))
 		return
 	}
-
 	for {
 		reply, err := cli.Request(time.Second*3, 200, []byte("hello"))
 		if err != nil {
@@ -85,23 +85,23 @@ func TestClientRequest(t *testing.T) {
 		fmt.Println(api, string(reply), err)
 	}
 	return
-	reply, err := cli.Request(time.Second*3, 2, []byte("req 2"))
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	fmt.Println("req success:", string(reply), err)
-	var dstId uint64 = 1
-	buf, err := json.Marshal(dstId)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	reply, err = cli.Request(time.Second*3, 3, buf)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	fmt.Println("forward success:", string(reply), err)
+	//reply, err := cli.Request(time.Second*3, 2, []byte("req 2"))
+	//if err != nil {
+	//	t.Error(err)
+	//	return
+	//}
+	//fmt.Println("req success:", string(reply), err)
+	//var dstId uint64 = 1
+	//buf, err := json.Marshal(dstId)
+	//if err != nil {
+	//	t.Error(err)
+	//	return
+	//}
+	//reply, err = cli.Request(time.Second*3, 3, buf)
+	//if err != nil {
+	//	t.Error(err)
+	//	return
+	//}
+	//fmt.Println("forward success:", string(reply), err)
 
 }

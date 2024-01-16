@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	jeans "github.com/Li-giegie/go-jeans"
-	utils "github.com/Li-giegie/go-utils"
 	"log"
 	"net"
 	"time"
@@ -33,9 +32,12 @@ type Client struct {
 	localAddr  string
 	remoteAddr string
 	keepAlive  time.Duration //连接保活：在一段时间没有发送消息后会发送消息维持连接状态的休眠时间 默认值30s
-	handler    *Handler
-	msgChan    *utils.MapUint32
-	closeChan  chan error
+
+	connDeadline time.Duration
+	closeChan    chan error
+	activation   int64
+	iHandler
+	iMessageChan
 	*connect
 }
 
@@ -47,8 +49,8 @@ func NewClient(remoteAddr string, options ...OptionClient) ClientI {
 	c.localAddr = DEFAULT_ClientAddress
 	c.keepAlive = DEFAULT_KeepAlive
 	c.remoteAddr = remoteAddr
-	c.handler = NewHandler()
-	c.msgChan = utils.NewMapUint32()
+	c.iHandler = newHandler()
+	c.iMessageChan = newMessageChan()
 	c.closeChan = make(chan error)
 	for _, opt := range options {
 		opt(c)
@@ -77,8 +79,12 @@ func WithClientKeepAlive(t time.Duration) OptionClient {
 	}
 }
 
+func (c *Client) getConnDeadline() time.Duration {
+	return c.connDeadline
+}
+
 func (c *Client) HandleFunc(api uint32, handle HandlerFunc) {
-	c.handler.Add(api, handle)
+	c.AddHandle(api, handle)
 }
 
 func (c *Client) Connect(dstId uint64, authData []byte) ([]byte, error) {
@@ -97,6 +103,7 @@ func (c *Client) Connect(dstId uint64, authData []byte) ([]byte, error) {
 		return reply, err
 	}
 	c.connect = newConnect(c.id, conn, c)
+	c.activation = time.Now().Unix()
 	go c.process()
 	go c.tick(c.keepAlive)
 	return reply, nil
@@ -114,20 +121,19 @@ func (c *Client) process() {
 			switch msg.typ {
 			case msgType_Send:
 				ctx := newContext(msg, c)
-				hf, ok := c.handler.Get(msg.api)
+				hf, ok := c.GetHandle(msg.api)
 				if !ok {
 					_ = ctx.ReplyErr(errors.New("api not exist"), nil)
 					return
 				}
 				hf(ctx)
 			case msgType_Reply, msgType_ReplyErr, msgType_RegistrationReply, msgType_TickReply:
-				v, ok := c.msgChan.Get(msg.id)
+				mChan, ok := c.GetMsgChan(msg.id)
 				if !ok {
 					log.Println("receive channel not exit msg drop:", msg.String())
 					return
 				}
-				mChan, ok := v.(chan *message)
-				if !ok || mChan == nil {
+				if mChan == nil {
 					log.Println("receive channel not exit or close msg drop:", msg.String())
 					return
 				}
@@ -166,7 +172,7 @@ func (c *Client) authentication(conn *net.TCPConn, dst uint64, data []byte) ([]b
 
 // Registration 注册Api：noExposure 不注册API列表,error 不为空时返回注册失败的api
 func (c *Client) Registration(noExposure ...uint32) ([]uint32, error) {
-	apis := filterApi(c.handler.cache.KeyToSlice(), noExposure)
+	apis := filterApi(c.HandlerKeys(), noExposure)
 	msg, err := c.request(c.keepAlive, c.id, 0, msgType_Registration, 0, encodeRegistrationApiReq(apis))
 	if err != nil {
 		return nil, err
@@ -185,12 +191,13 @@ func (c *Client) tick(keepAlive time.Duration) {
 				log.Println(err)
 				c.Close(true)
 			}
+			log.Println("tick------")
 		}
 	}
 }
 
 func (c *Client) Run() error {
-	c.handler.Range(func(api uint32, ih HandlerFunc) {
+	c.RangeHandle(func(api uint32, ih HandlerFunc) {
 		log.Printf("[api] %v\n", api)
 	})
 	log.Printf("client [%d] listen ------\n", c.id)
@@ -198,19 +205,12 @@ func (c *Client) Run() error {
 	return err
 }
 
-func (c *Client) storageMsgChan(id uint32, mshChan chan *message) {
-	c.msgChan.Set(id, mshChan)
-}
-
-func (c *Client) delMsgChan(id uint32) {
-	c.msgChan.Delete(id)
-}
-
 func (c *Client) Close(nowait ...bool) {
 	c.connect.close(nowait...)
 }
 
 func (c *Client) Send(api uint32, data []byte) error {
+	c.activation = time.Now().Unix()
 	return c.send(c.id, 0, msgType_Send, api, data)
 }
 
@@ -220,6 +220,7 @@ func (c *Client) Request(timeout time.Duration, api uint32, data []byte) (replyD
 		return nil, err
 	}
 	defer msg.recycle()
+	c.activation = time.Now().Unix()
 	return msg.data, nil
 }
 
@@ -229,5 +230,6 @@ func (c *Client) Forward(timeout time.Duration, dstId uint64, api uint32, data [
 		return nil, err
 	}
 	defer msg.recycle()
+	c.activation = time.Now().Unix()
 	return msg.data, nil
 }

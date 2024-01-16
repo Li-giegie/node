@@ -6,26 +6,21 @@ import (
 	"time"
 )
 
-type iStorageMsgChan interface {
-	storageMsgChan(id uint32, mshChan chan *message)
-	delMsgChan(id uint32)
-}
-
 type connect struct {
 	conn       *net.TCPConn
 	Status     bool
 	Id         uint64
-	activation int64 //Unix second
-	iStorageMsgChan
+	activation int64
+	iMessageChan
 }
 
-func newConnect(id uint64, conn *net.TCPConn, s iStorageMsgChan) *connect {
+func newConnect(id uint64, conn *net.TCPConn, mc iMessageChan) *connect {
 	return &connect{
-		Id:              id,
-		Status:          true,
-		activation:      time.Now().Unix(),
-		conn:            conn,
-		iStorageMsgChan: s,
+		Id:           id,
+		Status:       true,
+		conn:         conn,
+		activation:   time.Now().Unix(),
+		iMessageChan: mc,
 	}
 }
 
@@ -36,9 +31,9 @@ func (c *connect) send(srcId, dstId uint64, typ uint8, api uint32, data []byte) 
 func (c *connect) request(timeout time.Duration, srcId, dstId uint64, typ uint8, api uint32, data []byte) (msg *message, err error) {
 	m := newMsg(srcId, dstId, typ, api, data)
 	mChan := make(chan *message)
-	c.storageMsgChan(m.id, mChan)
+	c.AddMsgChan(m.id, mChan)
 	defer func() {
-		c.delMsgChan(m.id)
+		c.DeleteMsgChan(m.id)
 		close(mChan)
 		mChan = nil
 	}()
@@ -59,9 +54,9 @@ func (c *connect) request(timeout time.Duration, srcId, dstId uint64, typ uint8,
 }
 
 func (c *connect) writeMsg(m *message) error {
-	c.activation = time.Now().Unix()
 	_, err := c.conn.Write(m.marshal())
 	m.recycle()
+	c.activation = time.Now().Unix()
 	return err
 }
 

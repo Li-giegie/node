@@ -2,7 +2,7 @@ package node
 
 import (
 	"errors"
-	utils "github.com/Li-giegie/go-utils"
+	"log"
 	"net"
 	"time"
 )
@@ -36,18 +36,19 @@ type iServer interface {
 	ConnectEvent(cet connectEventType, arg ...interface{})
 	process(ctx *srvConnCtx) error
 	ServerId() uint64
+	getMaxConnectionIdle() time.Duration
 }
 
 type srvConn struct {
-	msgChan *utils.MapUint32
-	apis    []uint32
+	iMessageChan
+	apis []uint32
 	iServer
 	*connect
 }
 
 func newSrvConn(id uint64, tConn *net.TCPConn, cm iServer) *srvConn {
 	conn := new(srvConn)
-	conn.msgChan = utils.NewMapUint32()
+	conn.iMessageChan = newMessageChan()
 	conn.iServer = cm
 	conn.connect = newConnect(id, tConn, conn)
 	return conn
@@ -56,6 +57,13 @@ func newSrvConn(id uint64, tConn *net.TCPConn, cm iServer) *srvConn {
 type srvConnCtx struct {
 	msg  *message
 	conn *srvConn
+}
+
+func newSrvConnCtx(m *message, conn *srvConn) *srvConnCtx {
+	return &srvConnCtx{
+		msg:  m,
+		conn: conn,
+	}
 }
 
 func (c *srvConn) GetId() uint64 {
@@ -68,21 +76,19 @@ func (c *srvConn) GetStatus() bool {
 
 func (c *srvConn) start() {
 	var _err error
-	defer c.ConnectEvent(connectEventType_processClose, _err)
+	defer c.ConnectEvent(connectEventType_processClose, c, false, _err)
 	for c.Status {
+		if _err = c.conn.SetReadDeadline(time.Now().Add(c.getMaxConnectionIdle())); _err != nil {
+			log.Println("deadline err: ", _err)
+			return
+		}
 		msg, err := c.read()
 		if err != nil {
 			c.Status = false
 			_err = err
 			return
 		}
-		c.activation = time.Now().Unix()
-		err = c.process(&srvConnCtx{
-			msg:  msg,
-			conn: c,
-		})
-		if err != nil {
-			_err = err
+		if _err = c.process(newSrvConnCtx(msg, c)); _err != nil {
 			return
 		}
 	}
@@ -104,12 +110,14 @@ func (c *srvConn) read() (*message, error) {
 }
 
 func (c *srvConn) Send(api uint32, data []byte) error {
+	_ = c.conn.SetDeadline(time.Now().Add(c.getMaxConnectionIdle()))
 	return c.send(c.ServerId(), c.Id, msgType_Send, api, data)
 }
 
 func (c *srvConn) Request(timeout time.Duration, api uint32, data []byte) (replyData []byte, err error) {
 	msg, err := c.request(timeout, c.ServerId(), c.Id, msgType_Send, api, data)
 	defer msg.recycle()
+	_ = c.conn.SetDeadline(time.Now().Add(c.getMaxConnectionIdle()))
 	return msg.data, err
 }
 
@@ -117,15 +125,8 @@ func (c *srvConn) Forward(ctx *Context, api uint32, data []byte) (err error) {
 	ctx.dstId = c.Id
 	ctx.api = api
 	ctx.data = data
+	_ = c.conn.SetDeadline(time.Now().Add(c.getMaxConnectionIdle()))
 	return c.writeMsg(ctx.message)
-}
-
-func (c *srvConn) storageMsgChan(id uint32, mshChan chan *message) {
-	c.msgChan.Set(id, mshChan)
-}
-
-func (c *srvConn) delMsgChan(id uint32) {
-	c.msgChan.Delete(id)
 }
 
 func (c *srvConn) Close(nowait ...bool) {

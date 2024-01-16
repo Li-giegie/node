@@ -15,6 +15,7 @@ const (
 	DEFAULT_MIN_GOROUTINE         = 5000
 	DEFAULT_KeepAlive             = time.Second * 30
 	DEFAULT_AuthenticationTimeout = time.Second * 6
+	DEFAULT_CheckInterval         = time.Second * 3
 )
 
 var auth_sucess = "authentication success:"

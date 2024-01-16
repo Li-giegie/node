@@ -10,7 +10,10 @@ import (
 
 func TestServer(t *testing.T) {
 	srv := NewServer(DEFAULT_ServerAddress,
-		WithSrvConnTimeout(time.Second*5),
+		WithSrvTimeParameters(ServerTimeParameters{
+			MaxConnectionIdle: time.Second * 3,
+			CheckInterval:     time.Second,
+		}),
 		WithSrvAuthentication(func(id uint64, data []byte) (reply []byte, err error) {
 			log.Println("auth: ", id, string(data))
 			if len(data) == 0 {
