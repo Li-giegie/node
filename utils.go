@@ -1,8 +1,10 @@
 package node
 
 import (
-	"errors"
+	"encoding/binary"
 	jeans "github.com/Li-giegie/go-jeans"
+	"hash/crc32"
+	"io"
 	"math/rand"
 	"net"
 	"strconv"
@@ -11,10 +13,11 @@ import (
 
 var _rnd *rand.Rand
 
-type AuthenticationFunc func(id uint64, data []byte) (ok bool, reply []byte)
+type AuthenticationFunc func(id uint64, data []byte) (reply []byte, err error)
 
 func init() {
-	_rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
+	source := rand.NewSource(time.Now().UnixNano())
+	_rnd = rand.New(source)
 }
 
 // 1024-49151
@@ -22,21 +25,17 @@ func getPort() string {
 	return strconv.Itoa(_rnd.Intn(49152-1024) + 1024)
 }
 
-func readMessage(conn *net.TCPConn) (*message, error) {
-	buf, err := jeans.Unpack(conn)
-	if err != nil {
-		return nil, err
-	}
-	return newMsgWithUnmarshalV2(buf), nil
+func randomU32() uint32 {
+	return _rnd.Uint32()<<_rnd.Intn(32) + 1
 }
 
-func writeMsg(conn *net.TCPConn, m *message) error {
-	buf := m.marshalV2()
-	m.recycle()
-	_, err := conn.Write(jeans.Pack(buf))
-	return err
+func readAtLeast(r io.Reader, n int) ([]byte, error) {
+	buf := make([]byte, n)
+	_, err := io.ReadAtLeast(r, buf, n)
+	return buf, err
 }
 
+// 等待废弃
 func write(conn *net.TCPConn, data []byte) error {
 	_, err := conn.Write(jeans.Pack(data))
 	return err
@@ -54,62 +53,34 @@ func parseAddress(protocol string, addr ...string) ([]*net.TCPAddr, error) {
 	return a, nil
 }
 
-type srvHandleI interface {
-	Load(arg interface{}) (interface{}, bool)
-	serverConnectionManagerI
-	write(m *message) error
-}
-
-type handleRegistrationI interface {
-	write(m *message) error
-	getId() uint64
-	serverConnectionManagerI
-}
-
-func serverConnectHandleRegistration(h handleRegistrationI, m *message) ([]uint32, error) {
-	var apiList []uint32
-	if err := jeans.DecodeSlice(m.data, &apiList); err != nil {
-		return nil, h.write(newMsgWithRegistrationResp(m, false, "invalid Registration content", []uint32{}))
-	}
-	if len(apiList) == 0 {
-		return nil, h.write(newMsgWithRegistrationResp(m, false, "invalid Registration not api", []uint32{}))
-	}
-	var badApiList = make([]uint32, 0, len(apiList))
+func filterApi(srcApis []uint32, filterApis []uint32) []uint32 {
+	var newSrcApis = make([]uint32, 0, len(srcApis))
 	var ok bool
-	for _, u := range apiList {
-		if _, ok = h.GetServerConnectionManager().registrationApi.Get(u); ok {
-			badApiList = append(badApiList, u)
-			continue
-		}
-		h.GetServerConnectionManager().registrationApi.Set(u, h.getId())
-	}
-	var regErr error
-	if len(badApiList) == 0 {
-		newMsgWithRegistrationResp(m, true, "", nil)
-	} else {
-		newMsgWithRegistrationResp(m, false, "api exist", badApiList)
-		regErr = errors.New("api reg fail")
-	}
-	if err := h.write(m); err != nil {
-		return nil, err
-	}
-	return apiList, regErr
-}
-
-func handleMapToSlice(handler map[uint32]HandleFunc, filter ...uint32) []uint32 {
-	res := make([]uint32, 0, len(handler))
-	var ok bool
-	for u, _ := range handler {
+	for _, api := range srcApis {
 		ok = true
-		for _, u2 := range filter {
-			if u == u2 {
+		for _, u := range filterApis {
+			if api == u {
 				ok = false
-				break
 			}
 		}
 		if ok {
-			res = append(res, u)
+			newSrcApis = append(newSrcApis, api)
 		}
 	}
-	return res
+	return newSrcApis
+}
+
+// checksum crc32
+func Checksum(data []byte) uint32 {
+	return crc32.ChecksumIEEE(data)
+}
+
+func uint32ToBytes(n uint32) []byte {
+	var b = make([]byte, 4)
+	binary.LittleEndian.PutUint32(b, n)
+	return b
+}
+
+func bytesToUint32(b []byte) uint32 {
+	return binary.LittleEndian.Uint32(b)
 }

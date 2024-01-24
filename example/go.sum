@@ -1,5 +1,10 @@
+<<<<<<< HEAD
 github.com/Li-giegie/go-jeans v1.0.1-0.20231213020253-59cc4b80f0d5 h1:0nmNmW0iC4ebVj/lr2N6MN4tTi9xRP1iIHHefkR/NGs=
 github.com/Li-giegie/go-jeans v1.0.1-0.20231213020253-59cc4b80f0d5/go.mod h1:11TTAl8HimiYyXCekzT4obwAF928xbMLiRzRrTLFQ8I=
+=======
+github.com/Li-giegie/go-jeans v1.0.1-0.20240101191241-d4e67218fd82 h1:2C+YXsXTPySVfqA7eTziZ/ebNKbIvd0hSB+FmwCZF0E=
+github.com/Li-giegie/go-jeans v1.0.1-0.20240101191241-d4e67218fd82/go.mod h1:11TTAl8HimiYyXCekzT4obwAF928xbMLiRzRrTLFQ8I=
+>>>>>>> dev231223
 github.com/Li-giegie/go-utils v0.0.0-20231213033017-c0e274a2b5a0 h1:A+wLZzrYmWnAuZManULzm6NfCojT83ZBpNu7P570uKE=
 github.com/Li-giegie/go-utils v0.0.0-20231213033017-c0e274a2b5a0/go.mod h1:VmgorL5MYveXQAY6Jcd/kcbBGnt6Ehjqiv7+0b+Q/i8=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
@@ -28,9 +33,8 @@ golang.org/x/sync v0.3.0 h1:ftCYgMx6zT/asHUrPw8BLLscYtGznsLAnjq5RH9P66E=
 golang.org/x/sync v0.3.0/go.mod h1:FU7BRWz2tNW+3quACPkgCx/L+uEAv1htQ0V83Z9Rj+Y=
 golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543 h1:E7g+9GITq07hpfrRu66IVDexMakfv52eLZ2CXBWiKr4=
 golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
-google.golang.org/protobuf v1.26.0-rc.1/go.mod h1:jlhhOSvTdKEhbULTjvd4ARK9grFBp09yW+WbY/TyQbw=
-google.golang.org/protobuf v1.31.0 h1:g0LDEJHgrBl9N9r17Ru3sqWhkIx2NB67okBHPwC7hs8=
-google.golang.org/protobuf v1.31.0/go.mod h1:HV8QOd/L58Z+nl8r43ehVNZIU/HEI6OcFqwMG9pJV4I=
+google.golang.org/protobuf v1.32.0 h1:pPC6BG5ex8PDFnkbrGU3EixyhKcQ2aDuBS36lqK/C7I=
+google.golang.org/protobuf v1.32.0/go.mod h1:c6P6GXX6sHbq/GpV6MGZEdwhWPcYBgnhAHhKbcUYpos=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=

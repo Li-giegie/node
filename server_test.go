@@ -1,43 +1,45 @@
 package node
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"testing"
 	"time"
 )
 
-const (
-	sendApi    = 1
-	reqApi     = 2
-	forwardApi = 3
-
-	permit = "permit"
-	deny   = "deny"
-
-	performance_ReqTestApi = 4
-)
-
-func TestNodeServer(t *testing.T) {
+func TestServer(t *testing.T) {
 	srv := NewServer(DEFAULT_ServerAddress,
-		WithSrvGoroutine(100, 200),
-		WithSrvId(DEFAULT_ServerID),
-		WithSrvConnTimeout(time.Second*3),
-		WithSrvAuthentication(func(id uint64, data []byte) (ok bool, reply []byte) {
-			fmt.Println("auth handle:", id, string(data), len(data))
-			switch string(data) {
-			case permit:
-				return true, []byte(permit)
-			case deny:
-				return false, []byte(deny)
-			default:
-				return false, []byte("Invalid Format")
+		WithSrvTimeParameters(ServerTimeParameters{
+			MaxConnectionIdle: time.Second * 3,
+			CheckInterval:     time.Second,
+		}),
+		WithSrvAuthentication(func(id uint64, data []byte) (reply []byte, err error) {
+			log.Println("auth: ", id, string(data))
+			if len(data) == 0 {
+				return []byte("data "), errors.New("deny pass")
 			}
+			return nil, nil
 		},
-		),
-	)
-
-	defer srv.Shutdown()
-	if err := srv.ListenAndServer(); err != nil {
-		fmt.Println("listen err: ", err)
+		))
+	srv.HandleFunc(1, func(ctx *Context) {
+		//if err := ctx.Reply([]byte("1")); err != nil {
+		//	fmt.Println(err)
+		//}
+	})
+	srv.HandleFunc(2, func(ctx *Context) {
+		log.Println("handle 2: ", ctx.SrcId(), string(ctx.Data()))
+		if err := ctx.Reply([]byte("ok---2")); err != nil {
+			log.Println("reply err: ", err)
+		}
+	})
+	srv.HandleFunc(3, func(ctx *Context) {
+		log.Println("handle 3: ", ctx.SrcId(), string(ctx.Data()))
+		if err := ctx.ReplyErr(errors.New("err: error test"), []byte("ok---2")); err != nil {
+			log.Println("reply err: ", err)
+		}
+	})
+	if err := srv.ListenAndServer(true); err != nil {
+		fmt.Println(err)
 	}
 }
