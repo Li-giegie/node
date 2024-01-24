@@ -56,7 +56,7 @@ func Client2(lAddr, rAddr string, id uint64) {
 		node.WithClientLocalIpAddr(lAddr),
 		node.WithClientKeepAlive(time.Second*3),
 	)
-	_, err := client.Connect(nil)
+	_, err := client.Connect(1, nil)
 	if err != nil {
 		log.Println(err)
 		return

@@ -19,7 +19,7 @@ import (
 type ClientI interface {
 	Registration(noExposure ...uint32) ([]uint32, error)                 //将handle API注册到服务端，只有error返回值不为nil时，[]uint32返回失败列表
 	HandleFunc(api uint32, handle HandlerFunc)                           //添加处理函数 	//添加多个处理函数接口
-	Connect(dstId uint64, authData []byte) (authReply []byte, err error) //发起连接：authReply 服务端认证回复 err 是否连接成功
+	Connect(dstId uint64, authData []byte) (authReply []byte, err error) //发起连接：入参dstId：目的Id即server id，authData 认证发送的数据，authReply 服务端认证回复 err 是否连接成功
 	Run() error                                                          //如果客户端仅作为请求用途此方法效果仅为阻塞主协程，当客户端挂载有handle接口推荐使用
 	Close(nowait ...bool)
 	Send(api uint32, data []byte) error
@@ -28,11 +28,10 @@ type ClientI interface {
 }
 
 type Client struct {
-	id         uint64
-	localAddr  string
-	remoteAddr string
-	keepAlive  time.Duration //连接保活：在一段时间没有发送消息后会发送消息维持连接状态的休眠时间 默认值30s
-
+	id           uint64
+	localAddr    string
+	remoteAddr   string
+	keepAlive    time.Duration //连接保活：在一段时间没有发送消息后会发送消息维持连接状态的休眠时间 默认值30s
 	connDeadline time.Duration
 	closeChan    chan error
 	activation   int64

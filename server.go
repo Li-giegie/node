@@ -35,7 +35,6 @@ type Server struct {
 	AuthenticationFunc
 	*ServerTimeParameters
 	*ServerGoroutineParameters
-	*sessionCache
 }
 
 type ServerTimeParameters struct {
@@ -61,10 +60,8 @@ func NewServer(addr string, opt ...Option) IServer {
 	srv.MaxGoroutine = DEFAULT_MAX_GOROUTINE
 	srv.GoroutineNum = DEFAULT_MIN_GOROUTINE
 	srv.addr = addr
-	srv.state = true
 	srv.id = DEFAULT_ServerID
 	srv.maxConnNum = DEFAULT_MAXCONNNUM
-	srv.sessionCache = newSessionCache(sessionCache_lifeTime, sessionCache_checktime)
 	srv.iConnectList = newConnectList()
 	srv.iHandler = newHandler()
 	srv.iRegisterHandle = newRegisterHandle()
@@ -103,7 +100,11 @@ func (s *Server) ListenAndServer(debug ...bool) error {
 	if s.listen, err = net.ListenTCP("tcp", addr); err != nil {
 		return err
 	}
+	s.state = true
 	defer s.listen.Close()
+	if err = s.gPool.Submit(s.checkConnect); err != nil {
+		return err
+	}
 	if len(debug) > 0 && debug[0] {
 		log.Printf("server [%d] listen: %s\n", s.id, s.addr)
 	}
@@ -131,8 +132,7 @@ func (s *Server) newConnect(conn *net.TCPConn) {
 		return
 	}
 	addr := conn.RemoteAddr().String()
-	sessionId := s.create(addr)
-	defer s.delete(sessionId)
+	sessionId := randomU32()
 	//发送一个session id uint32，接收消息时需要作为判断连接是否合法的依据之一，防止错误的连接建立造成意外情况
 	_, err := conn.Write(uint32ToBytes(sessionId))
 	if err != nil {
@@ -147,8 +147,8 @@ func (s *Server) newConnect(conn *net.TCPConn) {
 		log.Printf("[debug] close -3 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
-	sessionCont, ok := s.query(amHeader.sessionId)
-	if !ok || amHeader.version != Version || sessionCont.tag != addr || amHeader.dstId != s.id || amHeader.srcId == 0 {
+
+	if sessionId != amHeader.sessionId || amHeader.version != Version || amHeader.dstId != s.id || amHeader.srcId == 0 {
 		tmpBuf := encodeErrReplyMsgData(fmt.Errorf("%v -3 ", ErrInvalidConnect), nil)
 		_ = write(conn, tmpBuf)
 		_ = conn.Close()
@@ -328,8 +328,8 @@ func (s *Server) GetConnList() []ISrvConn {
 	return list
 }
 
-func (s *Server) CheckConnect() {
-	mci := int64(s.ServerTimeParameters.MaxConnectionIdle)
+func (s *Server) checkConnect() {
+	mci := int64(s.ServerTimeParameters.MaxConnectionIdle.Seconds())
 	for s.state {
 		time.Sleep(s.ServerTimeParameters.CheckInterval)
 		keys := s.Keys()
@@ -340,6 +340,7 @@ func (s *Server) CheckConnect() {
 			}
 			if time.Now().Unix() > mci+conn.(*srvConn).activation {
 				s.ConnectEvent(connectEventType_TimeOutClose, conn, true)
+				log.Println("连接超时关闭：", key)
 			}
 		}
 	}
@@ -364,7 +365,8 @@ func WithSrvTimeParameters(t ServerTimeParameters) Option {
 	}
 }
 
-func WithSrvGoroutine(g ServerGoroutineParameters) Option {
+// WithSrvGoroutineParameters 设置goroutine相关
+func WithSrvGoroutineParameters(g ServerGoroutineParameters) Option {
 	return func(srv *Server) error {
 		srv.ServerGoroutineParameters = &g
 		return nil

@@ -32,7 +32,6 @@ var connectEventMap = map[connectEventType]string{
 }
 
 type iServer interface {
-	GetConnect(id uint64) (ISrvConn, bool)
 	ConnectEvent(cet connectEventType, arg ...interface{})
 	process(ctx *srvConnCtx) error
 	ServerId() uint64
@@ -40,8 +39,8 @@ type iServer interface {
 }
 
 type srvConn struct {
-	iMessageChan
 	apis []uint32
+	iMessageChan
 	iServer
 	*connect
 }

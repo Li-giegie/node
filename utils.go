@@ -16,12 +16,17 @@ var _rnd *rand.Rand
 type AuthenticationFunc func(id uint64, data []byte) (reply []byte, err error)
 
 func init() {
-	_rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
+	source := rand.NewSource(time.Now().UnixNano())
+	_rnd = rand.New(source)
 }
 
 // 1024-49151
 func getPort() string {
 	return strconv.Itoa(_rnd.Intn(49152-1024) + 1024)
+}
+
+func randomU32() uint32 {
+	return _rnd.Uint32()<<_rnd.Intn(32) + 1
 }
 
 func readAtLeast(r io.Reader, n int) ([]byte, error) {

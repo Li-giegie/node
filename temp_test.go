@@ -2,30 +2,12 @@ package node
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
-	"github.com/panjf2000/ants/v2"
 	"io"
 	"net"
-	"net/http"
-	"os"
 	"testing"
 	"time"
 )
-
-func TestName(t *testing.T) {
-	var errI = make([]interface{}, 3)
-	var err error
-	errI[0] = err
-	errI[1] = nil
-	errI[2] = errors.New("a")
-	fmt.Println(errI)
-	fmt.Println(errI[0] == nil)
-	fmt.Println(errI[1] == nil)
-	fmt.Println(errI[2] == nil)
-	v, ok := errI[2].(error)
-	fmt.Println(v, ok)
-}
 
 func TestTcpClient(t *testing.T) {
 	fmt.Println(100000)
@@ -58,24 +40,6 @@ func TestTcpClient(t *testing.T) {
 
 	}
 	select {}
-}
-
-func TestAAA(t *testing.T) {
-	p, _ := ants.NewPool(1000)
-	for i := 0; i < 10; i++ {
-		c := getN()
-		p.Submit(func() {
-			fmt.Println(c, i)
-		})
-	}
-	time.Sleep(time.Second * 10)
-}
-
-var ccc int
-
-func getN() int {
-	ccc++
-	return ccc
 }
 
 func TestReader(t *testing.T) {
@@ -132,64 +96,4 @@ func reader() io.Reader {
 		}
 	}()
 	return buf
-}
-
-func TestN(t *testing.T) {
-	f, err := os.OpenFile("1.txt", os.O_CREATE|os.O_APPEND|os.O_RDWR, 0666)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	defer f.Close()
-	fmt.Println(f.WriteString("abcdef\n"))
-	fmt.Println(f.WriteString("abcdef\n"))
-	fmt.Println(f.WriteString("abcdef\n"))
-}
-
-func TestCCC(t *testing.T) {
-	http.HandleFunc("/ping", func(writer http.ResponseWriter, request *http.Request) {
-		fmt.Println("ping---", request.ContentLength)
-		writer.WriteHeader(200)
-		fmt.Println(writer.Write([]byte("pone")))
-	})
-	go func() {
-		if err := http.ListenAndServe(":8080", nil); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-	}()
-	time.Sleep(time.Second * 2)
-	var data = `GET /ping HTTP/1.1
-Host: localhost:8080
-User-Agent: Go-http-client/1.1
-Content-Length: 9000
-
-[   data]`
-	conn, err := net.Dial("tcp", "127.0.0.1:8080")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	defer conn.Close()
-	_, err = conn.Write([]byte(data))
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	var rbuf = make([]byte, 100)
-	for {
-		n, err := conn.Read(rbuf)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		fmt.Println("receive: ", string(rbuf[:n]))
-	}
-}
-
-func TestHttpClient(t *testing.T) {
-	for {
-		fmt.Println(http.Get("http://127.0.0.1:8080/ping"))
-		time.Sleep(time.Second)
-	}
 }

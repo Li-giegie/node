@@ -9,10 +9,6 @@ import (
 	"time"
 )
 
-const (
-	clientReqApi  = 100
-	clientSendApi = 101
-)
 const serverAddr = "39.101.193.248:8088"
 
 var srvaddr = flag.String("rip", serverAddr, "remote ip")

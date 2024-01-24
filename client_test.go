@@ -8,6 +8,18 @@ import (
 
 var addr = "39.101.193.248:8088"
 
+func TestConnectTimeOut(t *testing.T) {
+	cli := NewClient(DEFAULT_ServerAddress,
+		WithClientKeepAlive(time.Second*5))
+	reply, err := cli.Connect(DEFAULT_ServerID, []byte("p"))
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Println(string(reply))
+	fmt.Println(cli.Run())
+}
+
 func TestClient_Auth(t *testing.T) {
 	cli := NewClient(DEFAULT_ServerAddress,
 		WithClientKeepAlive(time.Second*2))
@@ -84,24 +96,4 @@ func TestClientRequest(t *testing.T) {
 		}
 		fmt.Println(api, string(reply), err)
 	}
-	return
-	//reply, err := cli.Request(time.Second*3, 2, []byte("req 2"))
-	//if err != nil {
-	//	t.Error(err)
-	//	return
-	//}
-	//fmt.Println("req success:", string(reply), err)
-	//var dstId uint64 = 1
-	//buf, err := json.Marshal(dstId)
-	//if err != nil {
-	//	t.Error(err)
-	//	return
-	//}
-	//reply, err = cli.Request(time.Second*3, 3, buf)
-	//if err != nil {
-	//	t.Error(err)
-	//	return
-	//}
-	//fmt.Println("forward success:", string(reply), err)
-
 }
