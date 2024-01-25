@@ -3,11 +3,9 @@ package node
 import (
 	"encoding/binary"
 	jeans "github.com/Li-giegie/go-jeans"
-	"hash/crc32"
 	"io"
 	"math/rand"
 	"net"
-	"strconv"
 	"time"
 )
 
@@ -18,11 +16,6 @@ type AuthenticationFunc func(id uint64, data []byte) (reply []byte, err error)
 func init() {
 	source := rand.NewSource(time.Now().UnixNano())
 	_rnd = rand.New(source)
-}
-
-// 1024-49151
-func getPort() string {
-	return strconv.Itoa(_rnd.Intn(49152-1024) + 1024)
 }
 
 func randomU32() uint32 {
@@ -68,11 +61,6 @@ func filterApi(srcApis []uint32, filterApis []uint32) []uint32 {
 		}
 	}
 	return newSrcApis
-}
-
-// checksum crc32
-func Checksum(data []byte) uint32 {
-	return crc32.ChecksumIEEE(data)
 }
 
 func uint32ToBytes(n uint32) []byte {
