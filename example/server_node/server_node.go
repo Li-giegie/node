@@ -1,19 +1,21 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"github.com/Li-giegie/node"
 	"log"
 )
 
-const srvAddr = "0.0.0.0:8080"
+var srvAddr = flag.String("addr", "0.0.0.0:8080", "ip地址:port")
 
 func main() {
+	flag.Parse()
 	serverNode()
 }
 
 func serverNode() {
-	srv := node.NewServer(srvAddr)
+	srv := node.NewServer(*srvAddr)
 	srv.HandleFunc(1000, func(ctx *node.Context) {
 		fmt.Println("1000 handle: ", string(ctx.Data()))
 	})
