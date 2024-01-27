@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-const srvAddr = "0.0.0.0:8080"
+const serverAddr = "39.101.193.248:8080"
 
 func main() {
-	fmt.Println(clientNode(srvAddr))
+	fmt.Println(clientNode(serverAddr))
 }
 
 func clientNode(addr string) error {
