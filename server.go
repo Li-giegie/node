@@ -10,18 +10,19 @@ import (
 
 type IServer interface {
 	init() (addr *net.TCPAddr, err error)
-	HandleFunc(api uint32, handler HandlerFunc)
-	ListenAndServer(debug ...bool) error
+	HandleFunc(api uint32, handler HandlerFunc) //绑定一个接口，用于处理
+	ListenAndServer(debug ...bool) error        //开启tcp侦听服务
 	newConnect(conn *net.TCPConn)
 	authConnect(msg *authMsg) ([]byte, error)
 	process(ctx *srvConnCtx) error
-	GetConnect(id uint64) (ISrvConn, bool) //获取一个连接
-	GetConnList() []ISrvConn
-	Shutdown()
+	GetConnect(id uint64) (ISrvConn, bool) //获取一个连接，获取后可对连接操作
+	GetConnList() []ISrvConn               //获取全部连接
+	Shutdown()                             //停止服务
 }
 
 type Option func(server *Server) error
 
+// node Server 结构
 type Server struct {
 	id         uint64
 	state      bool
@@ -37,6 +38,7 @@ type Server struct {
 	*ServerGoroutineParameters
 }
 
+// ServerTimeParameters 时间相关
 type ServerTimeParameters struct {
 	//最大连接空闲时间
 	MaxConnectionIdle time.Duration
@@ -44,6 +46,7 @@ type ServerTimeParameters struct {
 	CheckInterval time.Duration
 }
 
+// ServerGoroutineParameters 开启协程相关
 type ServerGoroutineParameters struct {
 	//开启的Goroutine数量
 	GoroutineNum int
@@ -51,6 +54,7 @@ type ServerGoroutineParameters struct {
 	MaxGoroutine int
 }
 
+// NewServer 创建一个Server类型的节点
 func NewServer(addr string, opt ...Option) IServer {
 	srv := new(Server)
 	srv.ServerTimeParameters = new(ServerTimeParameters)
@@ -71,6 +75,7 @@ func NewServer(addr string, opt ...Option) IServer {
 	return srv
 }
 
+// ServerId 服务端ID
 func (s *Server) ServerId() uint64 {
 	return s.id
 }
