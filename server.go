@@ -118,7 +118,7 @@ func (s *Server) ListenAndServer(debug ...bool) error {
 		if err != nil {
 			return err
 		}
-		log.Printf("[debug] listen conntion: %s\n", conn.RemoteAddr().String())
+		//log.Printf("[debug] listen conntion: %s\n", conn.RemoteAddr().String())
 		err = s.gPool.Submit(func() {
 			s.newConnect(conn)
 		})
@@ -133,23 +133,22 @@ func (s *Server) newConnect(conn *net.TCPConn) {
 	if s.maxConnNum > 0 && s.Len() > s.maxConnNum {
 		_ = write(conn, encodeErrReplyMsgData(ErrServerConnectOverFlow, nil))
 		_ = conn.Close()
-		log.Printf("[debug] close -1 connection: %s\n", conn.RemoteAddr().String())
+		//log.Printf("[debug] close -1 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
-	addr := conn.RemoteAddr().String()
 	sessionId := randomU32()
 	//发送一个session id uint32，接收消息时需要作为判断连接是否合法的依据之一，防止错误的连接建立造成意外情况
 	_, err := conn.Write(uint32ToBytes(sessionId))
 	if err != nil {
 		_ = conn.Close()
-		log.Printf("[debug] close -2 connection: %s\n", conn.RemoteAddr().String())
+		//log.Printf("[debug] close -2 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
 	amHeader, err := new(authHeader).unmarshal(conn)
 	if err != nil {
 		_ = write(conn, encodeErrReplyMsgData(err, nil))
 		_ = conn.Close()
-		log.Printf("[debug] close -3 connection: %s\n", conn.RemoteAddr().String())
+		//log.Printf("[debug] close -3 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
 
@@ -157,7 +156,7 @@ func (s *Server) newConnect(conn *net.TCPConn) {
 		tmpBuf := encodeErrReplyMsgData(fmt.Errorf("%v -3 ", ErrInvalidConnect), nil)
 		_ = write(conn, tmpBuf)
 		_ = conn.Close()
-		log.Printf("[debug] close -4 connection: %s\n", conn.RemoteAddr().String())
+		//log.Printf("[debug] close -4 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
 	am := new(authMsg)
@@ -166,22 +165,22 @@ func (s *Server) newConnect(conn *net.TCPConn) {
 	if err != nil {
 		_ = write(conn, encodeErrReplyMsgData(err, nil))
 		_ = conn.Close()
-		log.Printf("[debug] close -5 connection: %s\n", conn.RemoteAddr().String())
+		//log.Printf("[debug] close -5 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
 	authData, err := s.authConnect(am)
 	if err != nil {
 		_ = write(conn, encodeErrReplyMsgData(err, authData))
 		_ = conn.Close()
-		log.Printf("[debug] close -6 connection: %s\n", conn.RemoteAddr().String())
+		//log.Printf("[debug] close -6 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
 	if err = write(conn, encodeErrReplyMsgData(nil, authData)); err != nil {
 		_ = conn.Close()
-		log.Printf("[debug] close -7 connection: %s\n", conn.RemoteAddr().String())
+		//log.Printf("[debug] close -7 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
-	log.Printf("[debug] success conntion: %d %s\n", am.srcId, addr)
+	//log.Printf("[debug] success conntion: %d %s\n", am.srcId, addr)
 	sConn := newSrvConn(am.srcId, conn, s)
 	s.Add(sConn)
 	err = s.gPool.Submit(sConn.start)
