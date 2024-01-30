@@ -16,6 +16,7 @@ const (
 	DEFAULT_KeepAlive             = time.Second * 30
 	DEFAULT_AuthenticationTimeout = time.Second * 6
 	DEFAULT_CheckInterval         = time.Second * 3
+	DEFAULT_ConnectionIdle        = time.Second * 15
 )
 
 var auth_sucess = "authentication success:"
