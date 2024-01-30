@@ -151,7 +151,6 @@ func (s *Server) newConnect(conn *net.TCPConn) {
 		//log.Printf("[debug] close -3 connection: %s\n", conn.RemoteAddr().String())
 		return
 	}
-
 	if sessionId != amHeader.sessionId || amHeader.version != Version || amHeader.dstId != s.id || amHeader.srcId == 0 {
 		tmpBuf := encodeErrReplyMsgData(fmt.Errorf("%v -3 ", ErrInvalidConnect), nil)
 		_ = write(conn, tmpBuf)

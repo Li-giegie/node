@@ -11,6 +11,7 @@ import (
 
 var _rnd *rand.Rand
 
+// AuthenticationFunc 入参数：id 发起者的id，data 发起者携带的数据 ，返回参数：reply 回复的内容，err 为nil表示认证通过。否则认证失败
 type AuthenticationFunc func(id uint64, data []byte) (reply []byte, err error)
 
 func init() {
