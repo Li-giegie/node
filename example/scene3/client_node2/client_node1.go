@@ -1,0 +1,34 @@
+package main
+
+import (
+	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/example"
+	"log"
+)
+
+func main() {
+	clientNode(example.SERVER_ADDR)
+}
+
+func clientNode(addr string) {
+	cli := node.NewClient(addr,
+		node.WithClientId(example.CLIENT3_ID),
+		node.WithClientLocalIpAddr(example.CLIENT2_ADDR),
+	)
+	//发起连接：入参dstId：目的Id即server id，authData 认证发送的数据，authReply 服务端认证回复 err 如果为空表示连接建立成功
+	reply, err := cli.Connect(node.DEFAULT_ServerID, []byte("permit"))
+	if err != nil {
+		panic(err)
+	}
+	defer cli.Close(true)
+	log.Printf("%s\n", reply)
+
+	cli.HandleFunc(example.CLIENT1_2_GROUPAPI, func(ctx *node.Context) {
+		// todo: ......
+		log.Println("client_node2 receive: ", string(ctx.Data()))
+		_ = ctx.Reply([]byte("client_node1 handle success"))
+	})
+	if err = cli.Run(); err != nil {
+		panic(err)
+	}
+}

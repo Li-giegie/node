@@ -60,7 +60,7 @@ func NewServer(addr string, opt ...Option) IServer {
 	srv.ServerTimeParameters = new(ServerTimeParameters)
 	srv.ServerGoroutineParameters = new(ServerGoroutineParameters)
 	srv.CheckInterval = DEFAULT_CheckInterval
-	srv.MaxConnectionIdle = DEFAULT_KeepAlive
+	srv.MaxConnectionIdle = DEFAULT_ConnectionIdle
 	srv.MaxGoroutine = DEFAULT_MAX_GOROUTINE
 	srv.GoroutineNum = DEFAULT_MIN_GOROUTINE
 	srv.addr = addr
@@ -296,7 +296,7 @@ func (s *Server) process(ctx *srvConnCtx) error {
 func (s *Server) ConnectEvent(cet connectEventType, arg ...interface{}) {
 	switch cet {
 	//手动关闭、检测超时关闭、读写超时关闭
-	case connectEventType_Close, connectEventType_TimeOutClose, connectEventType_processClose:
+	case connectEventType_Close, connectEventType_TimeOutClose, connecteventtypeProcessclose:
 		conn, ok := arg[0].(*srvConn)
 		if ok && conn != nil {
 			for _, api := range conn.apis {

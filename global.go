@@ -13,7 +13,6 @@ const (
 	DEFAULT_MAXCONNNUM            = 10 * 10000
 	DEFAULT_MAX_GOROUTINE         = 10000
 	DEFAULT_MIN_GOROUTINE         = 5000
-	DEFAULT_KeepAlive             = time.Second * 30
 	DEFAULT_AuthenticationTimeout = time.Second * 6
 	DEFAULT_CheckInterval         = time.Second * 3
 	DEFAULT_ConnectionIdle        = time.Second * 15
