@@ -39,7 +39,7 @@ func NewClient(remoteAddr string, options ...OptionClient) ClientI {
 	c := new(Client)
 	c.id = DEFAULT_ClientID
 	c.localAddr = DEFAULT_ClientAddress
-	c.keepAlive = DEFAULT_KeepAlive
+	c.keepAlive = DEFAULT_ConnectionIdle / 2
 	c.remoteAddr = remoteAddr
 	c.iHandler = newHandler()
 	c.iMessageChan = newMessageChan()
@@ -180,7 +180,7 @@ func (c *Client) tick(keepAlive time.Duration) {
 		if time.Now().Unix() >= c.activation+keepNum {
 			_, err := c.request(c.keepAlive, c.id, 0, msgType_Tick, 0, nil)
 			if err != nil {
-				log.Println(err)
+				log.Println("tick err: ", err)
 				c.Close(true)
 			}
 			log.Println("tick------")

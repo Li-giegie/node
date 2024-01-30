@@ -22,13 +22,13 @@ type connectEventType uint8
 const (
 	connectEventType_Close connectEventType = 1 + iota
 	connectEventType_TimeOutClose
-	connectEventType_processClose
+	connecteventtypeProcessclose
 )
 
 var connectEventMap = map[connectEventType]string{
 	connectEventType_Close:        "connect close event",
 	connectEventType_TimeOutClose: "connect timeout close event",
-	connectEventType_processClose: "connect process close event",
+	connecteventtypeProcessclose:  "connect process close event",
 }
 
 type iServer interface {
@@ -75,7 +75,7 @@ func (c *srvConn) GetStatus() bool {
 
 func (c *srvConn) start() {
 	var _err error
-	defer c.ConnectEvent(connectEventType_processClose, c, false, _err)
+	defer c.ConnectEvent(connecteventtypeProcessclose, c, false, _err)
 	for c.Status {
 		if _err = c.conn.SetReadDeadline(time.Now().Add(c.getMaxConnectionIdle())); _err != nil {
 			log.Println("deadline err: ", _err)
