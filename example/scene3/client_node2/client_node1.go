@@ -12,11 +12,11 @@ func main() {
 
 func clientNode(addr string) {
 	cli := node.NewClient(addr,
-		node.WithClientId(example.CLIENT3_ID),
+		node.WithClientId(example.CLIENT2_ID),
 		node.WithClientLocalIpAddr(example.CLIENT2_ADDR),
 	)
 	//发起连接：入参dstId：目的Id即server id，authData 认证发送的数据，authReply 服务端认证回复 err 如果为空表示连接建立成功
-	reply, err := cli.Connect(node.DEFAULT_ServerID, []byte("permit"))
+	reply, err := cli.Connect(example.SERVER_ID, []byte("permit"))
 	if err != nil {
 		panic(err)
 	}
