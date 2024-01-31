@@ -2,23 +2,20 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/example"
 	"log"
 )
 
-var srvAddr = flag.String("addr", "0.0.0.0:8080", "ip:port")
-
 func main() {
-	flag.Parse()
 	serverNode()
 }
 
 func serverNode() {
-	srv := node.NewServer(*srvAddr,
+	srv := node.NewServer(example.SERVER_ADDR,
 		// 设置节点ID
-		node.WithSrvId(node.DEFAULT_ServerID),
+		node.WithSrvId(example.SERVER_ID),
 		// 最大连接数量
 		node.WithSrvMaxConnectNum(10000),
 		// 连接时间相关
@@ -43,11 +40,11 @@ func serverNode() {
 		}),
 	)
 	//用于仅接受处理函数
-	srv.HandleFunc(1000, func(ctx *node.Context) {
+	srv.HandleFunc(example.SERVER_SEND_API, func(ctx *node.Context) {
 		fmt.Println("1000 handle: ", string(ctx.Data()))
 	})
 	//用于回复处理函数
-	srv.HandleFunc(1001, func(ctx *node.Context) {
+	srv.HandleFunc(example.SERVER_REQUEST_API, func(ctx *node.Context) {
 		// if ... {
 		// ctx.ReplyErr(errors.New("..."),[]byte("..."))
 		//}

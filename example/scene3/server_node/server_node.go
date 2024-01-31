@@ -14,7 +14,7 @@ func main() {
 }
 
 func serverNode() {
-	srv := node.NewServer(example.SERVER_ADDR)
+	srv := node.NewServer(example.SERVER_ADDR, node.WithSrvId(example.SERVER_ID))
 
 	//先发送往服务节点，服务节点转发到client_node2，不推荐此做法发，应该用注册或者直接转发功能实现
 	srv.HandleFunc(example.SERVER_FORWARD_API, func(ctx *node.Context) {
