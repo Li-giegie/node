@@ -22,6 +22,9 @@ func main() {
 		log.Fatal(err)
 	}
 	defer conn.Close()
+	if err = conn.Tick(time.Second, time.Second*3, time.Second*6, true); err != nil {
+		log.Fatal(err)
+	}
 	err = conn.Serve()
 	if err != nil {
 		log.Fatal(err)

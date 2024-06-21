@@ -106,6 +106,10 @@ func (c *connect) Serve() error {
 			return c.connectionErr(err)
 		}
 		c.activate = time.Now().UnixMilli()
+		if msg.DestId != c.sId && msg.DestId != 0 {
+			c.Handle(msg, c)
+			continue
+		}
 		switch msg.Typ {
 		case MsgType_Tick:
 			hBuf[0] = MsgType_TickReply
@@ -132,13 +136,9 @@ func (c *connect) Serve() error {
 				return err
 			}
 		case MsgType_Reply, MsgType_ReplyErrWithApiNotExist, MsgType_ReplyErrWithConnectNotExist, MsgType_ReplyErrWithLenLimit, MsgType_ReplyErrWithCheckInvalid:
-			if msg.DestId == c.sId {
-				if !c.Receiver.SetReceiveChan(msg) {
-					log.Println("receive timeout test drop", "msg", msg.String())
-				}
-				break
+			if !c.Receiver.SetReceiveChan(msg) {
+				log.Println("receive timeout test drop", "msg", msg.String())
 			}
-			c.Handle(msg, c)
 		default:
 			c.Handle(msg, c)
 		}
