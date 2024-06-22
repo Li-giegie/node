@@ -188,3 +188,10 @@ func EncodeUint24(b []byte, n2 uint32) {
 func DecodeUint824(b []byte) (n uint32) {
 	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16
 }
+
+func DefaultSlice(defaultVal string, s []string) string {
+	if len(s) == 0 || len(s[0]) == 0 {
+		return defaultVal
+	}
+	return s[0]
+}

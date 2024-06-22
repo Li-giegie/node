@@ -1,26 +1,18 @@
 package common
 
 import (
-	"github.com/panjf2000/ants/v2"
-	"time"
+	"errors"
+	"fmt"
 )
 
-const (
-	DEFAULT_Max_Conn_Size         = 1000
-	DEFAULT_ServerAntsPoolSize    = 50000
-	DEFAULT_ClientAntsPoolSize    = 10000
-	DEFAULT_AuthenticationTimeout = time.Second * 6
+var (
+	DEFAULT_ErrMsgLenLimit   = new(ErrMsgLenLimit)
+	DEFAULT_ErrMsgCheck      = new(ErrMsgCheck)
+	DEFAULT_ErrTimeout       = new(ErrTimeout)
+	DEFAULT_ErrConnNotExist  = new(ErrConnNotExist)
+	DEFAULT_ErrAuth          = new(ErrAuth)
+	DEFAULT_ErrMultipleReply = errors.New("multiple reply are not allowed")
 )
-
-var DEFAULT_ServeMux = NewServeMux()
-var DEFAULT_Constructor = NewMessageConstructor(1024)
-var DEFAULT_Reveiver = NewMessageReceiver(1024)
-var DEFAULT_ServerAntsPool, _ = ants.NewPool(DEFAULT_ServerAntsPoolSize)
-var DEFAULT_ClientAntsPool, _ = ants.NewPool(DEFAULT_ClientAntsPoolSize)
-var DEFAULT_Conns = NewConns()
-var DEFAULT_MaxReceiveMsgLength uint32 = 8192
-var DEFAULT_ErrMsgLenLimit = new(ErrMsgLenLimit)
-var DEFAULT_ErrMsgCheck = new(ErrMsgCheck)
 
 type ErrMsgLenLimit struct {
 }
@@ -34,4 +26,32 @@ type ErrMsgCheck struct {
 
 func (*ErrMsgCheck) Error() string {
 	return "message header invalid check"
+}
+
+type ErrConnNotExist struct {
+}
+
+func (ErrConnNotExist) Error() string {
+	return "connect not exist"
+}
+func (ErrConnNotExist) Type() uint8 {
+	return MsgType_ReplyErrConnNotExist
+}
+
+type ErrTimeout struct {
+	text string
+}
+
+func (e *ErrTimeout) Error() string {
+	return fmt.Sprintf("timeout %s", e.text)
+}
+
+type ErrAuth struct{}
+
+func (e *ErrAuth) Error() string {
+	return "auth fail conn close"
+}
+
+func (e *ErrAuth) Type() uint8 {
+	return MsgType_PushErrAuthFail
 }

@@ -4,14 +4,14 @@ import (
 	"sync"
 )
 
-type Receiver struct {
+type MsgReceiver struct {
 	cache map[uint32]chan *Message
 	lock  sync.RWMutex
 	pool  *Pool
 }
 
-func NewMessageReceiver(cap int) *Receiver {
-	mr := new(Receiver)
+func NewMsgReceiver(cap int) *MsgReceiver {
+	mr := new(MsgReceiver)
 	mr.cache = make(map[uint32]chan *Message)
 	mr.pool = NewPool(cap, func() any {
 		return make(chan *Message, 1)
@@ -19,7 +19,7 @@ func NewMessageReceiver(cap int) *Receiver {
 	return mr
 }
 
-func (m *Receiver) NewReceiveChan(id uint32) chan *Message {
+func (m *MsgReceiver) Create(id uint32) chan *Message {
 	chanMsg := m.pool.Get().(chan *Message)
 	if len(chanMsg) > 0 {
 		<-chanMsg
@@ -30,7 +30,7 @@ func (m *Receiver) NewReceiveChan(id uint32) chan *Message {
 	return chanMsg
 }
 
-func (m *Receiver) SetReceiveChan(msg *Message) bool {
+func (m *MsgReceiver) SetMsg(msg *Message) bool {
 	m.lock.Lock()
 	chanM, ok := m.cache[msg.Id]
 	if ok {
@@ -40,7 +40,7 @@ func (m *Receiver) SetReceiveChan(msg *Message) bool {
 	return ok
 }
 
-func (m *Receiver) DelReceiveChan(id uint32) bool {
+func (m *MsgReceiver) Delete(id uint32) bool {
 	m.lock.Lock()
 	chanM, ok := m.cache[id]
 	if !ok {

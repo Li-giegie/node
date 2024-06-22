@@ -1,40 +1,44 @@
 package common
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"errors"
-	"fmt"
-	"log"
 	"net"
-	"sync"
 	"time"
 )
 
 type Conn interface {
-	//Serve 开启服务
-	Serve() error
 	//Request 发起一个请求，得到一个响应
-	Request(ctx context.Context, api uint16, data []byte) ([]byte, error)
+	Request(ctx context.Context, data []byte) ([]byte, error)
 	//Forward 转发一个请求到目的连接中，得到一个响应
-	Forward(ctx context.Context, destId uint16, api uint16, data []byte) ([]byte, error)
+	Forward(ctx context.Context, destId uint16, data []byte) ([]byte, error)
 	//Send 仅发送数据
-	Send(api uint16, data []byte) (err error)
+	Send(data []byte) (err error)
 	Close() error
 	State() ConnStateType
-	//WriteMsg 应该使用Send、Request、Forward方法，不应该调用此方法，此方法不会检查消息的有效性，如果发送成功有响应会被丢弃，无法的到响应。
-	WriteMsg(m Encoder) (int, error)
-	//Tick 发送一个心跳包，维持连接活跃。(interval：每隔多久检测一次连接是否超时, keepAlive：单位时间后没有收发消息，发送一次心跳包，timeoutClose：单位时间后没有收到心跳包，主动发起关闭连接，showTickPack：可选参数非空index 0为true则把心跳包打印输出到控制台，通常用于测试阶段)
-	Tick(interval, keepAlive, timeoutClose time.Duration, showTickPack ...bool) error
+	//WriteMsg 应该使用Send、Request、Forward方法，如果发送成功有响应会被丢弃，无法的到响应。
+	WriteMsg(m *Message) (err error)
 	Id() uint16
 	//Activate unix mill
 	Activate() int64
 }
 
+type Connections interface {
+	GetConn(id uint16) (Conn, bool)
+}
+
 type Handler interface {
-	Handle(m *Message, conn Conn)
-	GetHandleFunc(api uint16) (HandleFunc, bool)
-	Submit(f func()) error
+	// Handle 接收到标准类型消息时触发回调
+	Handle(ctx *Context)
+	// ErrHandle 发送失败触发的回调
+	ErrHandle(msg *Message)
+	// DropHandle 接收到超时消息时触发回调
+	DropHandle(msg *Message)
+	// CustomHandle 接收到自定义类型消息时触发回调
+	CustomHandle(ctx *Context)
+	// Disconnect 连接断开触发回调
+	Disconnect(id uint16, err error)
 }
 
 type ConnStateType uint8
@@ -45,167 +49,145 @@ const (
 	ConnStateTypeOnError
 )
 
-func NewConn(sid, did uint16, c net.Conn, co *Constructor, mr *Receiver, h Handler, maxReceiveMsgLength uint32) Conn {
-	conn := new(connect)
+func NewConn(localId, remoteId uint16, c net.Conn, co *MsgPool, mr *MsgReceiver, conns Connections, maxMsgLen uint32) *Connect {
+	conn := new(Connect)
 	conn.state = ConnStateTypeOnConnect
-	conn.sId = sid
-	conn.dId = did
+	conn.localId = localId
+	conn.remoteId = remoteId
 	conn.Conn = c
 	conn.activate = time.Now().UnixMilli()
-	conn.Receiver = mr
-	conn.Constructor = co
-	conn.Handler = h
-	conn.maxReceiveMsgLength = maxReceiveMsgLength
+	conn.MsgReceiver = mr
+	conn.MsgPool = co
+	conn.r = bufio.NewReaderSize(c, 4096)
+	conn.Connections = conns
+	if conns == nil {
+		conn.Connections = emptyConns{}
+	}
+	conn.maxMsgLen = maxMsgLen
 	return conn
 }
 
-type connect struct {
-	state               ConnStateType
-	sId                 uint16
-	dId                 uint16
-	activate            int64
-	showTick            bool
-	err                 error
-	maxReceiveMsgLength uint32
+type Connect struct {
+	state     ConnStateType
+	localId   uint16
+	remoteId  uint16
+	activate  int64
+	err       error
+	maxMsgLen uint32
 	net.Conn
-	Handler
-	*Receiver
-	*Constructor
+	r *bufio.Reader
+	*MsgReceiver
+	*MsgPool
+	Connections
 }
 
-func (c *connect) Activate() int64 {
+func (c *Connect) Activate() int64 {
 	return c.activate
 }
 
-func (c *connect) Serve() error {
-	hBuf := make([]byte, MESSAGE_HEADER_LEN)
+// Serve 开启服务
+func (c *Connect) Serve(h Handler) (err error) {
+	defer h.Disconnect(c.remoteId, err)
+	headerBuf := make([]byte, MsgHeaderLen)
 	for {
-		msg := c.Constructor.Default()
-		err := msg.DecodeHeader(c.Conn, hBuf)
+		msg := c.MsgPool.Default()
+		err = msg.Decode(c.r, headerBuf, c.maxMsgLen)
 		if err != nil {
-			if _, ok := err.(*ErrMsgCheck); ok {
-				c.state = ConnStateTypeOnError
-				c.err = err
-				msg.Reply(MsgType_ReplyErrWithCheckInvalid, nil)
-				_, _ = c.WriteMsg(msg)
-				_ = c.Close()
-				return err
-			}
-			return c.connectionErr(err)
-		}
-		if c.maxReceiveMsgLength > 0 && c.maxReceiveMsgLength < msg.DataLength {
-			c.state = ConnStateTypeOnError
-			c.err = DEFAULT_ErrMsgLenLimit
-			msg.Reply(MsgType_ReplyErrWithLenLimit, nil)
-			_, _ = c.WriteMsg(msg)
-			_ = c.Close()
-			return DEFAULT_ErrMsgLenLimit
-		}
-		err = msg.DecodeContent(c.Conn)
-		if err != nil {
-			return c.connectionErr(err)
+			return c.connectionErr(context.WithValue(context.Background(), "msg", msg), err, h)
 		}
 		c.activate = time.Now().UnixMilli()
-		if msg.DestId != c.sId && msg.DestId != 0 {
-			c.Handle(msg, c)
+		if msg.DestId != c.localId && msg.DestId != 0 {
+			conn, ok := c.Connections.GetConn(msg.DestId)
+			if !ok {
+				if err = c.WriteMsg(msg.ErrReply(MsgType_ReplyErrConnNotExist, c.localId)); err != nil {
+					h.ErrHandle(msg)
+				}
+			} else {
+				if err = conn.WriteMsg(msg); err != nil {
+					if err = c.WriteMsg(msg.ErrReply(MsgType_ReplyErrConnNotExist, c.localId)); err != nil {
+						h.ErrHandle(msg)
+					}
+				}
+			}
 			continue
 		}
-		switch msg.Typ {
-		case MsgType_Tick:
-			hBuf[0] = MsgType_TickReply
-			c.Write(hBuf)
-			if c.showTick {
-				log.Println("receive tick-pack --- ")
-			}
-		case MsgType_TickReply:
-			if c.showTick {
-				log.Println("receive tick-reply --- ")
-			}
+		switch msg.Type {
 		case MsgType_Send:
-			h, ok := c.GetHandleFunc(msg.Api)
-			if !ok {
-				msg.Reply(MsgType_ReplyErrWithApiNotExist, nil)
-				_, _ = c.WriteMsg(msg)
-				break
+			h.Handle(NewContext(msg, c))
+		case MsgType_Reply, MsgType_ReplyErrConnNotExist, MsgType_ReplyErrLenLimit, MsgType_ReplyErrCheckSum:
+			if !c.MsgReceiver.SetMsg(msg) {
+				h.DropHandle(msg)
 			}
-			err = c.Submit(func() {
-				h(NewContext(msg, c))
-			})
-			if err != nil {
-				_ = c.Close()
-				return err
-			}
-		case MsgType_Reply, MsgType_ReplyErrWithApiNotExist, MsgType_ReplyErrWithConnectNotExist, MsgType_ReplyErrWithLenLimit, MsgType_ReplyErrWithCheckInvalid:
-			if !c.Receiver.SetReceiveChan(msg) {
-				log.Println("receive timeout test drop", "msg", msg.String())
-			}
+		case MsgType_PushErrAuthFail:
+			return DEFAULT_ErrAuth
 		default:
-			c.Handle(msg, c)
+			h.CustomHandle(NewContext(msg, c))
 		}
 	}
 }
 
-func (c *connect) Id() uint16 {
-	return c.sId
+func (c *Connect) Id() uint16 {
+	return c.localId
 }
 
-func (c *connect) State() ConnStateType {
+func (c *Connect) State() ConnStateType {
 	return c.state
 }
 
-func (c *connect) Request(ctx context.Context, api uint16, data []byte) ([]byte, error) {
-	req := c.Constructor.New(c.sId, c.dId, MsgType_Send, api, data)
+func (c *Connect) Request(ctx context.Context, data []byte) ([]byte, error) {
+	req := c.MsgPool.New(c.localId, c.remoteId, MsgType_Send, data)
 	return c.request(ctx, req)
 }
 
 var ErrForwardYourself = errors.New("can not forward yourself")
 
 // Forward only client use
-func (c *connect) Forward(ctx context.Context, destId, api uint16, data []byte) ([]byte, error) {
-	if destId == c.sId {
+func (c *Connect) Forward(ctx context.Context, destId uint16, data []byte) ([]byte, error) {
+	if destId == c.localId {
 		return nil, ErrForwardYourself
 	}
-	req := c.Constructor.New(c.sId, destId, MsgType_Send, api, data)
+	req := c.MsgPool.New(c.localId, destId, MsgType_Send, data)
 	return c.request(ctx, req)
 }
 
 // Send no response data
-func (c *connect) Send(api uint16, data []byte) (err error) {
-	req := c.Constructor.New(c.sId, c.dId, MsgType_Send, api, data)
-	_, err = c.Conn.Write(req.Encode())
-	c.Constructor.Recycle(req)
+func (c *Connect) Send(data []byte) (err error) {
+	req := c.MsgPool.New(c.localId, c.remoteId, MsgType_Send, data)
+	err = c.WriteMsg(req)
+	c.MsgPool.Recycle(req)
 	return err
 }
 
-func (c *connect) WriteMsg(m Encoder) (int, error) {
-	return c.Conn.Write(m.Encode())
+func (c *Connect) WriteMsg(m *Message) (err error) {
+	_, err = c.Conn.Write(m.Encode())
+	return
 }
 
-func (c *connect) request(ctx context.Context, req *Message) ([]byte, error) {
-	respChan := c.Receiver.NewReceiveChan(req.Id)
-	_, err := c.Conn.Write(req.Encode())
+func (c *Connect) request(ctx context.Context, req *Message) ([]byte, error) {
+	respChan := c.MsgReceiver.Create(req.Id)
+	err := c.WriteMsg(req)
 	if err != nil {
-		c.Receiver.DelReceiveChan(req.Id)
-		c.Constructor.Recycle(req)
+		c.MsgReceiver.Delete(req.Id)
+		c.MsgPool.Recycle(req)
 		return nil, err
 	}
 	select {
 	case <-ctx.Done():
-		c.Receiver.DelReceiveChan(req.Id)
-		c.Constructor.Recycle(req)
+		c.MsgReceiver.Delete(req.Id)
+		c.MsgPool.Recycle(req)
 		return nil, ctx.Err()
 	case resp := <-respChan:
 		data := resp.Data
-		typ := resp.Typ
-		c.Receiver.DelReceiveChan(req.Id)
-		c.Constructor.Recycle(req)
-		c.Constructor.Recycle(resp)
+		typ := resp.Type
+		c.MsgReceiver.Delete(req.Id)
+		c.MsgPool.Recycle(req)
+		c.MsgPool.Recycle(resp)
 		switch typ {
-		case MsgType_ReplyErrWithApiNotExist:
-			return nil, DEFAULT_MsgErrType_ApiNotExist_Error
-		case MsgType_ReplyErrWithConnectNotExist:
-			return nil, DEFAULT_MsgErrType_ConnectNotExist_Error
-		case MsgType_ReplyErrWithLenLimit:
+		case MsgType_ReplyErrConnNotExist:
+			return nil, DEFAULT_ErrConnNotExist
+		case MsgType_ReplyErrLenLimit:
+			return nil, DEFAULT_ErrMsgLenLimit
+		case MsgType_ReplyErrCheckSum:
 			return nil, DEFAULT_ErrMsgLenLimit
 		default:
 			return data, nil
@@ -213,91 +195,40 @@ func (c *connect) request(ctx context.Context, req *Message) ([]byte, error) {
 	}
 }
 
-func (c *connect) connectionErr(err error) error {
+func (c *Connect) connectionErr(ctx context.Context, err error, h Handler) error {
 	switch c.state {
 	case ConnStateTypeOnClose:
 		return nil
 	case ConnStateTypeOnError:
 		return c.err
 	default:
-		c.state = ConnStateTypeOnError
-		c.err = err
+		msg, ok := ctx.Value("msg").(*Message)
+		var typ uint8 = MsgType_ReplyErrCheckSum
+		switch err.(type) {
+		case *ErrMsgCheck:
+			c.state = ConnStateTypeOnError
+			c.err = err
+		case *ErrMsgLenLimit:
+			c.state = ConnStateTypeOnError
+			c.err = err
+			typ = MsgType_ReplyErrLenLimit
+		default:
+			c.state = ConnStateTypeOnError
+			c.err = err
+			return err
+		}
+		if ok {
+			h.ErrHandle(msg)
+			if err = c.WriteMsg(msg.ErrReply(typ, c.localId)); err != nil {
+				h.ErrHandle(msg)
+			}
+		}
+		_ = c.Close()
 		return err
 	}
 }
 
-func (c *connect) Close() error {
+func (c *Connect) Close() error {
 	c.state = ConnStateTypeOnClose
 	return c.Conn.Close()
-}
-
-func (c *connect) Tick(interval, keepAlive, timeoutClose time.Duration, showTickPack ...bool) error {
-	if len(showTickPack) > 0 && showTickPack[0] {
-		c.showTick = true
-	}
-	return c.Submit(func() {
-		now := int64(0)
-		tickPack := make([]byte, MESSAGE_HEADER_LEN)
-		tickPack[0] = MsgType_Tick
-		for {
-			time.Sleep(interval)
-			now = time.Now().UnixMilli()
-			if now >= c.activate+timeoutClose.Milliseconds() {
-				_ = c.connectionErr(errors.New("timeout close"))
-				_ = c.Conn.Close()
-				return
-			} else if now >= c.activate+keepAlive.Milliseconds() {
-				_, err := c.Conn.Write(tickPack)
-				if err != nil {
-					_ = c.connectionErr(fmt.Errorf("send tick pack err %v", err))
-					_ = c.Conn.Close()
-					return
-				}
-				if c.showTick {
-					log.Println("send tick --- ")
-				}
-			}
-		}
-	})
-}
-
-var TraceRequest = bytes.NewBuffer(make([]byte, 0, 1024000))
-var TraceRequestMsg = make([]Message, 0, 100000)
-var TraceLock sync.Mutex
-
-func (c *connect) _request(ctx context.Context, req *Message) ([]byte, error) {
-	respChan := c.Receiver.NewReceiveChan(req.Id)
-	encode := req.Encode()
-	TraceLock.Lock()
-	TraceRequestMsg = append(TraceRequestMsg, *req)
-	TraceRequest.Write(encode)
-	_, err := c.Conn.Write(encode)
-	TraceLock.Unlock()
-	if err != nil {
-		c.Receiver.DelReceiveChan(req.Id)
-		c.Constructor.Recycle(req)
-		return nil, err
-	}
-	select {
-	case <-ctx.Done():
-		c.Receiver.DelReceiveChan(req.Id)
-		c.Constructor.Recycle(req)
-		return nil, ctx.Err()
-	case resp := <-respChan:
-		data := resp.Data
-		typ := resp.Typ
-		c.Receiver.DelReceiveChan(req.Id)
-		c.Constructor.Recycle(req)
-		c.Constructor.Recycle(resp)
-		switch typ {
-		case MsgType_ReplyErrWithApiNotExist:
-			return nil, DEFAULT_MsgErrType_ApiNotExist_Error
-		case MsgType_ReplyErrWithConnectNotExist:
-			return nil, DEFAULT_MsgErrType_ConnectNotExist_Error
-		case MsgType_ReplyErrWithLenLimit:
-			return nil, DEFAULT_ErrMsgLenLimit
-		default:
-			return data, nil
-		}
-	}
 }
