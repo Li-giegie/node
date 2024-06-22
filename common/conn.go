@@ -1,6 +1,7 @@
 package common
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -56,6 +57,7 @@ func NewConn(sid, did uint16, c net.Conn, co *Constructor, mr *Receiver, h Handl
 	conn.Constructor = co
 	conn.Handler = h
 	conn.maxReceiveMsgLength = maxReceiveMsgLength
+	conn.r = bufio.NewReaderSize(c, 4096)
 	return conn
 }
 
@@ -68,6 +70,7 @@ type connect struct {
 	err                 error
 	maxReceiveMsgLength uint32
 	net.Conn
+	r *bufio.Reader
 	Handler
 	*Receiver
 	*Constructor
@@ -81,7 +84,7 @@ func (c *connect) Serve() error {
 	hBuf := make([]byte, MESSAGE_HEADER_LEN)
 	for {
 		msg := c.Constructor.Default()
-		err := msg.DecodeHeader(c.Conn, hBuf)
+		err := msg.DecodeHeader(c.r, hBuf)
 		if err != nil {
 			if _, ok := err.(*ErrMsgCheck); ok {
 				c.state = ConnStateTypeOnError
@@ -101,7 +104,7 @@ func (c *connect) Serve() error {
 			_ = c.Close()
 			return DEFAULT_ErrMsgLenLimit
 		}
-		err = msg.DecodeContent(c.Conn)
+		err = msg.DecodeContent(c.r)
 		if err != nil {
 			return c.connectionErr(err)
 		}
@@ -113,7 +116,7 @@ func (c *connect) Serve() error {
 		switch msg.Typ {
 		case MsgType_Tick:
 			hBuf[0] = MsgType_TickReply
-			c.Write(hBuf)
+			_, _ = c.Write(hBuf)
 			if c.showTick {
 				log.Println("receive tick-pack --- ")
 			}
@@ -139,8 +142,6 @@ func (c *connect) Serve() error {
 			if !c.Receiver.SetReceiveChan(msg) {
 				log.Println("receive timeout test drop", "msg", msg.String())
 			}
-		default:
-			c.Handle(msg, c)
 		}
 	}
 }
@@ -172,7 +173,7 @@ func (c *connect) Forward(ctx context.Context, destId, api uint16, data []byte) 
 // Send no response data
 func (c *connect) Send(api uint16, data []byte) (err error) {
 	req := c.Constructor.New(c.sId, c.dId, MsgType_Send, api, data)
-	_, err = c.Conn.Write(req.Encode())
+	_, err = c.WriteMsg(req)
 	c.Constructor.Recycle(req)
 	return err
 }
@@ -183,7 +184,7 @@ func (c *connect) WriteMsg(m Encoder) (int, error) {
 
 func (c *connect) request(ctx context.Context, req *Message) ([]byte, error) {
 	respChan := c.Receiver.NewReceiveChan(req.Id)
-	_, err := c.Conn.Write(req.Encode())
+	_, err := c.WriteMsg(req)
 	if err != nil {
 		c.Receiver.DelReceiveChan(req.Id)
 		c.Constructor.Recycle(req)
@@ -207,6 +208,8 @@ func (c *connect) request(ctx context.Context, req *Message) ([]byte, error) {
 			return nil, DEFAULT_MsgErrType_ConnectNotExist_Error
 		case MsgType_ReplyErrWithLenLimit:
 			return nil, DEFAULT_ErrMsgLenLimit
+		case MsgType_ReplyErrWithCheckInvalid:
+			return nil, DEFAULT_ErrMsgCheck
 		default:
 			return data, nil
 		}
@@ -237,8 +240,7 @@ func (c *connect) Tick(interval, keepAlive, timeoutClose time.Duration, showTick
 	}
 	return c.Submit(func() {
 		now := int64(0)
-		tickPack := make([]byte, MESSAGE_HEADER_LEN)
-		tickPack[0] = MsgType_Tick
+		tickPack := NewTickPack().Request()
 		for {
 			time.Sleep(interval)
 			now = time.Now().UnixMilli()
@@ -247,7 +249,7 @@ func (c *connect) Tick(interval, keepAlive, timeoutClose time.Duration, showTick
 				_ = c.Conn.Close()
 				return
 			} else if now >= c.activate+keepAlive.Milliseconds() {
-				_, err := c.Conn.Write(tickPack)
+				_, err := c.WriteMsg(tickPack)
 				if err != nil {
 					_ = c.connectionErr(fmt.Errorf("send tick pack err %v", err))
 					_ = c.Conn.Close()

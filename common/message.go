@@ -218,3 +218,22 @@ func (A *Authenticator) CheckErr(err error) error {
 func (A *Authenticator) String() string {
 	return fmt.Sprintf("Authenticator {SrcId: %v, DestId: %v, Type: %v, StateCode: %v, KeyLen: %d, Key: %s}", A.SrcId, A.DestId, A.Type, A.StateCode, A.KeyLen, A.Key)
 }
+
+type TickPack []byte
+
+func NewTickPack() TickPack {
+	return make([]byte, MESSAGE_HEADER_LEN)
+}
+
+func (t TickPack) Request() TickPack {
+	t[0] = MsgType_Tick
+	return t
+}
+func (t TickPack) Response() TickPack {
+	t[0] = MsgType_TickReply
+	return t
+}
+
+func (t TickPack) Encode() []byte {
+	return t
+}

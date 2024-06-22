@@ -191,16 +191,14 @@ func (s *server) authentication(conn net.Conn) {
 
 func (s *server) Handle(m *common.Message, c common.Conn) {
 	err := s.Submit(func() {
-		if m.DestId != 0 && m.DestId != s.id {
-			conn, ok := s.Conns.GetConn(m.DestId)
-			if !ok {
-				m.Reply(common.MsgType_ReplyErrWithConnectNotExist, nil)
-				c.WriteMsg(m)
-				return
-			}
-			_, _ = conn.WriteMsg(m)
+		conn, ok := s.Conns.GetConn(m.DestId)
+		if !ok {
+			m.Reply(common.MsgType_ReplyErrWithConnectNotExist, nil)
+			c.WriteMsg(m)
 			return
 		}
+		_, _ = conn.WriteMsg(m)
+		return
 	})
 	if err != nil {
 		log.Println("handle err", err)
@@ -220,20 +218,14 @@ func (s *server) Close() error {
 	return s.Listener.Close()
 }
 
-type tickPack [common.MESSAGE_HEADER_LEN]byte
-
-func (t *tickPack) Encode() []byte {
-	t[0] = common.MsgType_Tick
-	return t[:]
-}
 func (s *server) Tick(interval, keepAlive, timeoutClose time.Duration, showTickPack ...bool) error {
 	return s.Submit(func() {
+		tick := common.NewTickPack().Request()
 		show := false
 		if len(showTickPack) > 0 && showTickPack[0] {
 			show = true
 		}
 		now := int64(0)
-		tickBuf := new(tickPack)
 		for {
 			time.Sleep(interval)
 			now = time.Now().UnixMilli()
@@ -249,7 +241,7 @@ func (s *server) Tick(interval, keepAlive, timeoutClose time.Duration, showTickP
 					}
 					return
 				} else if now >= c.Activate()+keepAlive.Milliseconds() {
-					_, err := c.WriteMsg(tickBuf)
+					_, err := c.WriteMsg(tick)
 					if err != nil {
 						_ = c.Close()
 						return
