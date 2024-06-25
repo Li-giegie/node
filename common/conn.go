@@ -19,7 +19,8 @@ type Conn interface {
 	State() ConnStateType
 	//WriteMsg 应该使用Send、Request、Forward方法，如果发送成功有响应会被丢弃，无法的到响应。
 	WriteMsg(m *Message) (err error)
-	Id() uint16
+	LocalId() uint16
+	RemoteId() uint16
 	//Activate unix mill
 	Activate() int64
 }
@@ -29,6 +30,8 @@ type Connections interface {
 }
 
 type Handler interface {
+	// Connection 连接被建立时触发回调
+	Connection(conn net.Conn) (remoteId uint16, err error)
 	// Handle 接收到标准类型消息时触发回调
 	Handle(ctx *Context)
 	// ErrHandle 发送失败触发的回调
@@ -49,36 +52,41 @@ const (
 	ConnStateTypeOnError
 )
 
-func NewConn(localId, remoteId uint16, c net.Conn, co *MsgPool, mr *MsgReceiver, conns Connections, maxMsgLen uint32) *Connect {
-	conn := new(Connect)
-	conn.state = ConnStateTypeOnConnect
-	conn.localId = localId
-	conn.remoteId = remoteId
-	conn.Conn = c
-	conn.activate = time.Now().UnixMilli()
-	conn.MsgReceiver = mr
-	conn.MsgPool = co
-	conn.r = bufio.NewReaderSize(c, 4096)
-	conn.Connections = conns
-	if conns == nil {
-		conn.Connections = emptyConns{}
+func NewConn(localId uint16, conn net.Conn, co *MsgPool, mr *MsgReceiver, conns Connections, h Handler) (c *Connect, err error) {
+	c = new(Connect)
+	c.remoteId, err = h.Connection(conn)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
 	}
-	conn.maxMsgLen = maxMsgLen
-	return conn
+	c.localId = localId
+	c.conn = conn
+	c.Handler = h
+	c.activate = time.Now().UnixMilli()
+	c.MsgReceiver = mr
+	c.MsgPool = co
+	c.MaxMsgLen = 0x00FFFFFF
+	c.ReadBuffSize = 4096
+	c.Connections = conns
+	if c.Connections == nil {
+		c.Connections = emptyConns{}
+	}
+	return c, nil
 }
 
 type Connect struct {
-	state     ConnStateType
-	localId   uint16
-	remoteId  uint16
-	activate  int64
-	err       error
-	maxMsgLen uint32
-	net.Conn
-	r *bufio.Reader
+	state        ConnStateType
+	localId      uint16
+	remoteId     uint16
+	activate     int64
+	err          error
+	MaxMsgLen    uint32
+	ReadBuffSize int
+	conn         net.Conn
 	*MsgReceiver
 	*MsgPool
 	Connections
+	Handler
 }
 
 func (c *Connect) Activate() int64 {
@@ -86,14 +94,18 @@ func (c *Connect) Activate() int64 {
 }
 
 // Serve 开启服务
-func (c *Connect) Serve(h Handler) (err error) {
+func (c *Connect) Serve(h Handler) {
+	var err error
 	defer h.Disconnect(c.remoteId, err)
+	c.state = ConnStateTypeOnConnect
 	headerBuf := make([]byte, MsgHeaderLen)
+	reader := bufio.NewReaderSize(c.conn, c.ReadBuffSize)
 	for {
 		msg := c.MsgPool.Default()
-		err = msg.Decode(c.r, headerBuf, c.maxMsgLen)
+		err = msg.Decode(reader, headerBuf, c.MaxMsgLen)
 		if err != nil {
-			return c.connectionErr(context.WithValue(context.Background(), "msg", msg), err, h)
+			err = c.connectionErr(context.WithValue(context.Background(), "msg", msg), err, h)
+			return
 		}
 		c.activate = time.Now().UnixMilli()
 		if msg.DestId != c.localId && msg.DestId != 0 {
@@ -119,15 +131,19 @@ func (c *Connect) Serve(h Handler) (err error) {
 				h.DropHandle(msg)
 			}
 		case MsgType_PushErrAuthFail:
-			return DEFAULT_ErrAuth
+			err = DEFAULT_ErrAuth
+			return
 		default:
 			h.CustomHandle(NewContext(msg, c))
 		}
 	}
 }
 
-func (c *Connect) Id() uint16 {
+func (c *Connect) LocalId() uint16 {
 	return c.localId
+}
+func (c *Connect) RemoteId() uint16 {
+	return c.remoteId
 }
 
 func (c *Connect) State() ConnStateType {
@@ -159,7 +175,7 @@ func (c *Connect) Send(data []byte) (err error) {
 }
 
 func (c *Connect) WriteMsg(m *Message) (err error) {
-	_, err = c.Conn.Write(m.Encode())
+	_, err = c.conn.Write(m.Encode())
 	return
 }
 
@@ -230,5 +246,5 @@ func (c *Connect) connectionErr(ctx context.Context, err error, h Handler) error
 
 func (c *Connect) Close() error {
 	c.state = ConnStateTypeOnClose
-	return c.Conn.Close()
+	return c.conn.Close()
 }

@@ -2,9 +2,11 @@ package test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/common"
+	"github.com/Li-giegie/node/utils"
 	"log"
 	"net"
 	"sync"
@@ -17,9 +19,29 @@ type ClientHandle struct {
 	stopC chan error
 }
 
-func (c ClientHandle) Connection(conn net.Conn) (id uint16, err error) {
+type Auth struct {
+	ClientId uint16
+	Key      string
+	ServerId uint16
+	Msg      string
+	Permit   bool
+}
+
+func (c ClientHandle) Connection(conn net.Conn) (remoteId uint16, err error) {
+	auth := &Auth{ClientId: 1, Key: "123"}
+	if err = utils.JSONPackEncode(conn, auth); err != nil {
+		log.Println("auth err 1", err)
+		return 0, nil
+	}
+	if err = utils.JSONPackDecode(time.Second*6, conn, auth); err != nil {
+		log.Println("auth err 2", err)
+		return 0, err
+	}
+	if !auth.Permit {
+		return 0, errors.New(auth.Msg)
+	}
 	log.Println("Connection ", conn.RemoteAddr().String())
-	return 0, err
+	return auth.ServerId, nil
 }
 
 func (c ClientHandle) Handle(ctx *common.Context) {
@@ -60,15 +82,16 @@ func TestClient(t *testing.T) {
 	fmt.Println("开始发送")
 	wg := sync.WaitGroup{}
 	t1 := time.Now()
-	conn.WriteMsg(&common.Message{
-		Type:   20,
-		Id:     0,
-		SrcId:  0,
-		DestId: 0,
-		Data:   nil,
-	})
-	conn.Close()
-	return
+	//conn.WriteMsg(&common.Message{
+	//	Type:   20,
+	//	Id:     0,
+	//	SrcId:  0,
+	//	DestId: 0,
+	//	Data:   nil,
+	//})
+	//conn.Close()
+	//return
+	//fmt.Println(conn.Forward(context.Background(), 2, []byte("ok")))
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func() {
@@ -80,6 +103,7 @@ func TestClient(t *testing.T) {
 			}
 			fmt.Println("收到", string(data))
 		}()
+		fmt.Println(i)
 	}
 	wg.Wait()
 	fmt.Println(time.Since(t1))

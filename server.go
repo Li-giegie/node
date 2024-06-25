@@ -2,7 +2,6 @@ package node
 
 import (
 	"errors"
-	"fmt"
 	"github.com/Li-giegie/node/common"
 	"github.com/Li-giegie/node/utils"
 	"log"
@@ -24,6 +23,7 @@ type Server interface {
 	SetMsgPoolSize(n int)
 	// SetMsgReceivePoolSize 消息接收每次创建的Channel从池子中创建和销毁，这一步骤是考虑到GC压力
 	SetMsgReceivePoolSize(n int)
+	Id() uint16
 }
 
 type ServerStateType uint8
@@ -35,7 +35,7 @@ const (
 )
 
 type server struct {
-	Id        uint16 // 唯一标识
+	id        uint16 // 唯一标识
 	MaxConns  int
 	MaxMsgLen uint32
 	state     ServerStateType
@@ -69,7 +69,7 @@ func (s *server) SetMsgReceivePoolSize(n int) {
 // NewServer 创建一个Server类型的节点
 func NewServer(l net.Listener, id uint16) Server {
 	srv := new(server)
-	srv.Id = id
+	srv.id = id
 	srv.Listener = l
 	srv.Conns = common.NewConns()
 	srv.MsgPool = common.NewMsgPool(1024)
@@ -108,28 +108,30 @@ func (s *server) Serve(h Node) error {
 }
 
 func (s *server) HandleConn(c net.Conn) {
-	id, err := s.Node.Connection(c)
+	conn, err := common.NewConn(s.id, c, s.MsgPool, s.MsgReceiver, s, s.Node)
 	if err != nil {
-		fmt.Println("拒绝认证")
 		return
 	}
-	conn := common.NewConn(s.Id, id, c, s.MsgPool, s.MsgReceiver, s, s.MaxMsgLen)
-	if s.Add(id, conn) {
+	if s.Add(conn.RemoteId(), conn) {
 		go func() {
-			err = conn.Serve(s.Node)
-			s.Conns.Del(id)
+			conn.Serve(s.Node)
+			s.Conns.Del(conn.RemoteId())
 			_ = c.Close()
 		}()
 		return
 	}
-	s.Conns.Del(id)
-	s.Node.Disconnect(id, common.DEFAULT_ErrAuth)
+	s.Conns.Del(conn.RemoteId())
+	s.Node.Disconnect(conn.RemoteId(), common.DEFAULT_ErrAuth)
 	_ = conn.WriteMsg(&common.Message{
 		Type:   common.MsgType_PushErrAuthFail,
-		SrcId:  s.Id,
-		DestId: id,
+		SrcId:  s.id,
+		DestId: conn.RemoteId(),
 	})
 	_ = c.Close()
+}
+
+func (s *server) Id() uint16 {
+	return s.id
 }
 
 func (s *server) checkErr(err error) error {
