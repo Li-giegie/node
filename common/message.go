@@ -15,7 +15,8 @@ const (
 	MsgType_ReplyErrConnNotExist
 	MsgType_ReplyErrLenLimit
 	MsgType_ReplyErrCheckSum
-	MsgType_PushErrAuthFail
+	MsgType_ReplyErr
+	MsgType_PushErrAuthFailIdExist
 )
 
 const MsgHeaderLen = 1 + 3 + 2 + 2 + 3 + 2
@@ -50,10 +51,10 @@ func (m *Message) Decode(r io.Reader, b []byte, limit uint32) (err error) {
 		return err
 	}
 	m.Type = b[0]
-	m.Id = utils.DecodeUint824(b[1:])
+	m.Id = utils.DecodeUint24(b[1:])
 	m.SrcId = binary.LittleEndian.Uint16(b[4:])
 	m.DestId = binary.LittleEndian.Uint16(b[6:])
-	dataLen := utils.DecodeUint824(b[8:])
+	dataLen := utils.DecodeUint24(b[8:])
 	checkSum := binary.LittleEndian.Uint16(b[11:])
 	ok := uint16(m.Type)^uint16(m.Id)^m.SrcId^m.DestId^uint16(dataLen) == checkSum
 	if !ok {
