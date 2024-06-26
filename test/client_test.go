@@ -102,3 +102,32 @@ func TestClient(t *testing.T) {
 	c.Close()
 	<-c.stopC
 }
+
+func TestBorderGateway(t *testing.T) {
+	done := make(chan error, 1)
+	srv, err := node.ListenTCP(1, "")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer srv.Close()
+	go func() {
+		done <- srv.Serve(nil)
+	}()
+	conn, err := net.Dial("tcp", "0.0.0.0:8080")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	nodeConn, err := node.Serve(conn, 1, nil, srv)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer nodeConn.Close()
+
+	select {
+	case <-done:
+
+	}
+}
