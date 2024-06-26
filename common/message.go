@@ -87,6 +87,8 @@ func (m *Message) Reply(typ uint8, data []byte) *Message {
 	m.SrcId, m.DestId = m.DestId, m.SrcId
 	return m
 }
+
+// ErrReply srcId: handler Id
 func (m *Message) ErrReply(typ uint8, srcId uint16) *Message {
 	m.Type = typ
 	m.SrcId, m.DestId = srcId, m.SrcId

@@ -1,6 +1,8 @@
 package common
 
-import "github.com/Li-giegie/node/utils"
+import (
+	"github.com/Li-giegie/node/utils"
+)
 
 type Context interface {
 	Id() uint32
@@ -62,12 +64,15 @@ func (c *context) ErrReply(data []byte, err error) error {
 	}
 	c.once = true
 	var errB []byte
-	if err != nil {
-		if errB = []byte(err.Error()); len(errB) == 0 {
+	if err == nil {
+		errB = []byte{0, 0, 0}
+	} else {
+		errB = utils.PackBytes([]byte(err.Error()))
+		if len(errB) == 3 {
 			return DEFAULT_ErrReplyErrorInvalid
 		}
 	}
-	return c.WriteMsg(c.Message.Reply(MsgType_ReplyErr, append(utils.PackBytes(errB), data...)))
+	return c.WriteMsg(c.Message.Reply(MsgType_ReplyErr, append(errB, data...)))
 }
 
 func (c *context) CustomReply(typ uint8, data []byte) error {

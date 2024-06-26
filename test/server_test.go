@@ -1,7 +1,6 @@
 package test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"github.com/Li-giegie/node"
@@ -49,20 +48,19 @@ func (h Handler) Connection(conn net.Conn) (remoteId uint16, err error) {
 }
 func (h Handler) Handle(ctx common.Context) {
 	log.Println("Handle ", ctx.String())
-	go func() {
-		conn, ok := h.GetConn(1)
-		if !ok {
-			fmt.Println("1")
-			ctx.Reply([]byte("conn not exist"))
-			return
-		}
-		data, err := conn.Request(context.Background(), []byte("server: hello 1"))
-		if err != nil {
-			ctx.Reply([]byte("write err"))
-			return
-		}
-		ctx.Reply(data)
-	}()
+	if len(ctx.Data()) == 0 {
+		ctx.ErrReply([]byte("err"), errors.New("data len 0"))
+		return
+	}
+	var data []byte
+	fmt.Println(ctx.Data())
+	switch ctx.Data()[0] {
+	case 0:
+		data = []byte("1")
+	default:
+		data = []byte("default")
+	}
+	ctx.Reply(data)
 }
 
 func (h Handler) ErrHandle(msg *common.Message) {

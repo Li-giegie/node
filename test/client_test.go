@@ -93,11 +93,12 @@ func TestClient(t *testing.T) {
 		t.Error(err)
 		return
 	}
-	fmt.Print("request: ")
-	fmt.Println(c.Request(context.Background(), []byte("request server")))
-	fmt.Println(c.Forward(context.Background(), 1, []byte("forward server")))
-	fmt.Println(c.Send([]byte("send server")))
-	//time.Sleep(time.Second)
-	//c.conn.Close()
+	resp, err := c.Request(context.Background(), []byte("request server"))
+	fmt.Printf("%s %v\n", resp, err)
+	resp, err = c.Request(context.Background(), nil)
+	fmt.Printf("%s %q\n", resp, err)
+	resp, err = c.Request(context.Background(), make([]byte, 1))
+	fmt.Printf("%s %v\n", resp, err)
+	c.Close()
 	<-c.stopC
 }

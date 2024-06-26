@@ -63,3 +63,11 @@ type ErrReplyErrorInvalid struct {
 func (e *ErrReplyErrorInvalid) Error() string {
 	return "reply error invalid not null but is empty str"
 }
+
+type ErrReplyError struct {
+	b []byte
+}
+
+func (e *ErrReplyError) Error() string {
+	return string(e.b)
+}

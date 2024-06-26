@@ -4,6 +4,7 @@ import (
 	"bufio"
 	ctx "context"
 	"errors"
+	"github.com/Li-giegie/node/utils"
 	"net"
 	"time"
 )
@@ -126,7 +127,7 @@ func (c *Connect) Serve(h Handler) {
 		switch msg.Type {
 		case MsgType_Send:
 			h.Handle(&context{Message: msg, WriterMsg: c})
-		case MsgType_Reply, MsgType_ReplyErrConnNotExist, MsgType_ReplyErrLenLimit, MsgType_ReplyErrCheckSum:
+		case MsgType_Reply, MsgType_ReplyErr, MsgType_ReplyErrConnNotExist, MsgType_ReplyErrLenLimit, MsgType_ReplyErrCheckSum:
 			if !c.MsgReceiver.SetMsg(msg) {
 				h.DropHandle(msg)
 			}
@@ -205,6 +206,9 @@ func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
 			return nil, DEFAULT_ErrMsgLenLimit
 		case MsgType_ReplyErrCheckSum:
 			return nil, DEFAULT_ErrMsgLenLimit
+		case MsgType_ReplyErr:
+			n := utils.DecodeUint24(data) + 3
+			return data[n:], &ErrReplyError{b: data[3:n]}
 		default:
 			return data, nil
 		}
