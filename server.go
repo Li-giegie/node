@@ -9,19 +9,29 @@ import (
 )
 
 type Server interface {
+	// Serve 阻塞启动服务，node 连接生命周期接口
 	Serve(node Node) error
+	// GetConn 获取一个连接
 	GetConn(id uint16) (common.Conn, bool)
+	// GetConns 获取所有连接
 	GetConns() []common.Conn
+	// State 获取服务状态
 	State() ServerStateType
+	// Close 关闭服务
 	Close() error
+	// Id 获取服务Id
 	Id() uint16
 }
 
+// ServerStateType 服务状态
 type ServerStateType uint8
 
 const (
+	// ServerStateTypeClose 关闭或未开启
 	ServerStateTypeClose ServerStateType = iota
+	// ServerStateTypeListen 开启侦听
 	ServerStateTypeListen
+	// ServerStateTypeErr 错误
 	ServerStateTypeErr
 )
 
@@ -122,6 +132,7 @@ func (s *server) Close() error {
 	return s.Listener.Close()
 }
 
+// ListenTCP 侦听一个本地TCP端口,并创建服务节点
 func ListenTCP(id uint16, addr string, opts ...SrvOptions) (Server, error) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -149,7 +160,7 @@ func WithSrvMaxMsgLen(n int) SrvOptions {
 	}
 }
 
-// WIthSrvMsgPoolSize 消息在从池子中创建和销毁，这一行为是考虑到GC压力
+// WIthSrvMsgPoolSize 消息池容量，消息在从池子中创建和销毁，这一行为是考虑到GC压力
 func WIthSrvMsgPoolSize(n int) SrvOptions {
 	return func(s *server) error {
 		s.MsgPool = common.NewMsgPool(n)
@@ -157,7 +168,7 @@ func WIthSrvMsgPoolSize(n int) SrvOptions {
 	}
 }
 
-// WithSrvMsgReceivePoolSize 消息接收每次创建的Channel从池子中创建和销毁，这一行为是考虑到GC压力
+// WithSrvMsgReceivePoolSize 消息接收池容量，消息接收每次创建的Channel从池子中创建和销毁，这一行为是考虑到GC压力
 func WithSrvMsgReceivePoolSize(n int) SrvOptions {
 	return func(s *server) error {
 		s.MsgReceiver = common.NewMsgReceiver(n)

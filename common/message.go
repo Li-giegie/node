@@ -8,10 +8,10 @@ import (
 	"time"
 )
 
+// 标准消息类型
 const (
 	MsgType_Send = iota
 	MsgType_Reply
-
 	MsgType_ReplyErrConnNotExist
 	MsgType_ReplyErrLenLimit
 	MsgType_ReplyErrCheckSum
