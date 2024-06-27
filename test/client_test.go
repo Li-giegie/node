@@ -65,10 +65,18 @@ func (c *ClientHandle) DropHandle(msg *common.Message) {
 
 func (c *ClientHandle) CustomHandle(ctx common.Context) {
 	log.Println("CustomHandle ", ctx.String())
+	c.Conn.(*common.Connect).MsgReceiver.SetMsg(&common.Message{
+		Type:   ctx.Type(),
+		Id:     ctx.Id(),
+		SrcId:  ctx.SrcId(),
+		DestId: ctx.DestId(),
+		Data:   ctx.Data(),
+	})
 }
 
 func (c *ClientHandle) Disconnect(id uint16, err error) {
 	log.Println("Disconnect ", id, err)
+
 	c.stopC <- err
 }
 
@@ -99,11 +107,24 @@ func TestClient(t *testing.T) {
 	fmt.Printf("%s %q\n", resp, err)
 	resp, err = c.Request(context.Background(), make([]byte, 1))
 	fmt.Printf("%s %v\n", resp, err)
+
+	//先获取到原始结构体
+	conn := c.Conn.(*common.Connect)
+	//创建消息
+	msg := conn.MsgPool.New(conn.LocalId(), 0, 200, []byte("Custom msg"))
+	//创建响应接收Chan，把消息Id告诉接收器
+	replyChan := conn.MsgReceiver.Create(msg.Id)
+	//发送消息
+	conn.WriteMsg(msg)
+	//等待接收
+	replyMsg := <-replyChan
+	log.Println("响应消息", replyMsg.String())
 	c.Close()
 	<-c.stopC
 }
 
 func TestBorderGateway(t *testing.T) {
+
 	done := make(chan error, 1)
 	srv, err := node.ListenTCP(1, "")
 	if err != nil {

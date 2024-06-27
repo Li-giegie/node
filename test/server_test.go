@@ -73,6 +73,7 @@ func (h Handler) DropHandle(msg *common.Message) {
 
 func (h Handler) CustomHandle(ctx common.Context) {
 	log.Println("CustomHandle ", ctx.String())
+	ctx.CustomReply(ctx.Type(), ctx.Data())
 }
 
 func (h Handler) Disconnect(id uint16, err error) {
@@ -89,5 +90,4 @@ func TestServer(t *testing.T) {
 		t.Error(err)
 		return
 	}
-
 }

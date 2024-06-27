@@ -81,7 +81,7 @@ func main() {
 	client := new(Client)
 	client.id = 1
 	client.authKey = "hello"
-	client.addr = "0.0.0.0:8080"
+	client.addr = "39.101.193.248:8080"
 	client.stopChan = make(chan error, 1)
 	err := client.Serve()
 	if err != nil {
@@ -89,6 +89,7 @@ func main() {
 	}
 	log.Println("启动成功")
 	log.Println(client.Request(context.Background(), []byte("client request")))
+	log.Println(client.Request(context.Background(), []byte("")))
 	log.Println(client.Forward(context.Background(), 2, []byte("client forward")))
 	log.Println(client.Send([]byte("client send")))
 	log.Println(client.WriteMsg(&common.Message{
