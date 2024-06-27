@@ -32,14 +32,6 @@ func ReadFull(timeout time.Duration, r io.Reader, buf []byte) (err error) {
 	}
 }
 
-func CountSleep(c bool, n int64, d time.Duration) bool {
-	if c {
-		d *= time.Duration(n)
-		time.Sleep(d)
-	}
-	return c
-}
-
 func EncodeUint24(b []byte, n2 uint32) {
 	n2 = n2 & 0x00FFFFFF
 	b[0] = byte(n2)

@@ -18,7 +18,32 @@ type Conn interface {
 	Send(data []byte) (err error)
 	Close() error
 	State() ConnStateType
-	//WriteMsg 应该使用Send、Request、Forward方法，如果发送成功有响应会被丢弃，无法的到响应。
+	//WriteMsg 适用于自定义消息类型，消息的响应和接收都会在CustomHandle回调中触发，标准消息类型应该使用Send、Request、Forward方法，
+	//如果调用该方法发送了标准消息类型，可能造成标准请求或转发得到的响应消息是一个自定义消息回复，这显然是一个错误的回复。
+	//造成这一情况的原因是框架内部维护了消息Id，调该方法给的Id是调用者自行给定的，可能与框架内部的Id起到冲突了，
+	//解决方法是拿到框架内部消息池生成的消息结构体，Conn.(*Connect).MsgPool.New()来创建消息，MsgReceiver可以用来创建、设置响应消息但是你必须在CustomHandle回调中来自行响应他。
+	/*
+		发起请求示例：
+		//先获取到原始结构体 common.Conn.(*common.Connect)
+		conn := c.Conn.(*common.Connect)
+		//创建消息 srcId dstId type data
+		msg := conn.MsgPool.New(conn.LocalId(), 0, 200, []byte("Custom msg"))
+		//创建响应接收Chan，把消息Id告诉接收器
+		replyChan := conn.MsgReceiver.Create(msg.Id)
+		//发送消息
+		conn.WriteMsg(msg)
+		//等待接收
+		replyMsg := <-replyChan
+
+		在自定义回调中设置响应示例：
+		c.Conn.(*common.Connect).MsgReceiver.SetMsg(&common.Message{
+			Type:   ctx.Type(),
+			Id:     ctx.Id(),
+			SrcId:  ctx.SrcId(),
+			DestId: ctx.DestId(),
+			Data:   ctx.Data(),
+		})
+	*/
 	WriteMsg(m *Message) (err error)
 	LocalId() uint16
 	RemoteId() uint16

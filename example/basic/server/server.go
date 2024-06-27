@@ -26,7 +26,7 @@ type Auth struct {
 
 // Connection 建立连接回调，再该回调中作认证
 func (s *Server) Connection(conn net.Conn) (remoteId uint16, err error) {
-	log.Println("client connection")
+	log.Println("server connection")
 	// 创建认证结构
 	auth := new(Auth)
 	// 认证成功失败通知客户端
@@ -43,6 +43,11 @@ func (s *Server) Connection(conn net.Conn) (remoteId uint16, err error) {
 		// 返回结果
 		if err2 := utils.JSONPackEncode(conn, auth); err2 != nil {
 			err = err2
+		}
+		if err != nil {
+			log.Println("认证失败：", err, remoteId)
+		} else {
+			log.Println("认证成功：", remoteId)
 		}
 	}()
 
