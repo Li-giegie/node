@@ -15,7 +15,7 @@ type MsgPool struct {
 	msgIdCount uint32
 }
 
-func (mm *MsgPool) Recycle(m *Message) {
+func (mm *MsgPool) RecycleMsg(m *Message) {
 	m.Id = 0
 	m.Data = nil
 	m.Type = 0
@@ -24,7 +24,7 @@ func (mm *MsgPool) Recycle(m *Message) {
 	mm.p.Put(m)
 }
 
-func (mm *MsgPool) New(srcId, dstId uint16, typ uint8, data []byte) *Message {
+func (mm *MsgPool) NewMsg(srcId, dstId uint16, typ uint8, data []byte) *Message {
 	m := mm.p.Get().(*Message)
 	m.Id = atomic.AddUint32(&mm.msgIdCount, 1)
 	if m.Id > 0x00AFFFFF {
@@ -36,6 +36,6 @@ func (mm *MsgPool) New(srcId, dstId uint16, typ uint8, data []byte) *Message {
 	m.Data = data
 	return m
 }
-func (mm *MsgPool) Default() *Message {
+func (mm *MsgPool) DefaultMsg() *Message {
 	return mm.p.Get().(*Message)
 }

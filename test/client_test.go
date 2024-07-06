@@ -65,7 +65,7 @@ func (c *ClientHandle) DropHandle(msg *common.Message) {
 
 func (c *ClientHandle) CustomHandle(ctx common.Context) {
 	log.Println("CustomHandle ", ctx.String())
-	c.Conn.(*common.Connect).MsgReceiver.SetMsg(&common.Message{
+	c.Conn.(*common.Connect).SetMsgChan(&common.Message{
 		Type:   ctx.Type(),
 		Id:     ctx.Id(),
 		SrcId:  ctx.SrcId(),
@@ -101,54 +101,27 @@ func TestClient(t *testing.T) {
 		t.Error(err)
 		return
 	}
-	resp, err := c.Request(context.Background(), []byte("request server"))
-	fmt.Printf("%s %v\n", resp, err)
-	resp, err = c.Request(context.Background(), nil)
-	fmt.Printf("%s %q\n", resp, err)
-	resp, err = c.Request(context.Background(), make([]byte, 1))
-	fmt.Printf("%s %v\n", resp, err)
 
-	//先获取到原始结构体
-	conn := c.Conn.(*common.Connect)
-	//创建消息
-	msg := conn.MsgPool.New(conn.LocalId(), 0, 200, []byte("Custom msg"))
-	//创建响应接收Chan，把消息Id告诉接收器
-	replyChan := conn.MsgReceiver.Create(msg.Id)
-	//发送消息
-	conn.WriteMsg(msg)
-	//等待接收
-	replyMsg := <-replyChan
-	log.Println("响应消息", replyMsg.String())
+	for i := 0; i < 7; i++ {
+		resp, err := c.Request(context.Background(), make([]byte, i))
+		if err != nil {
+			fmt.Printf("err 第%d次 响应长度%d err长度%d %s\n", i, len(resp), len(err.Error()), err.Error())
+		} else {
+			fmt.Printf("ok  第%d次 响应长度%d err==nil %v\n", i, len(resp), err == nil)
+		}
+	}
+	fmt.Println(c.Forward(context.Background(), 111, nil))
+	////先获取到原始结构体
+	//conn := c.Conn.(*common.Connect)
+	////创建消息
+	//msg := conn.MsgPool.New(conn.LocalId(), 0, 200, []byte("Custom msg"))
+	////创建响应接收Chan，把消息Id告诉接收器
+	//replyChan := conn.MsgReceiver.Create(msg.Id)
+	////发送消息
+	//conn.WriteMsg(msg)
+	////等待接收
+	//replyMsg := <-replyChan
+	//log.Println("响应消息", replyMsg.String())
 	c.Close()
 	<-c.stopC
-}
-
-func TestBorderGateway(t *testing.T) {
-
-	done := make(chan error, 1)
-	srv, err := node.ListenTCP(1, "")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	defer srv.Close()
-	go func() {
-		done <- srv.Serve(nil)
-	}()
-	conn, err := net.Dial("tcp", "0.0.0.0:8080")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	nodeConn, err := node.Serve(conn, 1, nil, srv)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	defer nodeConn.Close()
-
-	select {
-	case <-done:
-
-	}
 }

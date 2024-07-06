@@ -48,19 +48,25 @@ func (h Handler) Connection(conn net.Conn) (remoteId uint16, err error) {
 }
 func (h Handler) Handle(ctx common.Context) {
 	log.Println("Handle ", ctx.String())
-	if len(ctx.Data()) == 0 {
-		ctx.ErrReply([]byte("err"), errors.New("data len 0"))
-		return
-	}
-	var data []byte
-	fmt.Println(ctx.Data())
-	switch ctx.Data()[0] {
+	switch len(ctx.Data()) {
 	case 0:
-		data = []byte("1")
+		ctx.ErrReply(nil, nil)
+	case 1:
+		ctx.ErrReply(nil, errors.New(""))
+	case 2:
+		ctx.ErrReply(nil, errors.New("error test 2"))
+	case 3:
+		ctx.ErrReply([]byte("123"), errors.New("error test 3"))
+	case 4:
+		ctx.ErrReply([]byte("1234"), nil)
+	case 5:
+		fmt.Println(ctx.ErrReply(make([]byte, 65530), errors.New(string(make([]byte, 65530)))))
+	case 6:
+		fmt.Println(ctx.ErrReply(make([]byte, 65531), errors.New(string(make([]byte, 65531)))))
 	default:
-		data = []byte("default")
+		ctx.Reply(ctx.Data())
 	}
-	ctx.Reply(data)
+
 }
 
 func (h Handler) ErrHandle(msg *common.Message) {

@@ -17,6 +17,7 @@ const (
 	MsgType_ReplyErrCheckSum
 	MsgType_ReplyErr
 	MsgType_PushErrAuthFailIdExist
+	Null
 )
 
 const MsgHeaderLen = 1 + 3 + 2 + 2 + 3 + 2

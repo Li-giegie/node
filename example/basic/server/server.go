@@ -4,7 +4,7 @@ import (
 	"errors"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/common"
-	"github.com/Li-giegie/node/utils"
+	"github.com/Li-giegie/node/protocol"
 	"log"
 	"net"
 	"time"
@@ -12,54 +12,15 @@ import (
 
 type Server struct {
 	node.Server
-	key  string
-	id   uint16
-	addr string
-}
-
-type Auth struct {
-	ClientId uint16 `json:"client_id,omitempty"`
-	ServerId uint16 `json:"server_id,omitempty"`
-	Msg      string `json:"msg,omitempty"`
-	Permit   bool   `json:"permit,omitempty"`
+	key         string
+	localId     uint16
+	addr        string
+	authTimeout time.Duration
 }
 
 // Connection 建立连接回调，再该回调中作认证
 func (s *Server) Connection(conn net.Conn) (remoteId uint16, err error) {
-	log.Println("server connection")
-	// 创建认证结构
-	auth := new(Auth)
-	// 认证成功失败通知客户端
-	defer func() {
-		// 认证失败，告知失败原因及Permit字段置为false
-		if err != nil {
-			auth.Permit = false
-			auth.Msg = err.Error()
-		} else { //反之
-			auth.ServerId = s.Id()
-			auth.Permit = true
-			auth.Msg = "success"
-		}
-		// 返回结果
-		if err2 := utils.JSONPackEncode(conn, auth); err2 != nil {
-			err = err2
-		}
-		if err != nil {
-			log.Println("认证失败：", err, remoteId)
-		} else {
-			log.Println("认证成功：", remoteId)
-		}
-	}()
-
-	// 提供json解码客户端发送的数据
-	if err = utils.JSONPackDecode(time.Second*6, conn, auth); err != nil {
-		return 0, err
-	}
-	// 比较客户端传来的msg和key比较，只有相等才会通过
-	if auth.Msg != s.key {
-		return 0, errors.New("invalid key")
-	}
-	return auth.ClientId, nil
+	return protocol.NewAuthProtocol(s.localId, s.key, s.authTimeout).ServerNodeHandle(conn)
 }
 
 func (s *Server) Handle(ctx common.Context) {
@@ -68,7 +29,7 @@ func (s *Server) Handle(ctx common.Context) {
 		ctx.ErrReply(nil, errors.New("invalid data"))
 		return
 	}
-	ctx.Reply([]byte("server Handle: ok"))
+	ctx.Reply([]byte("server_node_0 Handle: ok"))
 }
 
 func (s *Server) ErrHandle(msg *common.Message) {
@@ -81,7 +42,7 @@ func (s *Server) DropHandle(msg *common.Message) {
 
 func (s *Server) CustomHandle(ctx common.Context) {
 	log.Println("CustomHandle: ", ctx.String())
-	ctx.CustomReply(ctx.Type(), []byte("server CustomHandle: ok"))
+	ctx.CustomReply(ctx.Type(), []byte("server_node_0 CustomHandle: ok"))
 }
 
 func (s *Server) Disconnect(id uint16, err error) {
@@ -89,7 +50,7 @@ func (s *Server) Disconnect(id uint16, err error) {
 }
 
 func (s *Server) Serve() error {
-	l, err := node.ListenTCP(s.id, s.addr)
+	l, err := node.ListenTCP(s.localId, s.addr)
 	if err != nil {
 		return err
 	}
@@ -100,7 +61,8 @@ func (s *Server) Serve() error {
 
 func main() {
 	srv := new(Server)
-	srv.id = 0
+	srv.localId = 0
+	srv.authTimeout = time.Second * 6
 	srv.key = "hello"
 	srv.addr = "0.0.0.0:8080"
 	if err := srv.Serve(); err != nil {

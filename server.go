@@ -35,7 +35,7 @@ const (
 	ServerStateTypeErr
 )
 
-type SrvOptions func(s *server) error
+type SrvOption func(s *server) error
 
 type server struct {
 	id        uint16 // 唯一标识
@@ -46,10 +46,11 @@ type server struct {
 	*common.Conns
 	*common.MsgReceiver
 	*common.MsgPool
+	*common.RouteTable
 }
 
 // NewServer 创建一个Server类型的节点
-func NewServer(l net.Listener, id uint16, opts ...SrvOptions) (Server, error) {
+func NewServer(l net.Listener, id uint16, opts ...SrvOption) (Server, error) {
 	srv := new(server)
 	srv.id = id
 	srv.Listener = l
@@ -94,7 +95,7 @@ func (s *server) Serve(node Node) error {
 }
 
 func (s *server) HandleConn(c net.Conn, node Node) {
-	conn, err := common.NewConn(s.id, c, s.MsgPool, s.MsgReceiver, s, node)
+	conn, err := common.NewConn(s.id, c, s, s.Conns, node, s.RouteTable)
 	if err != nil {
 		return
 	}
@@ -109,7 +110,7 @@ func (s *server) HandleConn(c net.Conn, node Node) {
 		return
 	}
 	go func() {
-		conn.Serve(node)
+		conn.Serve()
 		s.Conns.Del(conn.RemoteId())
 		_ = c.Close()
 	}()
@@ -133,7 +134,7 @@ func (s *server) Close() error {
 }
 
 // ListenTCP 侦听一个本地TCP端口,并创建服务节点
-func ListenTCP(id uint16, addr string, opts ...SrvOptions) (Server, error) {
+func ListenTCP(id uint16, addr string, opts ...SrvOption) (Server, error) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -142,7 +143,7 @@ func ListenTCP(id uint16, addr string, opts ...SrvOptions) (Server, error) {
 }
 
 // WithSrvMaxConns 最大连接数 > 0 有效
-func WithSrvMaxConns(n int) SrvOptions {
+func WithSrvMaxConns(n int) SrvOption {
 	return func(s *server) error {
 		s.MaxConns = n
 		return nil
@@ -150,7 +151,7 @@ func WithSrvMaxConns(n int) SrvOptions {
 }
 
 // WithSrvMaxMsgLen 最大消息接收长度 > 0 <= 256*256*256-1 时有效 最大值3个字节范围的正整数
-func WithSrvMaxMsgLen(n int) SrvOptions {
+func WithSrvMaxMsgLen(n int) SrvOption {
 	return func(s *server) error {
 		if n < 0 || n > 0x00FFFFFF {
 			return errors.New("err: MaxMsgLen > 0 < 0x00FFFFFF,3byte")
@@ -161,7 +162,7 @@ func WithSrvMaxMsgLen(n int) SrvOptions {
 }
 
 // WIthSrvMsgPoolSize 消息池容量，消息在从池子中创建和销毁，这一行为是考虑到GC压力
-func WIthSrvMsgPoolSize(n int) SrvOptions {
+func WIthSrvMsgPoolSize(n int) SrvOption {
 	return func(s *server) error {
 		s.MsgPool = common.NewMsgPool(n)
 		return nil
@@ -169,9 +170,20 @@ func WIthSrvMsgPoolSize(n int) SrvOptions {
 }
 
 // WithSrvMsgReceivePoolSize 消息接收池容量，消息接收每次创建的Channel从池子中创建和销毁，这一行为是考虑到GC压力
-func WithSrvMsgReceivePoolSize(n int) SrvOptions {
+func WithSrvMsgReceivePoolSize(n int) SrvOption {
 	return func(s *server) error {
 		s.MsgReceiver = common.NewMsgReceiver(n)
+		return nil
+	}
+}
+
+func WithSrvRouter(enable bool, route ...*common.RouteTable) SrvOption {
+	return func(s *server) error {
+		if len(route) > 0 && route[0] != nil {
+			s.RouteTable = route[0]
+		} else if enable {
+			s.RouteTable = common.NewRouter()
+		}
 		return nil
 	}
 }

@@ -19,7 +19,7 @@ func NewMsgReceiver(cap int) *MsgReceiver {
 	return mr
 }
 
-func (m *MsgReceiver) Create(id uint32) chan *Message {
+func (m *MsgReceiver) CreateMsgChan(id uint32) chan *Message {
 	chanMsg := m.pool.Get().(chan *Message)
 	if len(chanMsg) > 0 {
 		<-chanMsg
@@ -30,7 +30,7 @@ func (m *MsgReceiver) Create(id uint32) chan *Message {
 	return chanMsg
 }
 
-func (m *MsgReceiver) SetMsg(msg *Message) bool {
+func (m *MsgReceiver) SetMsgChan(msg *Message) bool {
 	m.lock.Lock()
 	chanM, ok := m.cache[msg.Id]
 	if ok {
@@ -40,7 +40,7 @@ func (m *MsgReceiver) SetMsg(msg *Message) bool {
 	return ok
 }
 
-func (m *MsgReceiver) Delete(id uint32) bool {
+func (m *MsgReceiver) DeleteMsgChan(id uint32) bool {
 	m.lock.Lock()
 	chanM, ok := m.cache[id]
 	if !ok {

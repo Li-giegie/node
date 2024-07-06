@@ -61,7 +61,7 @@ type ErrReplyErrorInvalid struct {
 }
 
 func (e *ErrReplyErrorInvalid) Error() string {
-	return "reply error invalid not null but is empty str"
+	return "reply error invalid Greater than limit length math.MaxUint16-5 (65530)"
 }
 
 type ErrReplyError struct {

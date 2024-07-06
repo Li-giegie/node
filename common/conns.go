@@ -58,10 +58,3 @@ func (s *Conns) Len() (n int) {
 	s.l.RUnlock()
 	return
 }
-
-type emptyConns struct {
-}
-
-func (e emptyConns) GetConn(id uint16) (Conn, bool) {
-	return nil, false
-}

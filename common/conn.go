@@ -3,8 +3,8 @@ package common
 import (
 	"bufio"
 	ctx "context"
+	"encoding/binary"
 	"errors"
-	"github.com/Li-giegie/node/utils"
 	"net"
 	"time"
 )
@@ -23,23 +23,23 @@ type Conn interface {
 	//造成这一情况的原因是框架内部维护了消息Id，调该方法给的Id是调用者自行给定的，可能与框架内部的Id起到冲突了，
 	//解决方法
 	//	一：调用该方法传递的类型一定不能是框架定义的标准消息类型，在github.com/Li-giegie/node/common/message.go 文件内查看标准消息类型
-	//	二：获取到框架内部消息池生成的消息结构体，Conn.(*Connect).MsgPool.New()来创建消息，MsgReceiver可以用来创建、设置响应消息但是你必须在CustomHandle回调中来自行响应他。
+	//	二：获取到框架内部消息池生成的消息结构体,和触发接收消息
 	/*
 		解决方法二示例
 		发起请求示例
 		//先获取到原始结构体 common.Conn.(*common.Connect)
 		conn := c.Conn.(*common.Connect)
 		//创建消息 srcId dstId type data
-		msg := conn.MsgPool.New(conn.LocalId(), 0, 200, []byte("Custom msg"))
+		msg := conn.NewMsg(conn.LocalId(), 0, 200, []byte("Custom msg"))
 		//创建响应接收Chan，把消息Id告诉接收器
-		replyChan := conn.MsgReceiver.Create(msg.Id)
+		replyChan := conn.CreateMsgChan(msg.Id)
 		//发送消息
 		conn.WriteMsg(msg)
 		//等待接收
 		replyMsg := <-replyChan
 
 		在自定义回调中设置响应示例：
-		c.Conn.(*common.Connect).MsgReceiver.SetMsg(&common.Message{
+		c.Conn.(*common.Connect).SetMsgChan(&common.Message{
 			Type:   ctx.Type(),
 			Id:     ctx.Id(),
 			SrcId:  ctx.SrcId(),
@@ -56,6 +56,22 @@ type Conn interface {
 
 type Connections interface {
 	GetConn(id uint16) (Conn, bool)
+}
+
+// MsgController 消息的创建和接受抽象接口
+type MsgController interface {
+	// NewMsg 创建一个消息
+	NewMsg(srcId, dstId uint16, typ uint8, data []byte) *Message
+	// RecycleMsg 回收消息
+	RecycleMsg(m *Message)
+	// DefaultMsg 创建一个0值消息，id = 0
+	DefaultMsg() *Message
+	// CreateMsgChan 创建一个消息接收Channel，以准备接收
+	CreateMsgChan(id uint32) chan *Message
+	// SetMsgChan 在匹配消息的Id中设置Chan通知消息到达
+	SetMsgChan(msg *Message) bool
+	// DeleteMsgChan 删除已经处理完成的Chan，或已超时的Chan，这一步是必要的
+	DeleteMsgChan(id uint32) bool
 }
 
 type Handler interface {
@@ -81,24 +97,25 @@ const (
 	ConnStateTypeOnError
 )
 
-func NewConn(localId uint16, conn net.Conn, co *MsgPool, mr *MsgReceiver, conns Connections, h Handler) (c *Connect, err error) {
+func NewConn(localId uint16, conn net.Conn, msgCtrl MsgController, conns Connections, h Handler, route Router) (c *Connect, err error) {
 	c = new(Connect)
 	c.remoteId, err = h.Connection(conn)
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
+	c.MsgController = msgCtrl
 	c.localId = localId
 	c.conn = conn
 	c.Handler = h
 	c.activate = time.Now().UnixMilli()
-	c.MsgReceiver = mr
-	c.MsgPool = co
 	c.MaxMsgLen = 0x00FFFFFF
 	c.ReadBuffSize = 4096
-	c.Connections = conns
-	if c.Connections == nil {
-		c.Connections = emptyConns{}
+	if val, _ := route.(*RouteTable); val != nil {
+		c.Router = route
+	}
+	if val, _ := conns.(*Conns); val != nil {
+		c.Connections = conns
 	}
 	return c, nil
 }
@@ -112,8 +129,8 @@ type Connect struct {
 	MaxMsgLen    uint32
 	ReadBuffSize int
 	conn         net.Conn
-	*MsgReceiver
-	*MsgPool
+	MsgController
+	Router
 	Connections
 	Handler
 }
@@ -123,47 +140,60 @@ func (c *Connect) Activate() int64 {
 }
 
 // Serve 开启服务
-func (c *Connect) Serve(h Handler) {
+func (c *Connect) Serve() {
 	var err error
-	defer func() { h.Disconnect(c.remoteId, err) }()
+	defer func() { c.Disconnect(c.remoteId, err) }()
 	c.state = ConnStateTypeOnConnect
 	headerBuf := make([]byte, MsgHeaderLen)
 	reader := bufio.NewReaderSize(c.conn, c.ReadBuffSize)
 	for {
-		msg := c.MsgPool.Default()
+		msg := c.DefaultMsg()
 		err = msg.Decode(reader, headerBuf, c.MaxMsgLen)
 		if err != nil {
-			err = c.connectionErr(ctx.WithValue(ctx.Background(), "msg", msg), err, h)
+			err = c.connectionErr(ctx.WithValue(ctx.Background(), "msg", msg), err)
 			return
 		}
 		c.activate = time.Now().UnixMilli()
 		if msg.DestId != c.localId && msg.DestId != 0 {
-			conn, ok := c.Connections.GetConn(msg.DestId)
-			if !ok {
+			if c.Connections == nil {
 				if err = c.WriteMsg(msg.ErrReply(MsgType_ReplyErrConnNotExist, c.localId)); err != nil {
-					h.ErrHandle(msg)
+					c.ErrHandle(msg)
 				}
-			} else {
-				if err = conn.WriteMsg(msg); err != nil {
-					if err = c.WriteMsg(msg.ErrReply(MsgType_ReplyErrConnNotExist, c.localId)); err != nil {
-						h.ErrHandle(msg)
+				continue
+			}
+			conn, ok := c.Connections.GetConn(msg.DestId)
+			if ok {
+				if err = conn.WriteMsg(msg); err == nil {
+					continue
+				}
+			}
+			if c.Router != nil {
+				next, ok := c.Router.GetRouteNext(msg.DestId)
+				if ok {
+					if conn, ok = c.Connections.GetConn(next); ok {
+						if err = conn.WriteMsg(msg); err == nil {
+							continue
+						}
 					}
 				}
+			}
+			if err = c.WriteMsg(msg.ErrReply(MsgType_ReplyErrConnNotExist, c.localId)); err != nil {
+				c.ErrHandle(msg)
 			}
 			continue
 		}
 		switch msg.Type {
 		case MsgType_Send:
-			h.Handle(&context{Message: msg, WriterMsg: c})
+			c.Handle(&context{Message: msg, WriterMsg: c})
 		case MsgType_Reply, MsgType_ReplyErr, MsgType_ReplyErrConnNotExist, MsgType_ReplyErrLenLimit, MsgType_ReplyErrCheckSum:
-			if !c.MsgReceiver.SetMsg(msg) {
-				h.DropHandle(msg)
+			if !c.SetMsgChan(msg) {
+				c.DropHandle(msg)
 			}
 		case MsgType_PushErrAuthFailIdExist:
 			err = DEFAULT_ErrAuthIdExist
 			return
 		default:
-			h.CustomHandle(&context{Message: msg, WriterMsg: c})
+			c.CustomHandle(&context{Message: msg, WriterMsg: c})
 		}
 	}
 }
@@ -180,7 +210,7 @@ func (c *Connect) State() ConnStateType {
 }
 
 func (c *Connect) Request(ctx ctx.Context, data []byte) ([]byte, error) {
-	req := c.MsgPool.New(c.localId, c.remoteId, MsgType_Send, data)
+	req := c.NewMsg(c.localId, c.remoteId, MsgType_Send, data)
 	return c.request(ctx, req)
 }
 
@@ -191,15 +221,15 @@ func (c *Connect) Forward(ctx ctx.Context, destId uint16, data []byte) ([]byte, 
 	if destId == c.localId {
 		return nil, ErrForwardYourself
 	}
-	req := c.MsgPool.New(c.localId, destId, MsgType_Send, data)
+	req := c.NewMsg(c.localId, destId, MsgType_Send, data)
 	return c.request(ctx, req)
 }
 
 // Send no response data
 func (c *Connect) Send(data []byte) (err error) {
-	req := c.MsgPool.New(c.localId, c.remoteId, MsgType_Send, data)
+	req := c.NewMsg(c.localId, c.remoteId, MsgType_Send, data)
 	err = c.WriteMsg(req)
-	c.MsgPool.Recycle(req)
+	c.RecycleMsg(req)
 	return err
 }
 
@@ -209,24 +239,24 @@ func (c *Connect) WriteMsg(m *Message) (err error) {
 }
 
 func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
-	respChan := c.MsgReceiver.Create(req.Id)
+	respChan := c.CreateMsgChan(req.Id)
 	err := c.WriteMsg(req)
 	if err != nil {
-		c.MsgReceiver.Delete(req.Id)
-		c.MsgPool.Recycle(req)
+		c.DeleteMsgChan(req.Id)
+		c.RecycleMsg(req)
 		return nil, err
 	}
 	select {
 	case <-ctx.Done():
-		c.MsgReceiver.Delete(req.Id)
-		c.MsgPool.Recycle(req)
+		c.DeleteMsgChan(req.Id)
+		c.RecycleMsg(req)
 		return nil, ctx.Err()
 	case resp := <-respChan:
 		data := resp.Data
 		typ := resp.Type
-		c.MsgReceiver.Delete(req.Id)
-		c.MsgPool.Recycle(req)
-		c.MsgPool.Recycle(resp)
+		c.DeleteMsgChan(req.Id)
+		c.RecycleMsg(req)
+		c.RecycleMsg(resp)
 		switch typ {
 		case MsgType_ReplyErrConnNotExist:
 			return nil, DEFAULT_ErrConnNotExist
@@ -235,15 +265,19 @@ func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
 		case MsgType_ReplyErrCheckSum:
 			return nil, DEFAULT_ErrMsgLenLimit
 		case MsgType_ReplyErr:
-			n := utils.DecodeUint24(data) + 3
-			return data[n:], &ErrReplyError{b: data[3:n]}
+			n := binary.LittleEndian.Uint16(data)
+			if n == 0 {
+				return data[2:], nil
+			}
+			n++
+			return data[n:], &ErrReplyError{b: data[2:n]}
 		default:
 			return data, nil
 		}
 	}
 }
 
-func (c *Connect) connectionErr(ctx ctx.Context, err error, h Handler) error {
+func (c *Connect) connectionErr(ctx ctx.Context, err error) error {
 	switch c.state {
 	case ConnStateTypeOnClose:
 		return nil
@@ -266,9 +300,9 @@ func (c *Connect) connectionErr(ctx ctx.Context, err error, h Handler) error {
 			return err
 		}
 		if ok {
-			h.ErrHandle(msg)
+			c.ErrHandle(msg)
 			if err = c.WriteMsg(msg.ErrReply(typ, c.localId)); err != nil {
-				h.ErrHandle(msg)
+				c.ErrHandle(msg)
 			}
 		}
 		_ = c.Close()

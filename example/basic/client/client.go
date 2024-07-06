@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/common"
-	"github.com/Li-giegie/node/utils"
+	"github.com/Li-giegie/node/protocol"
 	"log"
 	"net"
 	"time"
@@ -13,22 +12,16 @@ import (
 
 type Client struct {
 	common.Conn
-	id       uint16
-	authKey  string
-	addr     string
-	remoteId uint16
+	localId     uint16
+	authKey     string
+	authTimeout time.Duration
+	addr        string
+
 	stopChan chan error
 }
 
-type Auth struct {
-	ClientId uint16 `json:"client_id,omitempty"`
-	ServerId uint16 `json:"server_id,omitempty"`
-	Msg      string `json:"msg,omitempty"`
-	Permit   bool   `json:"permit,omitempty"`
-}
-
 func (c *Client) Serve() error {
-	conn, err := node.Dial("tcp", c.addr, c.id, c)
+	conn, err := node.Dial("tcp", c.addr, c.localId, c)
 	if err != nil {
 		return err
 	}
@@ -37,21 +30,7 @@ func (c *Client) Serve() error {
 }
 
 func (c *Client) Connection(conn net.Conn) (remoteId uint16, err error) {
-	defer log.Println("client connection", remoteId, err)
-	auth := new(Auth)
-	auth.ClientId = c.id
-	auth.Msg = c.authKey
-	if err = utils.JSONPackEncode(conn, auth); err != nil {
-		return 0, err
-	}
-	if err = utils.JSONPackDecode(time.Second*6, conn, &auth); err != nil {
-		return 0, err
-	}
-	if !auth.Permit {
-		return 0, errors.New("auth fail:" + auth.Msg)
-	}
-	c.remoteId = auth.ServerId
-	return auth.ServerId, nil
+	return protocol.NewAuthProtocol(c.localId, c.authKey, c.authTimeout).ClientNodeHandle(conn)
 }
 
 func (c *Client) Handle(ctx common.Context) {
@@ -79,9 +58,10 @@ func (c *Client) Disconnect(id uint16, err error) {
 
 func main() {
 	client := new(Client)
-	client.id = 1
+	client.localId = 1
+	client.authTimeout = time.Second * 6
 	client.authKey = "hello"
-	client.addr = "39.101.193.248:8080"
+	client.addr = "127.0.0.1:8080"
 	client.stopChan = make(chan error, 1)
 	err := client.Serve()
 	if err != nil {
@@ -96,7 +76,7 @@ func main() {
 		Type:   200,
 		Id:     0,
 		SrcId:  0,
-		DestId: client.remoteId,
+		DestId: client.RemoteId(),
 		Data:   []byte("client Custom msg"),
 	}))
 	client.Close()

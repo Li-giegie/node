@@ -77,9 +77,3 @@ func JSONPackDecode(timeout time.Duration, r io.Reader, v any) (err error) {
 	}
 	return json.Unmarshal(data, v)
 }
-
-func PackBytes(b []byte) []byte {
-	data := make([]byte, 3)
-	EncodeUint24(data, uint32(len(b)))
-	return append(data, b...)
-}
