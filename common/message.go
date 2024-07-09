@@ -10,7 +10,7 @@ import (
 
 // 标准消息类型
 const (
-	MsgType_Send = iota
+	MsgType_Send uint8 = iota
 	MsgType_Reply
 	MsgType_ReplyErrConnNotExist
 	MsgType_ReplyErrLenLimit

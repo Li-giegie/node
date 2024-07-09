@@ -2,11 +2,10 @@ package test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/common"
-	"github.com/Li-giegie/node/utils"
+	"github.com/Li-giegie/node/protocol"
 	"log"
 	"net"
 	"testing"
@@ -15,35 +14,17 @@ import (
 
 type ClientHandle struct {
 	common.Conn
-	id    uint16
-	key   string
-	addr  string
-	stopC chan error
-}
-
-type Auth struct {
-	ClientId uint16
-	Key      string
-	ServerId uint16
-	Msg      string
-	Permit   bool
+	*protocol.AuthProtocol
+	*protocol.HelloProtocol
+	id          uint16
+	key         string
+	remoteAddr  string
+	authTimeout time.Duration
+	stopC       chan error
 }
 
 func (c *ClientHandle) Connection(conn net.Conn) (remoteId uint16, err error) {
-	auth := &Auth{ClientId: c.id, Key: c.key}
-	if err = utils.JSONPackEncode(conn, auth); err != nil {
-		log.Println("auth err 1", err)
-		return 0, nil
-	}
-	if err = utils.JSONPackDecode(time.Second*6, conn, auth); err != nil {
-		log.Println("auth err 2", err)
-		return 0, err
-	}
-	if !auth.Permit {
-		return 0, errors.New(auth.Msg)
-	}
-	log.Println("Connection ", conn.RemoteAddr().String())
-	return auth.ServerId, nil
+	return c.AuthProtocol.ConnectionClient(conn, c.id, c.key, c.authTimeout)
 }
 
 func (c *ClientHandle) Handle(ctx common.Context) {
@@ -64,45 +45,42 @@ func (c *ClientHandle) DropHandle(msg *common.Message) {
 }
 
 func (c *ClientHandle) CustomHandle(ctx common.Context) {
-	log.Println("CustomHandle ", ctx.String())
-	c.Conn.(*common.Connect).SetMsgChan(&common.Message{
-		Type:   ctx.Type(),
-		Id:     ctx.Id(),
-		SrcId:  ctx.SrcId(),
-		DestId: ctx.DestId(),
-		Data:   ctx.Data(),
-	})
+	if c.HelloProtocol.CustomHandle(ctx) {
+		log.Println("CustomHandle ", ctx.String())
+	}
 }
 
 func (c *ClientHandle) Disconnect(id uint16, err error) {
 	log.Println("Disconnect ", id, err)
-
 	c.stopC <- err
 }
 
 func (c *ClientHandle) Serve() error {
-	conn, err := node.Dial("tcp", c.addr, c.id, c)
+	conn, err := node.Dial("tcp", c.remoteAddr, c.id, c)
 	if err != nil {
 		return err
 	}
+	c.AuthProtocol = new(protocol.AuthProtocol)
+	c.HelloProtocol = new(protocol.HelloProtocol)
+	go c.HelloProtocol.InitClient(conn, time.Second, time.Second*5, time.Second*14, &LogWriter{})
 	c.Conn = conn
 	return nil
 }
 
 func TestClient(t *testing.T) {
 	c := &ClientHandle{
-		id:    2,
-		key:   "hello",
-		addr:  "0.0.0.0:8080",
-		stopC: make(chan error, 1),
+		id:          2,
+		key:         "hello",
+		authTimeout: time.Second * 6,
+		remoteAddr:  "0.0.0.0:8080",
+		stopC:       make(chan error, 1),
 	}
 	err := c.Serve()
 	if err != nil {
 		t.Error(err)
 		return
 	}
-
-	for i := 0; i < 7; i++ {
+	for i := 0; i < 6; i++ {
 		resp, err := c.Request(context.Background(), make([]byte, i))
 		if err != nil {
 			fmt.Printf("err 第%d次 响应长度%d err长度%d %s\n", i, len(resp), len(err.Error()), err.Error())
@@ -122,6 +100,6 @@ func TestClient(t *testing.T) {
 	////等待接收
 	//replyMsg := <-replyChan
 	//log.Println("响应消息", replyMsg.String())
-	c.Close()
+	//c.Close()
 	<-c.stopC
 }

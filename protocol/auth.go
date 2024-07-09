@@ -2,42 +2,31 @@ package protocol
 
 import (
 	"errors"
+	"fmt"
 	"github.com/Li-giegie/node/utils"
 	"net"
 	"time"
 )
 
-type AuthProtocol struct {
-	Id      uint16
-	Key     string
-	Timeout time.Duration
-}
+type AuthProtocol struct{}
 
-func NewAuthProtocol(localId uint16, key string, duration time.Duration) *AuthProtocol {
-	return &AuthProtocol{
-		Id:      localId,
-		Key:     key,
-		Timeout: duration,
-	}
-}
-
-type Auth struct {
+type authMsg struct {
 	Id     uint16 `json:"id,omitempty"`
 	Key    string `json:"key,omitempty"`
 	Permit bool   `json:"permit,omitempty"`
 	Msg    string `json:"msg,omitempty"`
 }
 
-func (a *AuthProtocol) ServerNodeHandle(conn net.Conn) (remoteId uint16, err error) {
-	auth := new(Auth)
+func (a *AuthProtocol) ConnectionServer(conn net.Conn, id uint16, key string, timeout time.Duration) (remoteId uint16, err error) {
+	auth := new(authMsg)
 	defer func() {
-		result := new(Auth)
+		result := new(authMsg)
 		if err != nil {
 			result.Permit = false
 			result.Msg = err.Error()
 		} else {
 			remoteId = auth.Id
-			result.Id = a.Id
+			result.Id = id
 			result.Permit = true
 			result.Msg = "success"
 		}
@@ -48,26 +37,27 @@ func (a *AuthProtocol) ServerNodeHandle(conn net.Conn) (remoteId uint16, err err
 			_ = conn.Close()
 		}
 	}()
-	if err = utils.JSONPackDecode(a.Timeout, conn, auth); err != nil {
+	if err = utils.JSONPackDecode(timeout, conn, auth); err != nil {
 		return 0, err
 	}
-	if auth.Key != a.Key || auth.Id == a.Id {
+	if auth.Key != key || auth.Id == id {
+		fmt.Println(auth.Key, auth.Id, id)
 		return 0, errors.New("key invalid or id clash")
 	}
 	return
 }
 
-func (a *AuthProtocol) ClientNodeHandle(conn net.Conn) (remoteId uint16, err error) {
+func (a *AuthProtocol) ConnectionClient(conn net.Conn, localId uint16, key string, timeout time.Duration) (remoteId uint16, err error) {
 	defer func() {
 		if err != nil {
 			_ = conn.Close()
 		}
 	}()
-	if err = utils.JSONPackEncode(conn, &Auth{Id: a.Id, Key: a.Key}); err != nil {
+	if err = utils.JSONPackEncode(conn, &authMsg{Id: localId, Key: key}); err != nil {
 		return 0, err
 	}
-	result := new(Auth)
-	if err = utils.JSONPackDecode(a.Timeout, conn, result); err != nil {
+	result := new(authMsg)
+	if err = utils.JSONPackDecode(timeout, conn, result); err != nil {
 		return 0, err
 	}
 	if !result.Permit {

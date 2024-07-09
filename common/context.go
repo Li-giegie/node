@@ -11,11 +11,11 @@ type Context interface {
 	DestId() uint16
 	Data() []byte
 	String() string
-	// Reply 回复内容，限制回复一次，不要尝试多次回复，多次回复返回 OnceErr = errors.New("write only")
+	// Reply 回复内容，每次请求限制回复一次，不要尝试多次回复，多次回复返回 OnceErr = errors.New("write only")
 	Reply(data []byte) error
-	// ErrReply 回复内容，限制回复一次，err 的长度限制 (err.Error()) 长度限制 math.MaxUint16-5 (65530)
+	// ErrReply 回复内容，每次请求限制回复一次，err 的长度限制 (err.Error()) 长度限制 math.MaxUint16-2 (65533)
 	ErrReply(data []byte, err error) error
-	// CustomReply 回复内容，限制回复一次，自定义类型回复，适用需要修改消息类型的自定义发送的消息
+	// CustomReply 回复内容，每次请求限制回复一次，自定义类型回复，适用需要修改消息类型的自定义发送的消息
 	CustomReply(typ uint8, data []byte) error
 }
 
@@ -58,23 +58,23 @@ func (c *context) Reply(data []byte) error {
 	return c.WriteMsg(c.Message.Reply(MsgType_Reply, data))
 }
 
-// ErrReply err length (uint16) <= 65530
+// ErrReply err length (uint16) <= 65533
 func (c *context) ErrReply(data []byte, err error) error {
 	if c.once {
 		return DEFAULT_ErrMultipleReply
 	}
 	c.once = true
-	var errB []byte
+	var errB = make([]byte, 2)
 	if err == nil {
-		errB = []byte{0, 0}
+		errB[0], errB[1] = 255, 255 //65535
 	} else {
 		errB2 := []byte(err.Error())
 		errB2L := len(errB2)
-		if errB2L > 65530 {
+		if errB2L > limitErrLen {
 			return DEFAULT_ErrReplyErrorInvalid
 		}
 		errB = make([]byte, 2, 2+errB2L)
-		binary.LittleEndian.PutUint16(errB, uint16(errB2L+1))
+		binary.LittleEndian.PutUint16(errB, uint16(errB2L))
 		errB = append(errB, errB2...)
 	}
 	return c.WriteMsg(c.Message.Reply(MsgType_ReplyErr, append(errB, data...)))

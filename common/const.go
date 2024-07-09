@@ -3,6 +3,7 @@ package common
 import (
 	"errors"
 	"fmt"
+	"strconv"
 )
 
 var (
@@ -57,11 +58,13 @@ func (e *ErrAuthIdExist) Type() uint8 {
 	return MsgType_PushErrAuthFailIdExist
 }
 
+const limitErrLen = 65533
+
 type ErrReplyErrorInvalid struct {
 }
 
 func (e *ErrReplyErrorInvalid) Error() string {
-	return "reply error invalid Greater than limit length math.MaxUint16-5 (65530)"
+	return "reply error invalid Greater than limit length " + strconv.Itoa(limitErrLen)
 }
 
 type ErrReplyError struct {

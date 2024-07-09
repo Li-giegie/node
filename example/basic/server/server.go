@@ -11,6 +11,8 @@ import (
 )
 
 type Server struct {
+	*protocol.AuthProtocol
+	*protocol.HelloProtocol
 	node.Server
 	key         string
 	localId     uint16
@@ -20,7 +22,7 @@ type Server struct {
 
 // Connection 建立连接回调，再该回调中作认证
 func (s *Server) Connection(conn net.Conn) (remoteId uint16, err error) {
-	return protocol.NewAuthProtocol(s.localId, s.key, s.authTimeout).ServerNodeHandle(conn)
+	return s.AuthProtocol.ConnectionServer(conn, s.localId, s.key, s.authTimeout)
 }
 
 func (s *Server) Handle(ctx common.Context) {
@@ -41,8 +43,10 @@ func (s *Server) DropHandle(msg *common.Message) {
 }
 
 func (s *Server) CustomHandle(ctx common.Context) {
-	log.Println("CustomHandle: ", ctx.String())
-	ctx.CustomReply(ctx.Type(), []byte("server_node_0 CustomHandle: ok"))
+	if s.HelloProtocol.CustomHandle(ctx) {
+		log.Println("CustomHandle: ", ctx.String())
+		ctx.CustomReply(ctx.Type(), []byte("server_node_0 CustomHandle: ok"))
+	}
 }
 
 func (s *Server) Disconnect(id uint16, err error) {
@@ -56,6 +60,9 @@ func (s *Server) Serve() error {
 	}
 	defer l.Close()
 	s.Server = l
+	s.AuthProtocol = new(protocol.AuthProtocol)
+	s.HelloProtocol = new(protocol.HelloProtocol)
+	go s.HelloProtocol.InitServer(s, time.Second, time.Second*5, time.Second*25, &LogWriter{})
 	return l.Serve(s)
 }
 
@@ -68,4 +75,12 @@ func main() {
 	if err := srv.Serve(); err != nil {
 		log.Fatalln(err)
 	}
+}
+
+type LogWriter struct {
+}
+
+func (l *LogWriter) Write(b []byte) (n int, err error) {
+	log.Print(string(b))
+	return
 }

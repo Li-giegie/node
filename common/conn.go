@@ -266,10 +266,10 @@ func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
 			return nil, DEFAULT_ErrMsgLenLimit
 		case MsgType_ReplyErr:
 			n := binary.LittleEndian.Uint16(data)
-			if n == 0 {
+			if n > limitErrLen {
 				return data[2:], nil
 			}
-			n++
+			n += 2
 			return data[n:], &ErrReplyError{b: data[2:n]}
 		default:
 			return data, nil
