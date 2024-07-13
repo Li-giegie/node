@@ -20,9 +20,14 @@ type Handler struct {
 	*protocol.HelloProtocol
 }
 
-func (h *Handler) Connection(conn net.Conn) (remoteId uint16, err error) {
-	return h.AuthProtocol.ConnectionServer(conn, h.Server.Id(), h.authKey, h.authTimeout)
+func (h *Handler) Init(conn net.Conn) (remoteId uint16, err error) {
+	return h.AuthProtocol.ConnectionServer(conn, h.Id(), h.authKey, h.authTimeout)
 }
+
+func (h *Handler) Connection(conn common.Conn) {
+
+}
+
 func (h *Handler) Handle(ctx common.Context) {
 	log.Println("Handle ", ctx.String())
 	switch len(ctx.Data()) {
@@ -46,12 +51,8 @@ func (h *Handler) Handle(ctx common.Context) {
 
 }
 
-func (h *Handler) ErrHandle(msg *common.Message) {
+func (h *Handler) ErrHandle(msg *common.Message, err error) {
 	log.Println("ErrHandle ", msg.String())
-}
-
-func (h *Handler) DropHandle(msg *common.Message) {
-	log.Println("DropHandle ", msg.String())
 }
 
 func (h *Handler) CustomHandle(ctx common.Context) {
@@ -65,7 +66,7 @@ func (h *Handler) Disconnect(id uint16, err error) {
 }
 
 func (h *Handler) Serve() error {
-	l, err := node.ListenTCP(0, "0.0.0.0:8080")
+	l, err := node.ListenTCP(0, "0.0.0.0:8080", h)
 	if err != nil {
 		return err
 	}
@@ -75,7 +76,7 @@ func (h *Handler) Serve() error {
 	h.AuthProtocol = new(protocol.AuthProtocol)
 	h.HelloProtocol = new(protocol.HelloProtocol)
 	go h.HelloProtocol.InitServer(l, time.Second, time.Second*3, time.Second*15, &LogWriter{})
-	if err = l.Serve(h); err != nil {
+	if err = l.Serve(); err != nil {
 		return err
 	}
 	return nil

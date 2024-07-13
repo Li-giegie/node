@@ -34,8 +34,12 @@ func (c *Client) Serve() (err error) {
 	return
 }
 
-func (c *Client) Connection(conn net.Conn) (remoteId uint16, err error) {
+func (c *Client) Init(conn net.Conn) (remoteId uint16, err error) {
 	return c.AuthProtocol.ConnectionClient(conn, c.localId, c.authKey, c.authTimeout)
+}
+
+func (c *Client) Connection(conn common.Conn) {
+	log.Println("Connection", conn.RemoteId())
 }
 
 func (c *Client) Handle(ctx common.Context) {
@@ -43,12 +47,8 @@ func (c *Client) Handle(ctx common.Context) {
 	ctx.Reply([]byte("client handle ok"))
 }
 
-func (c *Client) ErrHandle(msg *common.Message) {
-	log.Println("client ErrHandle: ", msg.String())
-}
-
-func (c *Client) DropHandle(msg *common.Message) {
-	log.Println("client DropHandle: ", msg.String())
+func (c *Client) ErrHandle(msg *common.Message, err error) {
+	log.Println("client ErrHandle: ", msg.String(), err)
 }
 
 func (c *Client) CustomHandle(ctx common.Context) {
