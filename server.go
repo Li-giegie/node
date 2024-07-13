@@ -10,7 +10,7 @@ import (
 
 type Server interface {
 	// Serve 阻塞启动服务，node 连接生命周期接口
-	Serve(node Node) error
+	Serve() error
 	// GetConn 获取一个连接
 	GetConn(id uint16) (common.Conn, bool)
 	// GetConns 获取所有连接
@@ -21,6 +21,9 @@ type Server interface {
 	Close() error
 	// Id 获取服务Id
 	Id() uint16
+	// Bind 绑定一个外部连接，通常用于其他域互联形成一个域
+	Bind(u AuthenticationNode) error
+	common.Router
 }
 
 // ServerStateType 服务状态
@@ -35,45 +38,42 @@ const (
 	ServerStateTypeErr
 )
 
-type SrvOption func(s *server) error
+type SrvOption func(s *server)
 
 type server struct {
-	id        uint16 // 唯一标识
-	MaxConns  int
-	MaxMsgLen uint32
-	state     ServerStateType
+	id       uint16 // 唯一标识
+	MaxConns int
+	//MaxMsgLen uint32
+	state ServerStateType
 	net.Listener
 	*common.Conns
 	*common.MsgReceiver
 	*common.MsgPool
-	*common.RouteTable
+	common.Router
+	Handler
 }
 
 // NewServer 创建一个Server类型的节点
-func NewServer(l net.Listener, id uint16, opts ...SrvOption) (Server, error) {
+func NewServer(l net.Listener, id uint16, h Handler, opts ...SrvOption) Server {
 	srv := new(server)
 	srv.id = id
 	srv.Listener = l
+	srv.Handler = h
 	srv.Conns = common.NewConns()
 	srv.MsgPool = common.NewMsgPool(1024)
 	srv.MsgReceiver = common.NewMsgReceiver(1024)
+	srv.Router = common.NewRouter()
 	for _, opt := range opts {
-		if err := opt(srv); err != nil {
-			return nil, err
-		}
+		opt(srv)
 	}
-	return srv, nil
+	return srv
 }
 
 func (s *server) State() ServerStateType {
 	return s.state
 }
 
-func (s *server) Serve(node Node) error {
-	if node == nil {
-		_ = s.Close()
-		return errors.New("err: Handler can not be null ")
-	}
+func (s *server) Serve() error {
 	s.state = ServerStateTypeListen
 	i := int64(0)
 	for {
@@ -90,17 +90,18 @@ func (s *server) Serve(node Node) error {
 		if err != nil {
 			return s.checkErr(err)
 		}
-		go s.HandleConn(conn, node)
+		go s.HandleConn(conn)
 	}
 }
 
-func (s *server) HandleConn(c net.Conn, node Node) {
-	conn, err := common.NewConn(s.id, c, s, s.Conns, node, s.RouteTable)
+func (s *server) HandleConn(c net.Conn) {
+	remoteId, err := s.Handler.Init(c)
 	if err != nil {
 		return
 	}
+	conn := common.NewConn(s.id, remoteId, c, s, s.Conns, s.Router)
 	if conn.RemoteId() == s.id || !s.Add(conn.RemoteId(), conn) {
-		node.Disconnect(conn.RemoteId(), common.DEFAULT_ErrAuthIdExist)
+		s.Handler.Disconnect(conn.RemoteId(), common.DEFAULT_ErrAuthIdExist)
 		_ = conn.WriteMsg(&common.Message{
 			Type:   common.MsgType_PushErrAuthFailIdExist,
 			SrcId:  s.id,
@@ -110,10 +111,28 @@ func (s *server) HandleConn(c net.Conn, node Node) {
 		return
 	}
 	go func() {
-		conn.Serve()
+		conn.Serve(s.Handler)
 		s.Conns.Del(conn.RemoteId())
 		_ = c.Close()
 	}()
+}
+
+var NodeExist = errors.New("node id exist")
+
+func (s *server) Bind(u AuthenticationNode) error {
+	if s.id == u.RemoteId() {
+		return NodeExist
+	}
+	conn := common.NewConn(s.id, u.RemoteId(), u.Conn(), s, s.Conns, s.Router)
+	if !s.Conns.Add(conn.RemoteId(), conn) {
+		return NodeExist
+	}
+	go func() {
+		conn.Serve(s)
+		s.Conns.Del(conn.RemoteId())
+		_ = conn.Close()
+	}()
+	return nil
 }
 
 func (s *server) Id() uint16 {
@@ -134,56 +153,48 @@ func (s *server) Close() error {
 }
 
 // ListenTCP 侦听一个本地TCP端口,并创建服务节点
-func ListenTCP(id uint16, addr string, opts ...SrvOption) (Server, error) {
+func ListenTCP(id uint16, addr string, h Handler, opts ...SrvOption) (Server, error) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-	return NewServer(l, id, opts...)
+	return NewServer(l, id, h, opts...), nil
 }
 
 // WithSrvMaxConns 最大连接数 > 0 有效
 func WithSrvMaxConns(n int) SrvOption {
-	return func(s *server) error {
+	return func(s *server) {
 		s.MaxConns = n
-		return nil
 	}
 }
 
 // WithSrvMaxMsgLen 最大消息接收长度 > 0 <= 256*256*256-1 时有效 最大值3个字节范围的正整数
-func WithSrvMaxMsgLen(n int) SrvOption {
-	return func(s *server) error {
-		if n < 0 || n > 0x00FFFFFF {
-			return errors.New("err: MaxMsgLen > 0 < 0x00FFFFFF,3byte")
-		}
-		s.MaxMsgLen = uint32(n)
-		return nil
-	}
-}
+//func WithSrvMaxMsgLen(n int) SrvOption {
+//	return func(s *server) error {
+//		if n < 0 || n > 0x00FFFFFF {
+//			return errors.New("err: MaxMsgLen > 0 < 0x00FFFFFF,3byte")
+//		}
+//		s.MaxMsgLen = uint32(n)
+//		return nil
+//	}
+//}
 
 // WIthSrvMsgPoolSize 消息池容量，消息在从池子中创建和销毁，这一行为是考虑到GC压力
 func WIthSrvMsgPoolSize(n int) SrvOption {
-	return func(s *server) error {
+	return func(s *server) {
 		s.MsgPool = common.NewMsgPool(n)
-		return nil
 	}
 }
 
 // WithSrvMsgReceivePoolSize 消息接收池容量，消息接收每次创建的Channel从池子中创建和销毁，这一行为是考虑到GC压力
 func WithSrvMsgReceivePoolSize(n int) SrvOption {
-	return func(s *server) error {
+	return func(s *server) {
 		s.MsgReceiver = common.NewMsgReceiver(n)
-		return nil
 	}
 }
 
-func WithSrvRouter(enable bool, route ...*common.RouteTable) SrvOption {
-	return func(s *server) error {
-		if len(route) > 0 && route[0] != nil {
-			s.RouteTable = route[0]
-		} else if enable {
-			s.RouteTable = common.NewRouter()
-		}
-		return nil
+func WithSrvRouter(route common.Router) SrvOption {
+	return func(s *server) {
+		s.Router = route
 	}
 }

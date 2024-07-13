@@ -1,49 +1,117 @@
 package common
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
-// Router 路由
+// Router 接口
 type Router interface {
-	GetRouteNext(dst uint16) (v uint16, ok bool)
+	AddRoute(dst, next, hop uint16)
+	DeleteRouteNextHop(dst, next, hop uint16)
+	DeleteRouteNext(dst, next uint16)
 	DeleteRoute(dst uint16)
-	AddRoute(dst, next uint16)
-	AddRoutes(dst []uint16, next uint16)
-	DeleteRoutes(dst []uint16)
-	DeleteRouteNext(next uint16)
-	DeleteRouteNextAll(next uint16)
+	// GetDstRoutes 获取下一条路由列表
+	GetDstRoutes(dst uint16) []*Next
+	// GetNextRoutes 获取通过下一跳能到达目的ID
+	GetNextRoutes(next uint16) (dstId []uint16)
 }
 
+// RouteTable 路由表实现
 type RouteTable struct {
-	// map[dst]next
-	cache map[uint16]uint16
-	l     *sync.RWMutex
+	l *sync.RWMutex
+	// cache dst 下一跳表
+	cache map[uint16][]*Next
 }
 
-func NewRouter() *RouteTable {
+type Next struct {
+	// Next 下一跳ID
+	Next uint16
+	// Hop 跳数 值越小间隔节点越少
+	Hop uint16
+	// UnixMill 更新时间
+	UnixMill int64
+}
+
+func NewRouter() Router {
 	return &RouteTable{
-		cache: make(map[uint16]uint16),
-		l:     new(sync.RWMutex),
+		l:     &sync.RWMutex{},
+		cache: make(map[uint16][]*Next),
 	}
 }
 
-func (r *RouteTable) GetRouteNext(dst uint16) (v uint16, ok bool) {
-	r.l.RLock()
-	v, ok = r.cache[dst]
-	r.l.RUnlock()
-	return
-}
-
-func (r *RouteTable) AddRoute(dst, next uint16) {
+func (r *RouteTable) AddRoute(dst, next, hop uint16) {
+	newNext := &Next{
+		Next:     next,
+		Hop:      hop,
+		UnixMill: time.Now().UnixMilli(),
+	}
 	r.l.Lock()
-	r.cache[dst] = next
+	nextList, ok := r.cache[dst]
+	if !ok {
+		r.cache[dst] = []*Next{newNext}
+		r.l.Unlock()
+		return
+	}
+	isAdd := false
+	for i := 0; i < len(nextList); i++ {
+		if newNext.Hop < nextList[i].Hop {
+			nextList = append(nextList[:i], append([]*Next{newNext}, nextList[i:]...)...)
+			isAdd = true
+			break
+		}
+	}
+	if !isAdd {
+		nextList = append(nextList, newNext)
+	}
+	result := make([]*Next, 0, len(nextList))
+	for i := 0; i < len(nextList); i++ {
+		isAdd = true
+		for j := 0; j < len(result); j++ {
+			if result[j].Hop == nextList[i].Hop && result[j].Next == nextList[i].Next {
+				isAdd = false
+				break
+			}
+		}
+		if isAdd {
+			result = append(result, nextList[i])
+		}
+	}
+	r.cache[dst] = result
 	r.l.Unlock()
 }
 
-func (r *RouteTable) AddRoutes(dst []uint16, next uint16) {
+func (r *RouteTable) DeleteRouteNextHop(dst, next, hop uint16) {
 	r.l.Lock()
-	for i := 0; i < len(dst); i++ {
-		r.cache[dst[i]] = next
+	nextList, ok := r.cache[dst]
+	if !ok {
+		r.l.Unlock()
+		return
 	}
+	newNext := make([]*Next, 0, len(nextList))
+	for i := 0; i < len(nextList); i++ {
+		if !(nextList[i].Next == next && nextList[i].Hop == hop) {
+			newNext = append(newNext, nextList[i])
+		}
+	}
+	r.cache[dst] = newNext
+	r.l.Unlock()
+}
+
+func (r *RouteTable) DeleteRouteNext(dst, next uint16) {
+	r.l.Lock()
+	n, ok := r.cache[dst]
+	if !ok {
+		r.l.Unlock()
+		return
+	}
+	newNext := make([]*Next, 0, len(n))
+	for i := 0; i < len(n); i++ {
+		if n[i].Next != next {
+			newNext = append(newNext, n[i])
+		}
+	}
+	r.cache[dst] = newNext
 	r.l.Unlock()
 }
 
@@ -53,31 +121,29 @@ func (r *RouteTable) DeleteRoute(dst uint16) {
 	r.l.Unlock()
 }
 
-func (r *RouteTable) DeleteRoutes(dst []uint16) {
-	r.l.Lock()
-	for i := 0; i < len(dst); i++ {
-		delete(r.cache, dst[i])
-	}
-	r.l.Unlock()
-}
-
-func (r *RouteTable) DeleteRouteNext(next uint16) {
-	r.l.Lock()
-	for u, u2 := range r.cache {
-		if u2 == next {
-			delete(r.cache, u)
-			break
+func (r *RouteTable) GetNextRoutes(next uint16) []uint16 {
+	r.l.RLock()
+	var result []uint16
+	var isAdd bool
+	for u, nexts := range r.cache {
+		isAdd = false
+		for _, n := range nexts {
+			if n.Next == next {
+				isAdd = true
+				break
+			}
+		}
+		if isAdd {
+			result = append(result, u)
 		}
 	}
-	r.l.Unlock()
+	r.l.RUnlock()
+	return result
 }
 
-func (r *RouteTable) DeleteRouteNextAll(next uint16) {
-	r.l.Lock()
-	for u, u2 := range r.cache {
-		if u2 == next {
-			delete(r.cache, u)
-		}
-	}
-	r.l.Unlock()
+func (r *RouteTable) GetDstRoutes(dst uint16) []*Next {
+	r.l.RLock()
+	res, _ := r.cache[dst]
+	r.l.RUnlock()
+	return res
 }

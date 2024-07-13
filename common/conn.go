@@ -75,14 +75,12 @@ type MsgController interface {
 }
 
 type Handler interface {
-	// Connection 连接被建立时触发回调
-	Connection(conn net.Conn) (remoteId uint16, err error)
+	// Connection 同步调用，连接第一次建立成功回调
+	Connection(conn Conn)
 	// Handle 接收到标准类型消息时触发回调
 	Handle(ctx Context)
 	// ErrHandle 发送失败触发的回调
-	ErrHandle(msg *Message)
-	// DropHandle 接收到超时消息时触发回调
-	DropHandle(msg *Message)
+	ErrHandle(msg *Message, err error)
 	// CustomHandle 接收到自定义类型消息时触发回调
 	CustomHandle(ctx Context)
 	// Disconnect 连接断开触发回调
@@ -97,27 +95,18 @@ const (
 	ConnStateTypeOnError
 )
 
-func NewConn(localId uint16, conn net.Conn, msgCtrl MsgController, conns Connections, h Handler, route Router) (c *Connect, err error) {
+func NewConn(localId, remoteId uint16, conn net.Conn, msgCtrl MsgController, conns Connections, route Router) (c *Connect) {
 	c = new(Connect)
-	c.remoteId, err = h.Connection(conn)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
+	c.remoteId = remoteId
 	c.MsgController = msgCtrl
 	c.localId = localId
 	c.conn = conn
-	c.Handler = h
 	c.activate = time.Now().UnixMilli()
 	c.MaxMsgLen = 0x00FFFFFF
 	c.ReadBuffSize = 4096
-	if val, _ := route.(*RouteTable); val != nil {
-		c.Router = route
-	}
-	if val, _ := conns.(*Conns); val != nil {
-		c.Connections = conns
-	}
-	return c, nil
+	c.Router = route
+	c.Connections = conns
+	return c
 }
 
 type Connect struct {
@@ -132,7 +121,6 @@ type Connect struct {
 	MsgController
 	Router
 	Connections
-	Handler
 }
 
 func (c *Connect) Activate() int64 {
@@ -140,60 +128,73 @@ func (c *Connect) Activate() int64 {
 }
 
 // Serve 开启服务
-func (c *Connect) Serve() {
+func (c *Connect) Serve(handler Handler) {
 	var err error
-	defer func() { c.Disconnect(c.remoteId, err) }()
+	defer func() {
+		_ = c.Close()
+		handler.Disconnect(c.remoteId, err)
+	}()
 	c.state = ConnStateTypeOnConnect
 	headerBuf := make([]byte, MsgHeaderLen)
 	reader := bufio.NewReaderSize(c.conn, c.ReadBuffSize)
+	handler.Connection(c)
 	for {
 		msg := c.DefaultMsg()
 		err = msg.Decode(reader, headerBuf, c.MaxMsgLen)
 		if err != nil {
-			err = c.connectionErr(ctx.WithValue(ctx.Background(), "msg", msg), err)
+			err = c.connectionErr(ctx.WithValue(ctx.Background(), "msg", msg), err, handler)
 			return
 		}
 		c.activate = time.Now().UnixMilli()
-		if msg.DestId != c.localId && msg.DestId != 0 {
+		if msg.DestId != c.localId {
 			if c.Connections == nil {
 				if err = c.WriteMsg(msg.ErrReply(MsgType_ReplyErrConnNotExist, c.localId)); err != nil {
-					c.ErrHandle(msg)
+					handler.ErrHandle(msg, &ErrWrite{err: err})
 				}
 				continue
 			}
-			conn, ok := c.Connections.GetConn(msg.DestId)
-			if ok {
+			conn, exist := c.Connections.GetConn(msg.DestId)
+			if exist {
 				if err = conn.WriteMsg(msg); err == nil {
 					continue
 				}
 			}
 			if c.Router != nil {
-				next, ok := c.Router.GetRouteNext(msg.DestId)
-				if ok {
-					if conn, ok = c.Connections.GetConn(next); ok {
-						if err = conn.WriteMsg(msg); err == nil {
-							continue
-						}
+				nextList := c.Router.GetDstRoutes(msg.DestId)
+				success := false
+				for _, next := range nextList {
+					if conn, exist = c.Connections.GetConn(next.Next); !exist {
+						c.Router.DeleteRouteNextHop(msg.DestId, next.Next, next.Hop)
+						continue
 					}
+					if err = conn.WriteMsg(msg); err != nil {
+						c.Router.DeleteRouteNextHop(msg.DestId, next.Next, next.Hop)
+						continue
+					}
+					success = true
+					break
+				}
+				if success {
+					continue
 				}
 			}
 			if err = c.WriteMsg(msg.ErrReply(MsgType_ReplyErrConnNotExist, c.localId)); err != nil {
-				c.ErrHandle(msg)
+				handler.ErrHandle(msg, &ErrWrite{err: err})
 			}
 			continue
 		}
 		switch msg.Type {
 		case MsgType_Send:
-			c.Handle(&context{Message: msg, WriterMsg: c})
+			handler.Handle(&context{Message: msg, WriterMsg: c})
 		case MsgType_Reply, MsgType_ReplyErr, MsgType_ReplyErrConnNotExist, MsgType_ReplyErrLenLimit, MsgType_ReplyErrCheckSum:
 			if !c.SetMsgChan(msg) {
-				c.DropHandle(msg)
+				handler.ErrHandle(msg, DEFAULT_ErrDrop)
 			}
 		case MsgType_PushErrAuthFailIdExist:
 			err = DEFAULT_ErrAuthIdExist
 			return
 		default:
-			c.CustomHandle(&context{Message: msg, WriterMsg: c})
+			handler.CustomHandle(&context{Message: msg, WriterMsg: c})
 		}
 	}
 }
@@ -277,7 +278,7 @@ func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
 	}
 }
 
-func (c *Connect) connectionErr(ctx ctx.Context, err error) error {
+func (c *Connect) connectionErr(ctx ctx.Context, err error, handler Handler) error {
 	switch c.state {
 	case ConnStateTypeOnClose:
 		return nil
@@ -285,7 +286,7 @@ func (c *Connect) connectionErr(ctx ctx.Context, err error) error {
 		return c.err
 	default:
 		msg, ok := ctx.Value("msg").(*Message)
-		var typ uint8 = MsgType_ReplyErrCheckSum
+		typ := MsgType_ReplyErrCheckSum
 		switch err.(type) {
 		case *ErrMsgCheck:
 			c.state = ConnStateTypeOnError
@@ -300,12 +301,10 @@ func (c *Connect) connectionErr(ctx ctx.Context, err error) error {
 			return err
 		}
 		if ok {
-			c.ErrHandle(msg)
 			if err = c.WriteMsg(msg.ErrReply(typ, c.localId)); err != nil {
-				c.ErrHandle(msg)
+				handler.ErrHandle(msg, err)
 			}
 		}
-		_ = c.Close()
 		return err
 	}
 }

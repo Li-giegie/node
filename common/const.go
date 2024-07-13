@@ -14,6 +14,7 @@ var (
 	DEFAULT_ErrAuthIdExist       = new(ErrAuthIdExist)
 	DEFAULT_ErrMultipleReply     = errors.New("multiple reply are not allowed")
 	DEFAULT_ErrReplyErrorInvalid = new(ErrReplyErrorInvalid)
+	DEFAULT_ErrDrop              = new(ErrDrop)
 )
 
 type ErrMsgLenLimit struct {
@@ -73,4 +74,19 @@ type ErrReplyError struct {
 
 func (e *ErrReplyError) Error() string {
 	return string(e.b)
+}
+
+type ErrWrite struct {
+	err error
+}
+
+func (e *ErrWrite) Error() string {
+	return e.err.Error()
+}
+
+type ErrDrop struct {
+}
+
+func (e *ErrDrop) Error() string {
+	return "message id not exist or timeout message"
 }

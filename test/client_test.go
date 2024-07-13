@@ -23,8 +23,12 @@ type ClientHandle struct {
 	stopC       chan error
 }
 
-func (c *ClientHandle) Connection(conn net.Conn) (remoteId uint16, err error) {
+func (c *ClientHandle) Init(conn net.Conn) (remoteId uint16, err error) {
 	return c.AuthProtocol.ConnectionClient(conn, c.id, c.key, c.authTimeout)
+}
+
+func (c *ClientHandle) Connection(conn common.Conn) {
+
 }
 
 func (c *ClientHandle) Handle(ctx common.Context) {
@@ -36,12 +40,8 @@ func (c *ClientHandle) Handle(ctx common.Context) {
 	}()
 }
 
-func (c *ClientHandle) ErrHandle(msg *common.Message) {
+func (c *ClientHandle) ErrHandle(msg *common.Message, err error) {
 	log.Println("ErrHandle ", msg.String())
-}
-
-func (c *ClientHandle) DropHandle(msg *common.Message) {
-	log.Println("DropHandle ", msg.String())
 }
 
 func (c *ClientHandle) CustomHandle(ctx common.Context) {
