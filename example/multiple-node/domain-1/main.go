@@ -16,8 +16,8 @@ var key = flag.String("key", "hello", "auth key")
 
 func main() {
 	flag.Parse()
-	auth, err := node.NewAuthenticationNode("tcp", *raddr, func(conn net.Conn) (remoteId uint16, err error) {
-		return new(protocol.AuthProtocol).ConnectionClient(conn, uint16(*id), *key, time.Second*5)
+	externalDomainNode, err := node.DialExternalDomainNode("tcp", *raddr, func(conn net.Conn) (remoteId uint16, err error) {
+		return protocol.NewClientAuthProtocol(uint16(*id), *key, time.Second*5).Init(conn)
 	})
 	if err != nil {
 		log.Fatalln(err)
@@ -27,10 +27,12 @@ func main() {
 		log.Fatalln(err)
 	}
 	defer srv.Close()
-	if err = srv.Bind(auth); err != nil {
-		log.Println(err)
-		return
-	}
+	go func() {
+		if err = srv.Bind(externalDomainNode); err != nil {
+			log.Println(err)
+			return
+		}
+	}()
 	if err = srv.Serve(); err != nil {
 		log.Fatalln(err)
 	}

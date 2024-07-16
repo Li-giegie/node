@@ -1,27 +1,28 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/common"
 	"github.com/Li-giegie/node/protocol"
 	"log"
 	"net"
+	"os"
 	"time"
 )
 
 type ServerHandle struct {
-	*protocol.NodeDiscoveryProtocol
-	*protocol.AuthProtocol
-	id      uint16
-	key     string
-	addr    string
-	timeout time.Duration
+	protocol.NodeDiscoveryProtocol
+	protocol.ServerAuthProtocol
+	id   uint16
+	addr string
 	node.Server
 }
 
 func (h *ServerHandle) Init(conn net.Conn) (remoteId uint16, err error) {
-	return h.ConnectionServer(conn, h.id, h.key, h.timeout)
+	return h.ServerAuthProtocol.Init(conn)
 }
 
 func (h *ServerHandle) Connection(conn common.Conn) {
@@ -57,8 +58,37 @@ func (h *ServerHandle) Listen() error {
 	}
 	log.Printf("server [%d] start success\n", h.id)
 	h.Server = srv
-	h.NodeDiscoveryProtocol = protocol.NewNodeDiscoveryProtocol()
-	go h.NodeDiscoveryProtocol.InitServer(srv, time.Second*3)
+	h.NodeDiscoveryProtocol = protocol.NewNodeDiscoveryProtocol(srv)
+	go h.NodeDiscoveryProtocol.StartTimingQueryEnableProtoNode(context.Background(), time.Second*10)
+	go func() {
+		scan := bufio.NewScanner(os.Stdin)
+	loop1:
+		fmt.Print(">>")
+		for scan.Scan() {
+			switch scan.Text() {
+			case "":
+				fmt.Print(">>")
+			case "route":
+				fmt.Print("route>>")
+				for scan.Scan() {
+					switch scan.Text() {
+					case "":
+						fmt.Print("route>>")
+					case "list":
+						srv.PrintString()
+						fmt.Print("route>>")
+					case "q", "quit", "exit":
+						goto loop1
+					default:
+						fmt.Printf("未知命令 %s\nroute>>", scan.Text())
+					}
+				}
+			default:
+				fmt.Printf("未知命令 %s\n>>", scan.Text())
+			}
+
+		}
+	}()
 	return nil
 }
 
@@ -72,10 +102,8 @@ func (h *ServerHandle) Serve() (err error) {
 
 func NewServerHandle(id uint16, addr string, key string, timeout time.Duration) *ServerHandle {
 	return &ServerHandle{
-		AuthProtocol: new(protocol.AuthProtocol),
-		id:           id,
-		key:          key,
-		addr:         addr,
-		timeout:      timeout,
+		ServerAuthProtocol: protocol.NewServerAuthProtocol(id, key, timeout),
+		id:                 id,
+		addr:               addr,
 	}
 }

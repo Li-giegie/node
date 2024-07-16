@@ -7,13 +7,14 @@ import (
 	"github.com/Li-giegie/node/protocol"
 	"log"
 	"net"
+	"os"
 	"time"
 )
 
 type Client struct {
 	common.Conn
-	*protocol.AuthProtocol
-	*protocol.HelloProtocol
+	protocol.ClientAuthProtocol
+	protocol.ClientHelloProtocol
 	localId     uint16
 	authKey     string
 	authTimeout time.Duration
@@ -27,15 +28,12 @@ func (c *Client) Serve() (err error) {
 		return err
 	}
 	c.Conn = conn
-	c.AuthProtocol = new(protocol.AuthProtocol)
-	c.HelloProtocol = new(protocol.HelloProtocol)
-	c.Conn = conn
-	go c.HelloProtocol.InitClient(c.Conn, time.Second, time.Second*2, time.Second*14, &LogWriter{})
+	go c.ClientHelloProtocol.StartClient(conn)
 	return
 }
 
 func (c *Client) Init(conn net.Conn) (remoteId uint16, err error) {
-	return c.AuthProtocol.ConnectionClient(conn, c.localId, c.authKey, c.authTimeout)
+	return c.ClientAuthProtocol.Init(conn)
 }
 
 func (c *Client) Connection(conn common.Conn) {
@@ -52,7 +50,7 @@ func (c *Client) ErrHandle(msg *common.Message, err error) {
 }
 
 func (c *Client) CustomHandle(ctx common.Context) {
-	if c.HelloProtocol.CustomHandle(ctx) {
+	if c.ClientHelloProtocol.CustomHandle(ctx) {
 		log.Println("client CustomHandle: ", ctx.String())
 	}
 }
@@ -68,6 +66,8 @@ func main() {
 	client.authTimeout = time.Second * 6
 	client.authKey = "hello"
 	client.remoteAddr = "127.0.0.1:8080"
+	client.ClientAuthProtocol = protocol.NewClientAuthProtocol(client.localId, client.authKey, client.authTimeout)
+	client.ClientHelloProtocol = protocol.NewClientHelloProtocol(time.Second, time.Second*3, time.Second*15, os.Stdout)
 	client.stopChan = make(chan error, 1)
 	err := client.Serve()
 	if err != nil {
@@ -88,12 +88,4 @@ func main() {
 	time.Sleep(time.Second * 10)
 	client.Close()
 	<-client.stopChan
-}
-
-type LogWriter struct {
-}
-
-func (l *LogWriter) Write(b []byte) (n int, err error) {
-	log.Print(string(b))
-	return
 }

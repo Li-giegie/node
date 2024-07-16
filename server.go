@@ -21,8 +21,8 @@ type Server interface {
 	Close() error
 	// Id 获取服务Id
 	Id() uint16
-	// Bind 绑定一个外部连接，通常用于其他域互联形成一个域
-	Bind(u AuthenticationNode) error
+	// Bind 同步阻塞调用，绑定一个外部连接，通常用于其他域互联形成一个域
+	Bind(u ExternalDomainNode) error
 	common.Router
 }
 
@@ -119,7 +119,7 @@ func (s *server) HandleConn(c net.Conn) {
 
 var NodeExist = errors.New("node id exist")
 
-func (s *server) Bind(u AuthenticationNode) error {
+func (s *server) Bind(u ExternalDomainNode) error {
 	if s.id == u.RemoteId() {
 		return NodeExist
 	}
@@ -127,11 +127,9 @@ func (s *server) Bind(u AuthenticationNode) error {
 	if !s.Conns.Add(conn.RemoteId(), conn) {
 		return NodeExist
 	}
-	go func() {
-		conn.Serve(s)
-		s.Conns.Del(conn.RemoteId())
-		_ = conn.Close()
-	}()
+	conn.Serve(s)
+	s.Conns.Del(conn.RemoteId())
+	_ = conn.Close()
 	return nil
 }
 

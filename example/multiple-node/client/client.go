@@ -17,16 +17,14 @@ import (
 )
 
 type ClientHandle struct {
-	id      uint16
-	key     string
-	addr    string
-	timeout time.Duration
-	*protocol.AuthProtocol
+	id   uint16
+	addr string
+	protocol.ClientAuthProtocol
 	common.Conn
 }
 
 func (c *ClientHandle) Init(conn net.Conn) (remoteId uint16, err error) {
-	return c.AuthProtocol.ConnectionClient(conn, c.id, c.key, c.timeout)
+	return c.ClientAuthProtocol.Init(conn)
 }
 
 func (c *ClientHandle) Connection(conn common.Conn) {
@@ -55,17 +53,16 @@ func (c *ClientHandle) Serve() error {
 	if err != nil {
 		return err
 	}
-	c.AuthProtocol = new(protocol.AuthProtocol)
+
 	c.Conn = conn
 	return nil
 }
 
 func NewClientHandle(id uint16, addr string, key string) *ClientHandle {
 	c := new(ClientHandle)
-	c.key = key
 	c.id = id
-	c.timeout = time.Second * 6
 	c.addr = addr
+	c.ClientAuthProtocol = protocol.NewClientAuthProtocol(c.id, key, time.Second*6)
 	return c
 }
 

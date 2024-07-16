@@ -7,12 +7,13 @@ import (
 	"github.com/Li-giegie/node/protocol"
 	"log"
 	"net"
+	"os"
 	"time"
 )
 
 type Server struct {
-	*protocol.AuthProtocol
-	*protocol.HelloProtocol
+	protocol.ServerAuthProtocol
+	protocol.ServerHelloProtocol
 	node.Server
 	key         string
 	localId     uint16
@@ -22,7 +23,7 @@ type Server struct {
 
 // Connection 建立连接回调，再该回调中作认证
 func (s *Server) Init(conn net.Conn) (remoteId uint16, err error) {
-	return s.AuthProtocol.ConnectionServer(conn, s.localId, s.key, s.authTimeout)
+	return s.ServerAuthProtocol.Init(conn)
 }
 
 func (s *Server) Connection(conn common.Conn) {
@@ -43,7 +44,7 @@ func (s *Server) ErrHandle(msg *common.Message, err error) {
 }
 
 func (s *Server) CustomHandle(ctx common.Context) {
-	if s.HelloProtocol.CustomHandle(ctx) {
+	if s.ServerHelloProtocol.CustomHandle(ctx) {
 		log.Println("CustomHandle: ", ctx.String())
 		ctx.CustomReply(ctx.Type(), []byte("server_node_0 CustomHandle: ok"))
 	}
@@ -60,9 +61,7 @@ func (s *Server) Serve() error {
 	}
 	defer l.Close()
 	s.Server = l
-	s.AuthProtocol = new(protocol.AuthProtocol)
-	s.HelloProtocol = new(protocol.HelloProtocol)
-	go s.HelloProtocol.InitServer(s, time.Second, time.Second*5, time.Second*25, &LogWriter{})
+	go s.ServerHelloProtocol.StartServer(l)
 	return l.Serve()
 }
 
@@ -72,15 +71,9 @@ func main() {
 	srv.authTimeout = time.Second * 6
 	srv.key = "hello"
 	srv.addr = "0.0.0.0:8080"
+	srv.ServerAuthProtocol = protocol.NewServerAuthProtocol(srv.localId, srv.key, srv.authTimeout)
+	srv.ServerHelloProtocol = protocol.NewServerHelloProtocol(time.Second*3, time.Second*3, time.Second*60, os.Stdout)
 	if err := srv.Serve(); err != nil {
 		log.Fatalln(err)
 	}
-}
-
-type LogWriter struct {
-}
-
-func (l *LogWriter) Write(b []byte) (n int, err error) {
-	log.Print(string(b))
-	return
 }
