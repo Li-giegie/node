@@ -1,13 +1,13 @@
 package main
 
 import (
-	"errors"
+	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/common"
+	"github.com/Li-giegie/node/example/basic"
 	"github.com/Li-giegie/node/protocol"
 	"log"
 	"net"
-	"os"
 	"time"
 )
 
@@ -21,7 +21,6 @@ type Server struct {
 	authTimeout time.Duration
 }
 
-// Connection 建立连接回调，再该回调中作认证
 func (s *Server) Init(conn net.Conn) (remoteId uint16, err error) {
 	return s.ServerAuthProtocol.Init(conn)
 }
@@ -32,11 +31,7 @@ func (s *Server) Connection(conn common.Conn) {
 
 func (s *Server) Handle(ctx common.Context) {
 	log.Println("handle: ", ctx.String())
-	if len(ctx.Data()) == 0 {
-		ctx.ErrReply(nil, errors.New("invalid data"))
-		return
-	}
-	ctx.Reply([]byte("server_node_0 Handle: ok"))
+	ctx.Reply([]byte(fmt.Sprintf("server [%d] handle reply: %s", s.localId, ctx.Data())))
 }
 
 func (s *Server) ErrHandle(msg *common.Message, err error) {
@@ -60,20 +55,26 @@ func (s *Server) Serve() error {
 		return err
 	}
 	defer l.Close()
+	log.Printf("server [%d] start success\n", s.localId)
 	s.Server = l
 	go s.ServerHelloProtocol.StartServer(l)
 	return l.Serve()
 }
 
 func main() {
+	startFSet := basic.NewStartFlagSet().Parse()
 	srv := new(Server)
-	srv.localId = 0
-	srv.authTimeout = time.Second * 6
-	srv.key = "hello"
-	srv.addr = "0.0.0.0:8080"
+	srv.localId = uint16(startFSet.LId)
+	srv.authTimeout = time.Millisecond * time.Duration(startFSet.AuthTimeout)
+	srv.key = startFSet.Key
+	srv.addr = startFSet.LAddr
 	srv.ServerAuthProtocol = protocol.NewServerAuthProtocol(srv.localId, srv.key, srv.authTimeout)
-	srv.ServerHelloProtocol = protocol.NewServerHelloProtocol(time.Second*3, time.Second*3, time.Second*60, os.Stdout)
-	if err := srv.Serve(); err != nil {
-		log.Fatalln(err)
-	}
+	srv.ServerHelloProtocol = protocol.NewServerHelloProtocol(time.Second*3, time.Second*10, time.Second*30, nil)
+	go func() {
+		if err := srv.Serve(); err != nil {
+			log.Fatalln(err)
+		}
+	}()
+	time.Sleep(time.Second)
+	basic.ParseCmd(nil, srv)
 }

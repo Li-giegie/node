@@ -11,6 +11,12 @@ import (
 	"time"
 )
 
+var (
+	protoMsgType_Hello_Send    = GetMsgType()
+	protoMsgType_Hello_Reply   = GetMsgType()
+	protoMsgType_NodeDiscovery = GetMsgType()
+)
+
 type NodeDiscoveryProtocol interface {
 	StartTimingQueryEnableProtoNode(ctx context.Context, timeout time.Duration) (err error)
 	Connection(conn common.Conn)
@@ -19,7 +25,7 @@ type NodeDiscoveryProtocol interface {
 }
 
 func NewNodeDiscoveryProtocol(n node_discovery.DiscoveryNode) NodeDiscoveryProtocol {
-	return node_discovery.NewNodeDiscoveryProtocol(n, GetMsgType())
+	return node_discovery.NewNodeDiscoveryProtocol(n, protoMsgType_NodeDiscovery)
 }
 
 type ClientAuthProtocol interface {
@@ -45,7 +51,7 @@ type ServerHelloProtocol interface {
 }
 
 func NewServerHelloProtocol(interval time.Duration, timeout time.Duration, timeoutClose time.Duration, output io.Writer) ServerHelloProtocol {
-	return hello.NewHelloProtocol(GetMsgType(), GetMsgType(), interval, timeout, timeoutClose, output)
+	return hello.NewHelloProtocol(protoMsgType_Hello_Send, protoMsgType_Hello_Reply, interval, timeout, timeoutClose, output)
 }
 
 type ClientHelloProtocol interface {
@@ -55,5 +61,5 @@ type ClientHelloProtocol interface {
 }
 
 func NewClientHelloProtocol(interval time.Duration, timeout time.Duration, timeoutClose time.Duration, output io.Writer) ClientHelloProtocol {
-	return hello.NewHelloProtocol(GetMsgType(), GetMsgType(), interval, timeout, timeoutClose, output)
+	return hello.NewHelloProtocol(protoMsgType_Hello_Send, protoMsgType_Hello_Reply, interval, timeout, timeoutClose, output)
 }

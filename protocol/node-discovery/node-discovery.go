@@ -93,6 +93,7 @@ func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.Context) (next bool) {
 	if n.ProtocolMsgType != ctx.Type() {
 		return true
 	}
+	next = false
 	go func() {
 		srcId := ctx.SrcId()
 		protoMsg, err := new(ProtoMsg).Decode(ctx.Data())
@@ -159,7 +160,7 @@ func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.Context) (next bool) {
 			log.Println("invalid protocol Message")
 		}
 	}()
-	return false
+	return
 }
 
 func (n *NodeDiscoveryProtocol) AddNode(id uint16) bool {

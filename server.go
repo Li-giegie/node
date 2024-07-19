@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"errors"
 	"github.com/Li-giegie/node/common"
 	"log"
@@ -23,6 +24,9 @@ type Server interface {
 	Id() uint16
 	// Bind 同步阻塞调用，绑定一个外部连接，通常用于其他域互联形成一个域
 	Bind(u ExternalDomainNode) error
+	// Request 发起一个请求
+	Request(ctx context.Context, dst uint16, data []byte) ([]byte, error)
+	Send(dst uint16, data []byte) error
 	common.Router
 }
 
@@ -133,6 +137,37 @@ func (s *server) Bind(u ExternalDomainNode) error {
 	return nil
 }
 
+func (s *server) Request(ctx context.Context, dst uint16, data []byte) ([]byte, error) {
+	log.Println("dst", dst)
+	conn, ok := s.GetConn(dst)
+	if ok {
+		return conn.Request(ctx, data)
+	}
+	rInfo := s.GetDstRoutes(dst)
+	for i := 0; i < len(rInfo); i++ {
+		conn, ok = s.GetConn(rInfo[i].Next)
+		if ok {
+			return conn.Request(ctx, data)
+		}
+	}
+	return nil, common.DEFAULT_ErrConnNotExist
+}
+
+func (s *server) Send(dst uint16, data []byte) error {
+	conn, ok := s.GetConn(dst)
+	if ok {
+		return conn.Send(data)
+	}
+	rInfo := s.GetDstRoutes(dst)
+	for i := 0; i < len(rInfo); i++ {
+		conn, ok = s.GetConn(rInfo[i].Next)
+		if ok {
+			return conn.Send(data)
+		}
+	}
+	return common.DEFAULT_ErrConnNotExist
+}
+
 func (s *server) Id() uint16 {
 	return s.id
 }
@@ -165,17 +200,6 @@ func WithSrvMaxConns(n int) SrvOption {
 		s.MaxConns = n
 	}
 }
-
-// WithSrvMaxMsgLen 最大消息接收长度 > 0 <= 256*256*256-1 时有效 最大值3个字节范围的正整数
-//func WithSrvMaxMsgLen(n int) SrvOption {
-//	return func(s *server) error {
-//		if n < 0 || n > 0x00FFFFFF {
-//			return errors.New("err: MaxMsgLen > 0 < 0x00FFFFFF,3byte")
-//		}
-//		s.MaxMsgLen = uint32(n)
-//		return nil
-//	}
-//}
 
 // WIthSrvMsgPoolSize 消息池容量，消息在从池子中创建和销毁，这一行为是考虑到GC压力
 func WIthSrvMsgPoolSize(n int) SrvOption {
