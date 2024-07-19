@@ -1,4 +1,4 @@
-package common
+package test
 
 import (
 	"bytes"
@@ -9,31 +9,20 @@ import (
 	"time"
 )
 
-type Router interface {
-	AddRoute(dst, next, hop, parentNode uint16)
-	DeleteRoute(dst, next, hop, parentNode uint16) bool
-	DeleteRouteAll(dst uint16)
-	DeleteNextRoute(next uint16) bool
-	RouteTableOutput() []byte
-	PrintString()
-	GetDstRoutes(dst uint16) []*RouteInfo
-	deleteRoute(dst uint16, info *RouteInfo) bool
-}
-
 type RouteTable struct {
-	routes map[uint16][]*RouteInfo
+	routes map[uint16][]*routeInfo
 	*sync.RWMutex
 }
 
-func NewRouter() Router {
+func NewRouter() *RouteTable {
 	return &RouteTable{
-		routes:  make(map[uint16][]*RouteInfo),
+		routes:  make(map[uint16][]*routeInfo),
 		RWMutex: &sync.RWMutex{},
 	}
 }
 
 func (r *RouteTable) AddRoute(dst, next, hop, parentNode uint16) {
-	route := &RouteInfo{
+	route := &routeInfo{
 		UnixMilli:  time.Now().UnixMilli(),
 		Next:       next,
 		Hop:        hop,
@@ -42,7 +31,7 @@ func (r *RouteTable) AddRoute(dst, next, hop, parentNode uint16) {
 	r.Lock()
 	info, ok := r.routes[dst]
 	if !ok {
-		r.routes[dst] = []*RouteInfo{route}
+		r.routes[dst] = []*routeInfo{route}
 		r.Unlock()
 		return
 	}
@@ -58,8 +47,6 @@ func (r *RouteTable) AddRoute(dst, next, hop, parentNode uint16) {
 			break
 		}
 		if next == info[i].Next && parentNode == info[i].ParentNode {
-			info[i].UnixMilli = time.Now().UnixMilli()
-			r.routes[dst] = info
 			r.Unlock()
 			return
 		}
@@ -67,7 +54,7 @@ func (r *RouteTable) AddRoute(dst, next, hop, parentNode uint16) {
 	if index == -1 {
 		info = append(info, route)
 	} else {
-		info = append(info[:index], append([]*RouteInfo{route}, info[index:]...)...)
+		info = append(info[:index], append([]*routeInfo{route}, info[index:]...)...)
 	}
 	r.routes[dst] = info
 	r.Unlock()
@@ -107,41 +94,13 @@ func (r *RouteTable) DeleteRoute(dst, next, hop, parentNode uint16) bool {
 	r.Unlock()
 	return true
 }
-func (r *RouteTable) DeleteNextRoute(next uint16) bool {
-	nextList := make([]*RouteInfo, 0, 5)
-	dst := make([]uint16, 0, 5)
-	r.Lock()
-	for u, infos := range r.routes {
-		for _, info := range infos {
-			if info.Next == next {
-				dst = append(dst, u)
-				nextList = append(nextList, info)
-			}
-		}
-	}
-	r.Unlock()
-	for i, u := range dst {
-		r.DeleteRoute(u, nextList[i].Next, nextList[i].Hop, nextList[i].ParentNode)
-	}
-	return true
-}
 
-func (r *RouteTable) DeleteRouteAll(dst uint16) {
-	r.Lock()
-	delete(r.routes, dst)
-	r.Unlock()
-}
+func (r *RouteTable) deleteRoute(info *routeInfo) {
 
-func (r *RouteTable) deleteRoute(dst uint16, info *RouteInfo) bool {
-	return r.DeleteRoute(dst, info.Next, info.Hop, info.ParentNode)
 }
 
 func (r *RouteTable) RouteTableOutput() []byte {
 	r.RLock()
-	if len(r.routes) == 0 {
-		r.RUnlock()
-		return []byte("route is empty\n")
-	}
 	buf := bytes.NewBuffer(make([]byte, 0, 128))
 	buf.WriteString("next\thop\tparent-node\ttime\t\n")
 	for u, infos := range r.routes {
@@ -162,21 +121,14 @@ func (r *RouteTable) PrintString() {
 	_, _ = os.Stdout.Write(r.RouteTableOutput())
 }
 
-func (r *RouteTable) GetDstRoutes(dst uint16) []*RouteInfo {
-	r.RLock()
-	v, _ := r.routes[dst]
-	r.RUnlock()
-	return v
-}
-
-type RouteInfo struct {
+type routeInfo struct {
 	UnixMilli  int64
 	Next       uint16
 	Hop        uint16
 	ParentNode uint16
 }
 
-func searchRouteInfoHop(info []*RouteInfo, target uint16) int {
+func searchRouteInfoHop(info []*routeInfo, target uint16) int {
 	left, right := 0, len(info)-1
 	for left <= right {
 		mid := left + (right-left)/2
@@ -192,7 +144,7 @@ func searchRouteInfoHop(info []*RouteInfo, target uint16) int {
 	return -1
 }
 
-func searchRouteInfoNext(info []*RouteInfo, next uint16) int {
+func searchRouteInfoNext(info []*routeInfo, next uint16) int {
 	left, right := 0, len(info)-1
 	result := -1 // 如果没有找到，则返回-1
 	for left <= right {
