@@ -13,20 +13,20 @@ go build
 ### 启动
 ```go
 domain 10
-./multiple-domain -id=10 -laddr=0.0.0
-.\client.exe -lid=1 -raddr 0.0.0.0:8010
-.\client.exe -lid=2 -raddr 0.0.0.0:8010
+./multiple-domain -id=10 -laddr=0.0.0.0:8010
+./client -lid=1 -raddr 0.0.0.0:8010
+./client -lid=2 -raddr 0.0.0.0:8010
 
 domain 20
-.\multiple-domain.exe -id=20 -laddr=0.0.0.0:8020 -raddr=0.0.0.0:8010 -enablebind
-.\client.exe -lid=21 -raddr 0.0.0.0:8020
+./multiple-domain -id=20 -laddr=0.0.0.0:8020 -raddr=0.0.0.0:8010 -enablebind
+./client -lid=21 -raddr 0.0.0.0:8020
 
 domain 30
-.\multiple-domain.exe -id=30 -laddr=0.0.0.0:8030 -raddr=0.0.0.0:8020 -enablebind
-.\client.exe -lid=31 -raddr 0.0.0.0:8030
+./multiple-domain -id=30 -laddr=0.0.0.0:8030 -raddr=0.0.0.0:8020 -enablebind
+./client -lid=31 -raddr 0.0.0.0:8030
 
 domain 40
-.\multiple-domain.exe -id=40 -laddr=0.0.0.0:8040 -raddr=0.0.0.0:8030 -enablebind
-.\client.exe -lid=41 -raddr 0.0.0.0:8040
-.\client.exe -lid=42 -raddr 0.0.0.0:8040
+./multiple-domain -id=40 -laddr=0.0.0.0:8040 -raddr=0.0.0.0:8030 -enablebind
+./client -lid=41 -raddr 0.0.0.0:8040
+./client -lid=42 -raddr 0.0.0.0:8040
 ```
