@@ -162,13 +162,13 @@ func (c *Connect) Serve(handler Handler) {
 			if c.Router != nil {
 				nextList := c.Router.GetDstRoutes(msg.DestId)
 				success := false
-				for _, next := range nextList {
-					if conn, exist = c.Connections.GetConn(next.Next); !exist {
-						c.Router.DeleteRouteNextHop(msg.DestId, next.Next, next.Hop)
+				for i := 0; i < len(nextList); i++ {
+					if conn, exist = c.Connections.GetConn(nextList[i].Next); !exist {
+						c.Router.deleteRoute(msg.DestId, nextList[i])
 						continue
 					}
 					if err = conn.WriteMsg(msg); err != nil {
-						c.Router.DeleteRouteNextHop(msg.DestId, next.Next, next.Hop)
+						c.Router.deleteRoute(msg.DestId, nextList[i])
 						continue
 					}
 					success = true
@@ -176,6 +176,9 @@ func (c *Connect) Serve(handler Handler) {
 				}
 				if success {
 					continue
+				}
+				if len(nextList) > 0 {
+					c.Router.DeleteRouteAll(msg.DestId)
 				}
 			}
 			if err = c.WriteMsg(msg.ErrReply(MsgType_ReplyErrConnNotExist, c.localId)); err != nil {

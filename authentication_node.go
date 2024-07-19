@@ -4,28 +4,27 @@ import (
 	"net"
 )
 
-type AuthenticationNode interface {
+type ExternalDomainNode interface {
 	Conn() net.Conn
 	RemoteId() uint16
 }
 
 type InitFunc func(conn net.Conn) (remoteId uint16, err error)
 
-type authenticationNode struct {
-	conn       net.Conn
-	remoteId   uint16
-	statusSync bool
+type DomainNode struct {
+	conn     net.Conn
+	remoteId uint16
 }
 
-func (u *authenticationNode) Conn() net.Conn {
+func (u *DomainNode) Conn() net.Conn {
 	return u.conn
 }
 
-func (u *authenticationNode) RemoteId() uint16 {
+func (u *DomainNode) RemoteId() uint16 {
 	return u.remoteId
 }
 
-func NewAuthenticationNode(network string, addr string, connection InitFunc) (AuthenticationNode, error) {
+func DialExternalDomainNode(network string, addr string, connection InitFunc) (ExternalDomainNode, error) {
 	conn, err := net.Dial(network, addr)
 	if err != nil {
 		return nil, err
@@ -35,9 +34,20 @@ func NewAuthenticationNode(network string, addr string, connection InitFunc) (Au
 		_ = conn.Close()
 		return nil, err
 	}
-	return &authenticationNode{
-		conn:       conn,
-		remoteId:   remoteId,
-		statusSync: false,
+	return &DomainNode{
+		conn:     conn,
+		remoteId: remoteId,
+	}, nil
+}
+
+func NewExternalDomainNode(conn net.Conn, connection InitFunc) (ExternalDomainNode, error) {
+	remoteId, err := connection(conn)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return &DomainNode{
+		conn:     conn,
+		remoteId: remoteId,
 	}, nil
 }

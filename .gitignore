@@ -4,4 +4,3 @@
 *.log
 *.exe
 temp_test.go
-node_discovery.go
