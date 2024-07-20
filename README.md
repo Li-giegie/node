@@ -61,11 +61,18 @@ type Handler interface {
     Disconnect(id uint16, err error)
 }
 ```
-[example示例](example)
+
 ## 功能
-1. send方法：仅为发送数据，并不需要具有回复，不需要明确目的地，如果api在节点中不存在，并不会通知客户端失败信息，所以客户端并不知晓这一次发送是否真的被处理，如果出现错误只会在tcp连接层出现问题才会产生，不需要明确目的地
-2. request方法：发送数据并希望在等待时间内得到对端的回复，不需要明确目的地
-3. forward方法：发送消息到指定节点处理，需要明确目的ID
+一个域内节点通信示例图如下
+
+![单域](./.README_images/single.png)
+
+多域间节点互相通信如下
+
+![多域](./.README_images/multiple.png)
+
+[example示例](example)
+
 ## 协议
 [关于协议的进一步使用 README](protocol/README.md)
 ## 更新迭代

@@ -2,7 +2,7 @@
 
 效果图
 
-![](../.README_images/多域参考图.png)
+![](../../.README_images/multiple.png)
 
 ### 构建
 ```go

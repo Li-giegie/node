@@ -2,7 +2,7 @@
 
 效果图
 
-![](../.README_images/示例图.png)
+![](../../.README_images/single.png)
 ### 构建
 客户端
 ```go
@@ -46,4 +46,4 @@ forward -id 8002 hello //发送给8001节点 hello
 8002 节点启动：./client -lid 8002 -raddr "0.0.0.0:8000"
 
 8001、8002互通
-![](../.README_images/afa034e9.png)
+![](../../.README_images/afa034e9.png)
