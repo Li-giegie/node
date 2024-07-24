@@ -1,10 +1,9 @@
 package hello
 
 import (
-	"errors"
-	"fmt"
 	"github.com/Li-giegie/node/common"
 	"io"
+	"log"
 	"time"
 )
 
@@ -14,86 +13,62 @@ type Conns interface {
 
 type HelloProtocol struct {
 	running                         bool
-	output                          io.Writer
 	HelloProtocolMsgType_Send       uint8
 	HelloProtocolMsgType_Reply      uint8
 	Interval, Timeout, TimeoutClose time.Duration
+	*log.Logger
 }
 
 func NewHelloProtocol(msgTypeSend, msgTypeReply uint8, interval, timeout, timeoutClose time.Duration, output io.Writer) *HelloProtocol {
 	return &HelloProtocol{
-		output:                     output,
 		HelloProtocolMsgType_Send:  msgTypeSend,
 		HelloProtocolMsgType_Reply: msgTypeReply,
 		Interval:                   interval,
 		Timeout:                    timeout,
 		TimeoutClose:               timeoutClose,
+		Logger:                     log.New(output, "[HelloProtocol] ", log.Ldate|log.Ltime|log.Lmsgprefix),
 	}
 }
 
-func (h *HelloProtocol) StartClient(conn common.Conn) (err error) {
-	h.running = true
-	c := conn.(*common.Connect)
-	for h.running {
-		time.Sleep(h.Interval)
-		isTimeout, isTimeoutClose := h.checkTimeout(c.Activate(), h.Timeout, h.TimeoutClose)
-		if isTimeoutClose {
-			if h.output != nil {
-				h.output.Write([]byte("HelloProtocol: timeout close\n"))
-			}
-			return errors.New("timeout close")
-		}
-		if isTimeout {
-			msg := c.MsgController.DefaultMsg()
-			msg.Type = h.HelloProtocolMsgType_Send
-			msg.SrcId = c.LocalId()
-			msg.DestId = c.RemoteId()
-			if err = c.WriteMsg(msg); err != nil {
-				if h.output != nil {
-					fmt.Fprintf(h.output, "HelloProtocol err: send hello pack fail %s\n", err.Error())
-				}
-				return err
-			}
-			c.MsgController.RecycleMsg(msg)
-			if h.output != nil {
-				h.output.Write([]byte("HelloProtocol: send hello pack\n"))
-			}
-		}
-	}
-	return nil
+type conns struct {
+	common.Conn
+}
+
+func (c *conns) GetConns() []common.Conn {
+	return []common.Conn{c.Conn}
+}
+
+func (h *HelloProtocol) StartClient(conn common.Conn) {
+	h.StartServer(&conns{Conn: conn})
 }
 
 func (h *HelloProtocol) StartServer(conns Conns) {
 	h.running = true
+	msg := new(common.Message)
+	msg.Type = h.HelloProtocolMsgType_Send
 	for h.running {
 		time.Sleep(h.Interval)
 		for _, conn := range conns.GetConns() {
-			c := conn.(*common.Connect)
-			if c == nil {
-				continue
-			}
-			isTimeout, isTimeoutClose := h.checkTimeout(c.Activate(), h.Timeout, h.TimeoutClose)
+			isTimeout, isTimeoutClose := h.checkTimeout(conn.Activate(), h.Timeout, h.TimeoutClose)
 			if isTimeoutClose {
-				if h.output != nil {
-					fmt.Fprintf(h.output, "HelloProtocol: timeout close id=%d\n", conn.LocalId())
+				if h.Logger.Writer() != nil {
+					h.Logger.Println("timeout close id", conn.RemoteId())
 				}
+				_ = conn.Close()
 				continue
 			}
 			if isTimeout {
-				msg := c.MsgController.DefaultMsg()
-				msg.Type = h.HelloProtocolMsgType_Send
-				msg.SrcId = c.LocalId()
-				msg.DestId = c.RemoteId()
-				if err := c.WriteMsg(msg); err != nil {
-					if h.output != nil {
-						fmt.Fprintf(h.output, "HelloProtocol err: send hello pack fail conn close id=%d err=%s\n", conn.LocalId(), err.Error())
+				msg.SrcId = conn.LocalId()
+				msg.DestId = conn.RemoteId()
+				if err := conn.WriteMsg(msg); err != nil {
+					if h.Logger.Writer() != nil {
+						h.Logger.Println("err: send hello ASK pack fail destId", conn.RemoteId(), err)
 					}
-					_ = c.Close()
+					_ = conn.Close()
 					continue
 				}
-				c.MsgController.RecycleMsg(msg)
-				if h.output != nil {
-					fmt.Fprintf(h.output, "HelloProtocol: send hello pack id=%d\n", conn.LocalId())
+				if h.Logger.Writer() != nil {
+					h.Logger.Println("send hello ASK pack destId", conn.RemoteId())
 				}
 			}
 		}
@@ -103,14 +78,18 @@ func (h *HelloProtocol) StartServer(conns Conns) {
 func (h *HelloProtocol) CustomHandle(ctx common.Context) (next bool) {
 	switch ctx.Type() {
 	case h.HelloProtocolMsgType_Send:
-		if h.output != nil {
-			fmt.Fprintf(h.output, "HelloProtocol: receive hello pack srcId=%d\n", ctx.SrcId())
+		if h.Logger.Writer() != nil {
+			h.Logger.Println("receive hello ASK pack srcId", ctx.SrcId())
 		}
-		ctx.CustomReply(h.HelloProtocolMsgType_Reply, nil)
+		if err := ctx.CustomReply(h.HelloProtocolMsgType_Reply, nil); err != nil {
+			if h.Logger.Writer() != nil {
+				h.Logger.Println("err: reply hello ACK pack srcId", ctx.SrcId(), "err", err)
+			}
+		}
 		return false
 	case h.HelloProtocolMsgType_Reply:
-		if h.output != nil {
-			fmt.Fprintf(h.output, "HelloProtocol: receive hello reply pack srcId=%d\n", ctx.SrcId())
+		if h.Logger.Writer() != nil {
+			h.Logger.Println("receive hello ACK pack srcId", ctx.SrcId())
 		}
 		return false
 	default:

@@ -19,13 +19,13 @@ type Context interface {
 	CustomReply(typ uint8, data []byte) error
 }
 
-type WriterMsg interface {
+type writerMsg interface {
 	WriteMsg(m *Message) (err error)
 }
 
 type context struct {
 	*Message
-	WriterMsg
+	writerMsg
 	once bool
 }
 

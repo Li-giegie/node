@@ -2,7 +2,6 @@ package authentication
 
 import (
 	"errors"
-	"fmt"
 	"github.com/Li-giegie/node/utils"
 	"net"
 	"time"
@@ -41,7 +40,6 @@ func (a *AuthProtocol) InitServer(conn net.Conn, id uint16, key string, timeout 
 		return 0, err
 	}
 	if auth.Key != key || auth.Id == id {
-		fmt.Println(auth.Key, auth.Id, id)
 		return 0, errors.New("key invalid or id clash")
 	}
 	return

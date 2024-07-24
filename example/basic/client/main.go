@@ -45,7 +45,7 @@ type Client struct {
 func NewClient(lid uint16, key, rAddr string) (c *Client, err error) {
 	c = new(Client)
 	c.ClientAuthProtocol = protocol.NewClientAuthProtocol(lid, key, time.Second*3)
-	c.ClientHelloProtocol = protocol.NewClientHelloProtocol(time.Second*3, time.Second*12, time.Second*60, nil)
+	c.ClientHelloProtocol = protocol.NewClientHelloProtocol(time.Second*3, time.Second*12, time.Second*60, os.Stdout)
 	c.Conn, err = node.Dial("tcp", rAddr, lid, c)
 	if err != nil {
 		return nil, err
@@ -73,7 +73,10 @@ func (c *Client) ErrHandle(msg *common.Message, err error) {
 }
 
 func (c *Client) CustomHandle(ctx common.Context) {
-	//log.Println("client CustomHandle: ", ctx.String())
+	if !c.ClientHelloProtocol.CustomHandle(ctx) {
+		return
+	}
+	log.Println("client CustomHandle: ", ctx.String())
 }
 
 func (c *Client) Disconnect(id uint16, err error) {

@@ -24,8 +24,8 @@ type NodeDiscoveryProtocol interface {
 	Disconnect(id uint16, err error)
 }
 
-func NewNodeDiscoveryProtocol(n node_discovery.DiscoveryNode) NodeDiscoveryProtocol {
-	return node_discovery.NewNodeDiscoveryProtocol(n, protoMsgType_NodeDiscovery)
+func NewNodeDiscoveryProtocol(n node_discovery.DiscoveryNode, out io.Writer) NodeDiscoveryProtocol {
+	return node_discovery.NewNodeDiscoveryProtocol(n, protoMsgType_NodeDiscovery, out)
 }
 
 type ClientAuthProtocol interface {
@@ -55,7 +55,7 @@ func NewServerHelloProtocol(interval time.Duration, timeout time.Duration, timeo
 }
 
 type ClientHelloProtocol interface {
-	StartClient(conn common.Conn) error
+	StartClient(conn common.Conn)
 	CustomHandle(ctx common.Context) (next bool)
 	Stop()
 }

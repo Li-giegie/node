@@ -99,7 +99,7 @@ func ParseCmd(conn common.Conn, conns Conns) {
 						conn, ok = conns.GetConn(uint16(fset.DstId))
 					}
 					if ok {
-						if err = conn.Send([]byte(fset.Text)); err != nil {
+						if _, err = conn.Write([]byte(fset.Text)); err != nil {
 							fmt.Println("send err", err)
 						}
 					} else {

@@ -65,8 +65,8 @@ func (h *ServerHandle) Listen() error {
 		return err
 	}
 	h.Server = srv
-	h.NodeDiscoveryProtocol = protocol.NewNodeDiscoveryProtocol(srv)
-	h.ServerHelloProtocol = protocol.NewServerHelloProtocol(time.Second*10, time.Second*20, time.Second*60, nil)
+	h.NodeDiscoveryProtocol = protocol.NewNodeDiscoveryProtocol(srv, os.Stdout)
+	h.ServerHelloProtocol = protocol.NewServerHelloProtocol(time.Second*5, time.Second*5, time.Second*20, os.Stdout)
 	go h.ServerHelloProtocol.StartServer(srv)
 	go h.NodeDiscoveryProtocol.StartTimingQueryEnableProtoNode(context.Background(), time.Second*10)
 	go func() {
@@ -110,7 +110,7 @@ func (h *ServerHandle) Listen() error {
 				}
 				cancel()
 			case "send":
-				if err = srv.Send(uint16(*dstId), data); err != nil {
+				if _, err = srv.WriteTo(uint16(*dstId), data); err != nil {
 					fmt.Println("send err", err)
 				}
 			case "exit":

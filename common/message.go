@@ -30,6 +30,8 @@ type Message struct {
 	Data   []byte
 }
 
+func (m *Message) Message() {}
+
 func (m *Message) String() string {
 	return fmt.Sprintf("Message { type: %d, id: %v, srcId: %v, destId: %v, data: %s}", m.Type, m.Id, m.SrcId, m.DestId, m.Data)
 }
