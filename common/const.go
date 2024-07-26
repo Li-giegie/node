@@ -21,7 +21,7 @@ type ErrMsgLenLimit struct {
 }
 
 func (*ErrMsgLenLimit) Error() string {
-	return "message length exceeds the limit size"
+	return "message length exceeds the limit size 0x00FFFFFF"
 }
 
 type ErrMsgCheck struct {

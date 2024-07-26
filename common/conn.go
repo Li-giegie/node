@@ -206,14 +206,21 @@ func (c *Connect) Write(data []byte) (n int, err error) {
 
 func (c *Connect) WriteTo(dst uint16, data []byte) (n int, err error) {
 	msg := c.NewMsg(c.localId, dst, MsgType_Send, data)
-	n, err = c.conn.Write(msg.Encode())
+	n, err = c.write(msg.Encode())
 	c.RecycleMsg(msg)
 	return n, err
 }
 
 func (c *Connect) WriteMsg(m *Message) (err error) {
-	_, err = c.conn.Write(m.Encode())
+	_, err = c.write(m.Encode())
 	return
+}
+
+func (c *Connect) write(b []byte) (n int, err error) {
+	if len(b)-MsgHeaderLen > int(c.MaxMsgLen) {
+		return 0, DEFAULT_ErrMsgLenLimit
+	}
+	return c.conn.Write(b)
 }
 
 func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
