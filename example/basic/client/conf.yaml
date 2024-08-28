@@ -1,0 +1,11 @@
+lid: 8001
+raddr: 0.0.0.0:8000
+rkey: hello
+authtimeout: 3s
+helloprotocol:
+    enable: true
+    enablestdout: false
+    outfile: "hello.log"
+    interval: 3s
+    timeout: 10s
+    timeoutclose: 30s

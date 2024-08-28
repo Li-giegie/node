@@ -20,6 +20,9 @@ type HelloProtocol struct {
 }
 
 func NewHelloProtocol(msgTypeSend, msgTypeReply uint8, interval, timeout, timeoutClose time.Duration, output io.Writer) *HelloProtocol {
+	if output == nil {
+		output = io.Discard
+	}
 	return &HelloProtocol{
 		HelloProtocolMsgType_Send:  msgTypeSend,
 		HelloProtocolMsgType_Reply: msgTypeReply,

@@ -39,10 +39,10 @@ func (s *Server) ErrHandle(msg *common.Message, err error) {
 }
 
 func (s *Server) CustomHandle(ctx common.Context) {
-	if s.ServerHelloProtocol.CustomHandle(ctx) {
-		log.Println("CustomHandle: ", ctx.String())
-		ctx.CustomReply(ctx.Type(), []byte("server_node_0 CustomHandle: ok"))
+	if !s.ServerHelloProtocol.CustomHandle(ctx) {
+		return
 	}
+	log.Println("CustomHandle: ", ctx.String())
 }
 
 func (s *Server) Disconnect(id uint16, err error) {

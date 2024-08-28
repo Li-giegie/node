@@ -2,12 +2,10 @@ module github.com/Li-giegie/node/example
 
 go 1.21.3
 
-require github.com/Li-giegie/node v0.0.0
-
 require (
-	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/spf13/cobra v1.8.1 // indirect
-	github.com/spf13/pflag v1.0.5 // indirect
+	github.com/Li-giegie/node v0.0.0
+	github.com/Li-giegie/rabbit-cli v0.0.0-20240827163237-a0becb3f9de3
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 replace github.com/Li-giegie/node v0.0.0 => ../
