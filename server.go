@@ -32,8 +32,8 @@ type Server interface {
 	Close() error
 	// Id 获取服务Id
 	Id() uint16
-	// Bind 同步阻塞调用，绑定一个外部连接，通常用于其他域互联形成一个域
-	Bind(u ExternalDomainNode) error
+	// BindBridge 绑定一个桥接域，通常用于其他域互联形成一个域
+	BindBridge(bd BridgeNode) error
 	// Request 发起一个请求
 	Request(ctx context.Context, dst uint16, data []byte) ([]byte, error)
 	WriteTo(dst uint16, data []byte) (int, error)
@@ -120,17 +120,20 @@ func (s *server) HandleConn(c net.Conn) {
 
 var NodeExist = errors.New("node id exist")
 
-func (s *server) Bind(u ExternalDomainNode) error {
-	if s.id == u.RemoteId() {
+func (s *server) BindBridge(bd BridgeNode) error {
+	if s.id == bd.RemoteId() {
 		return NodeExist
 	}
-	conn := common.NewConn(s.id, u.RemoteId(), u.Conn(), s, s.connections, s.Router)
+	conn := common.NewConn(s.id, bd.RemoteId(), bd.Conn(), s, s.connections, s.Router)
 	if !s.connections.Add(conn.RemoteId(), conn) {
 		return NodeExist
 	}
-	conn.Serve(s)
-	s.connections.Del(conn.RemoteId())
-	_ = conn.Close()
+	go func() {
+		conn.Serve(s)
+		s.connections.Del(conn.RemoteId())
+		_ = conn.Close()
+		bd.Disconnection()
+	}()
 	return nil
 }
 

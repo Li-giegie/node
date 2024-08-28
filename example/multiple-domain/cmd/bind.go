@@ -10,6 +10,26 @@ import (
 	"time"
 )
 
+type bridge struct {
+	conn       net.Conn
+	rid        uint16
+	disconnect func()
+}
+
+func (b *bridge) Conn() net.Conn {
+	return b.conn
+}
+
+func (b *bridge) RemoteId() uint16 {
+	return b.rid
+}
+
+func (b *bridge) Disconnection() {
+	if b.disconnect != nil {
+		b.disconnect()
+	}
+}
+
 var bind = &rabbit.Cmd{
 	Name:        "bind",
 	Description: "创建一个客户端连接，并绑定",
@@ -25,17 +45,17 @@ var bind = &rabbit.Cmd{
 			return fmt.Errorf("server is null")
 		}
 		srv := i.(node.Server)
-		eNode, err := node.NewExternalDomainNode(conn, func(conn net.Conn) (remoteId uint16, err error) {
-			return protocol.NewClientAuthProtocol(srv.Id(), key, time.Second*6).Init(conn)
-		})
+		remoteId, err := protocol.NewClientAuthProtocol(srv.Id(), key, time.Second*6).Init(conn)
 		if err != nil {
 			return err
 		}
-		go func() {
-			if err = srv.Bind(eNode); err != nil {
-				log.Println("bind node disconnected")
-			}
-		}()
+		if err = srv.BindBridge(&bridge{conn: conn, rid: remoteId,
+			disconnect: func() {
+				log.Println("bridge node disconnected")
+			},
+		}); err != nil {
+			log.Println("BindBridge err")
+		}
 		return nil
 	},
 }
