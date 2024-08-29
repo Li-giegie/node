@@ -6,18 +6,12 @@ import (
 	"github.com/Li-giegie/node/common"
 	"github.com/Li-giegie/node/protocol"
 	"log"
-	"net"
 )
 
 type ServerHandle struct {
 	protocol.NodeDiscoveryProtocol
-	protocol.ServerAuthProtocol
-	protocol.ServerHelloProtocol
-	node.Server
-}
-
-func (h *ServerHandle) Init(conn net.Conn) (remoteId uint16, err error) {
-	return h.ServerAuthProtocol.Init(conn)
+	protocol.HelloProtocol
+	*node.Server
 }
 
 func (h *ServerHandle) Connection(conn common.Conn) {
@@ -32,20 +26,16 @@ func (h *ServerHandle) Handle(ctx common.Context) {
 	ctx.Reply([]byte(fmt.Sprintf("server [%d] handle reply: %s", h.Server.Id(), ctx.Data())))
 }
 
-func (h *ServerHandle) ErrHandle(msg *common.Message, err error) {
+func (h *ServerHandle) ErrHandle(msg common.ErrContext, err error) {
 	log.Println("ErrHandle", msg.String())
 }
 
-func (h *ServerHandle) CustomHandle(ctx common.Context) {
-	if h.ServerHelloProtocol != nil {
-		if !h.ServerHelloProtocol.CustomHandle(ctx) {
-			return
-		}
+func (h *ServerHandle) CustomHandle(ctx common.CustomContext) {
+	if h.HelloProtocol != nil && !h.HelloProtocol.CustomHandle(ctx) {
+		return
 	}
-	if h.NodeDiscoveryProtocol != nil {
-		if !h.NodeDiscoveryProtocol.CustomHandle(ctx) {
-			return
-		}
+	if h.NodeDiscoveryProtocol != nil && !h.NodeDiscoveryProtocol.CustomHandle(ctx) {
+		return
 	}
 	log.Println("CustomHandle", ctx.String())
 }

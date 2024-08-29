@@ -3,7 +3,6 @@ package common
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -15,9 +14,7 @@ type Router interface {
 	DeleteRouteAll(dst uint16)
 	DeleteNextRoute(next uint16) bool
 	RouteTableOutput() []byte
-	PrintString()
 	GetDstRoutes(dst uint16) []*RouteInfo
-	deleteRoute(dst uint16, info *RouteInfo) bool
 }
 
 type RouteTable struct {
@@ -132,10 +129,6 @@ func (r *RouteTable) DeleteRouteAll(dst uint16) {
 	r.Unlock()
 }
 
-func (r *RouteTable) deleteRoute(dst uint16, info *RouteInfo) bool {
-	return r.DeleteRoute(dst, info.Next, info.Hop, info.ParentNode)
-}
-
 func (r *RouteTable) RouteTableOutput() []byte {
 	r.RLock()
 	if len(r.routes) == 0 {
@@ -156,10 +149,6 @@ func (r *RouteTable) RouteTableOutput() []byte {
 	}
 	r.RUnlock()
 	return buf.Bytes()
-}
-
-func (r *RouteTable) PrintString() {
-	_, _ = os.Stdout.Write(r.RouteTableOutput())
 }
 
 func (r *RouteTable) GetDstRoutes(dst uint16) []*RouteInfo {

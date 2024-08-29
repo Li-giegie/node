@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/common"
 	"github.com/Li-giegie/node/example/multiple-domain/cmd"
 	"github.com/Li-giegie/node/protocol"
 	"gopkg.in/yaml.v3"
@@ -17,10 +18,9 @@ import (
 )
 
 type Conf struct {
-	Id      uint16
-	Addr    string
-	Key     string
-	Timeout time.Duration
+	Id              uint16
+	Addr            string
+	InitConnTimeout time.Duration
 	*NodeDiscoveryProtocol
 	*HelloProtocol
 }
@@ -46,10 +46,9 @@ func init() {
 	flag.Parse()
 	if *genConfFile != "" {
 		data, err := yaml.Marshal(&Conf{
-			Id:      8000,
-			Addr:    "0.0.0.0:8000",
-			Key:     "hello",
-			Timeout: time.Second * 6,
+			Id:              8000,
+			Addr:            "0.0.0.0:8000",
+			InitConnTimeout: time.Second * 6,
 			NodeDiscoveryProtocol: &NodeDiscoveryProtocol{
 				Enable:        false,
 				QueryInterval: time.Second * 30,
@@ -72,6 +71,19 @@ func init() {
 	}
 }
 
+type name struct {
+	*node.Server
+	common.Router
+}
+
+func (n *name) GetConn(id uint16) (common.Conn, bool) {
+	return n.Conns.GetConn(id)
+}
+
+func (n *name) GetConns() []common.Conn {
+	return n.Conns.GetConns()
+}
+
 func main() {
 	data, err := os.ReadFile(*confFile)
 	if err != nil {
@@ -82,13 +94,12 @@ func main() {
 		log.Fatalln("Unmarshal conf err", err)
 	}
 	s := new(ServerHandle)
-	srv, err := node.ListenTCP(c.Id, c.Addr, s)
+	srv, err := node.ListenTCP(c.Addr, c.Id)
 	if err != nil {
 		log.Fatalln(err)
 	}
 	defer srv.Close()
 	s.Server = srv
-	s.ServerAuthProtocol = protocol.NewServerAuthProtocol(c.Id, c.Key, c.Timeout)
 	if c.HelloProtocol != nil && c.HelloProtocol.Enable {
 		var w io.Writer
 		if c.HelloProtocol.EnableStdout {
@@ -107,18 +118,19 @@ func main() {
 				w = f
 			}
 		}
-		s.ServerHelloProtocol = protocol.NewServerHelloProtocol(c.HelloProtocol.Interval, c.HelloProtocol.Timeout, c.HelloProtocol.TimeoutClose, w)
-		go s.ServerHelloProtocol.StartServer(srv)
+		s.HelloProtocol = protocol.NewHelloProtocol(c.HelloProtocol.Interval, c.HelloProtocol.Timeout, c.HelloProtocol.TimeoutClose, w)
+		go s.HelloProtocol.KeepAliveMultiple(srv.Conns)
 	}
+
 	if c.NodeDiscoveryProtocol != nil && c.NodeDiscoveryProtocol.Enable {
-		s.NodeDiscoveryProtocol = protocol.NewNodeDiscoveryProtocol(srv, os.Stdout)
+		s.NodeDiscoveryProtocol = protocol.NewNodeDiscoveryProtocol(&name{srv, srv.Router}, os.Stdout)
 		go s.NodeDiscoveryProtocol.StartTimingQueryEnableProtoNode(context.Background(), c.NodeDiscoveryProtocol.QueryInterval)
 	}
 	go func() {
 		time.Sleep(time.Second)
 		sc := bufio.NewScanner(os.Stdin)
 		fmt.Print(">>")
-		for sc.Scan() && srv.State() == node.ServerStateTypeListen {
+		for sc.Scan() && srv.State == node.StateType_Listen {
 			if sc.Text() != "" {
 				executeCmd, err := cmd.Group.ExecuteContext(context.WithValue(context.Background(), "server", srv), strings.Fields(sc.Text()))
 				if err != nil {
@@ -133,7 +145,7 @@ func main() {
 		}
 	}()
 	log.Println("start success", c.Addr)
-	if err = srv.Serve(); err != nil {
+	if err = srv.Serve(s); err != nil {
 		println(err)
 		return
 	}

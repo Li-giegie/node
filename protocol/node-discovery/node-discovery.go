@@ -19,7 +19,7 @@ type DiscoveryNode interface {
 }
 
 func NewNodeDiscoveryProtocol(c DiscoveryNode, ProtocolMsgType uint8, out io.Writer) *NodeDiscoveryProtocol {
-	return &NodeDiscoveryProtocol{
+	p := &NodeDiscoveryProtocol{
 		DiscoveryNode:                   c,
 		ProtocolMsgType:                 ProtocolMsgType,
 		QueryEnableProtocolMaxNum:       3,
@@ -28,6 +28,7 @@ func NewNodeDiscoveryProtocol(c DiscoveryNode, ProtocolMsgType uint8, out io.Wri
 		cache:                           make(map[uint16]*UniteNode),
 		Logger:                          log.New(out, "[DiscoveryNodeProtocol] ", log.Ldate|log.Ltime|log.Lmsgprefix),
 	}
+	return p
 }
 
 type NodeDiscoveryProtocol struct {
@@ -103,7 +104,7 @@ func (n *NodeDiscoveryProtocol) Connection(conn common.Conn) {
 	}()
 }
 
-func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.Context) (next bool) {
+func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.CustomContext) (next bool) {
 	if n.ProtocolMsgType != ctx.Type() {
 		return true
 	}

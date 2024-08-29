@@ -16,7 +16,6 @@ const (
 	MsgType_ReplyErrLenLimit
 	MsgType_ReplyErrCheckSum
 	MsgType_ReplyErr
-	MsgType_PushErrAuthFailIdExist
 	Null
 )
 

@@ -21,7 +21,7 @@ var write = &rabbit.Cmd{
 		if err != nil {
 			return err
 		}
-		srv := i.(node.Server)
+		srv := i.(*node.Server)
 		_, err = srv.WriteTo(uint16(id), []byte(strings.Join(args, " ")))
 		if err != nil {
 			return err

@@ -1,7 +1,6 @@
 package common
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 )
@@ -11,8 +10,6 @@ var (
 	DEFAULT_ErrMsgCheck          = new(ErrMsgCheck)
 	DEFAULT_ErrTimeout           = new(ErrTimeout)
 	DEFAULT_ErrConnNotExist      = new(ErrConnNotExist)
-	DEFAULT_ErrAuthIdExist       = new(ErrAuthIdExist)
-	DEFAULT_ErrMultipleReply     = errors.New("multiple reply are not allowed")
 	DEFAULT_ErrReplyErrorInvalid = new(ErrReplyErrorInvalid)
 	DEFAULT_ErrDrop              = new(ErrDrop)
 )
@@ -47,16 +44,6 @@ type ErrTimeout struct {
 
 func (e *ErrTimeout) Error() string {
 	return fmt.Sprintf("timeout %s", e.text)
-}
-
-type ErrAuthIdExist struct{}
-
-func (e *ErrAuthIdExist) Error() string {
-	return "auth id exist conn close"
-}
-
-func (e *ErrAuthIdExist) Type() uint8 {
-	return MsgType_PushErrAuthFailIdExist
 }
 
 const limitErrLen = 65533

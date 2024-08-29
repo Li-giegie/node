@@ -1,6 +1,8 @@
 package common
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+)
 
 func NewMsgPool(cacheMaxNum int) *MsgPool {
 	mm := new(MsgPool)
@@ -17,10 +19,10 @@ type MsgPool struct {
 
 func (mm *MsgPool) RecycleMsg(m *Message) {
 	m.Id = 0
-	m.Data = nil
 	m.Type = 0
 	m.SrcId = 0
 	m.DestId = 0
+	m.Data = nil
 	mm.p.Put(m)
 }
 

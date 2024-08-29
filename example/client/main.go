@@ -7,22 +7,21 @@ import (
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/common"
-	"github.com/Li-giegie/node/example/basic/client/cmd"
+	"github.com/Li-giegie/node/example/client/cmd"
 	"github.com/Li-giegie/node/protocol"
 	"gopkg.in/yaml.v3"
 	"io"
 	"log"
-	"net"
 	"os"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	LId         uint16
-	RAddr       string
-	RKey        string
-	AuthTimeout time.Duration
+	LId             uint16
+	RId             uint16
+	RAddr           string
+	ConnInitTimeout time.Duration
 	*HelloProtocol
 }
 
@@ -46,7 +45,6 @@ func init() {
 		data, err := yaml.Marshal(&Config{
 			LId:   0,
 			RAddr: "0.0.0.0:8000",
-			RKey:  "hello",
 			HelloProtocol: &HelloProtocol{
 				Enable:       false,
 				EnableStdout: false,
@@ -77,7 +75,6 @@ func init() {
 func main() {
 	handler := new(ClientHandler)
 	handler.stopChan = make(chan error)
-	handler.ClientAuthProtocol = protocol.NewClientAuthProtocol(c.LId, c.RKey, c.AuthTimeout)
 	if c.HelloProtocol != nil && c.HelloProtocol.Enable {
 		var w io.Writer
 		if c.HelloProtocol.EnableStdout {
@@ -95,14 +92,17 @@ func main() {
 				w = f
 			}
 		}
-		handler.ClientHelloProtocol = protocol.NewClientHelloProtocol(c.HelloProtocol.Interval, c.HelloProtocol.Timeout, c.HelloProtocol.TimeoutClose, w)
+		handler.HelloProtocol = protocol.NewHelloProtocol(c.HelloProtocol.Interval, c.HelloProtocol.Timeout, c.HelloProtocol.TimeoutClose, w)
 	}
-	conn, err := node.Dial("tcp", c.RAddr, c.LId, handler)
+	ctx, cancel := context.WithTimeout(context.Background(), c.ConnInitTimeout)
+	defer cancel()
+	conn, err := node.DialTCP(ctx, c.LId, c.RId, c.RAddr, handler)
 	if err != nil {
 		log.Println(err)
 		return
 	}
 	handler.Conn = conn
+	go handler.HelloProtocol.KeepAlive(conn)
 	log.Printf("client %d start success\n", c.LId)
 	defer conn.Close()
 	go func() {
@@ -126,13 +126,8 @@ func main() {
 
 type ClientHandler struct {
 	common.Conn
-	protocol.ClientAuthProtocol
-	protocol.ClientHelloProtocol
+	protocol.HelloProtocol
 	stopChan chan error
-}
-
-func (c *ClientHandler) Init(conn net.Conn) (remoteId uint16, err error) {
-	return c.ClientAuthProtocol.Init(conn)
 }
 
 func (c *ClientHandler) Connection(conn common.Conn) {
@@ -144,12 +139,12 @@ func (c *ClientHandler) Handle(ctx common.Context) {
 	ctx.Reply([]byte(fmt.Sprintf("ClientHandler [%d] handle reply: %s", ctx.DestId(), ctx.Data())))
 }
 
-func (c *ClientHandler) ErrHandle(msg *common.Message, err error) {
+func (c *ClientHandler) ErrHandle(msg common.ErrContext, err error) {
 	log.Println("ClientHandler ErrHandle: ", msg.String(), err)
 }
 
-func (c *ClientHandler) CustomHandle(ctx common.Context) {
-	if c.ClientHelloProtocol != nil && !c.ClientHelloProtocol.CustomHandle(ctx) {
+func (c *ClientHandler) CustomHandle(ctx common.CustomContext) {
+	if c.HelloProtocol != nil && !c.HelloProtocol.CustomHandle(ctx) {
 		return
 	}
 	log.Println("client CustomHandle: ", ctx.String())

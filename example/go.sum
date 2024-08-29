@@ -1,3 +1,5 @@
+github.com/Li-giegie/go-jeans v0.0.0-20240822074043-286467d8e7b6 h1:16EblYHi8z1IPdgvqVj+XqCCV5fxAvT5dKQ9zG1v8dA=
+github.com/Li-giegie/go-jeans v0.0.0-20240822074043-286467d8e7b6/go.mod h1:ewsHn8QY/rPPHMMH7lif5ydGrrh9Lbe+0oHkRmne6zY=
 github.com/Li-giegie/rabbit-cli v0.0.0-20240827163237-a0becb3f9de3 h1:kUYlCEXZkne62uOTAtMUPU9AIHd+VMONl4Y7LcwbVBI=
 github.com/Li-giegie/rabbit-cli v0.0.0-20240827163237-a0becb3f9de3/go.mod h1:lEiD99bsEzSaUy2WlTZs8lqcKQcX5S6LBbKOxcwEW60=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=

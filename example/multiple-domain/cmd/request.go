@@ -30,7 +30,7 @@ var request = &rabbit.Cmd{
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		srv := i.(node.Server)
+		srv := i.(*node.Server)
 		res, err := srv.Request(ctx, uint16(id), []byte(strings.Join(args, " ")))
 		if err != nil {
 			return err

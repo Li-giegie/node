@@ -24,8 +24,8 @@ func init() {
 			if i == nil {
 				return errors.New("server is null")
 			}
-			srv := i.(node.Server)
-			for i2, conn := range srv.GetConns() {
+			srv := i.(*node.Server)
+			for i2, conn := range srv.Conns.GetConns() {
 				fmt.Println(i2, conn.RemoteId())
 			}
 			return nil
@@ -40,7 +40,7 @@ func init() {
 			if i == nil {
 				return errors.New("server is null")
 			}
-			i.(node.Server).PrintString()
+			fmt.Println(string(i.(*node.Server).Router.RouteTableOutput()))
 			return nil
 		},
 	})
