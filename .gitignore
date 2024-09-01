@@ -1,0 +1,6 @@
+*.drawio
+.idea
+*.bkp
+*.log
+*.exe
+temp_test.go
