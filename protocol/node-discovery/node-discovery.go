@@ -19,15 +19,20 @@ type DiscoveryNode interface {
 }
 
 func NewNodeDiscoveryProtocol(c DiscoveryNode, ProtocolMsgType uint8, out io.Writer) *NodeDiscoveryProtocol {
-	return &NodeDiscoveryProtocol{
+	var l *log.Logger
+	if out != nil {
+		l = log.New(out, "[DiscoveryNodeProtocol] ", log.Ldate|log.Ltime|log.Lmsgprefix)
+	}
+	p := &NodeDiscoveryProtocol{
 		DiscoveryNode:                   c,
 		ProtocolMsgType:                 ProtocolMsgType,
 		QueryEnableProtocolMaxNum:       3,
 		QueryEnableProtocolIntervalStep: time.Millisecond * 500,
 		l:                               new(sync.RWMutex),
 		cache:                           make(map[uint16]*UniteNode),
-		Logger:                          log.New(out, "[DiscoveryNodeProtocol] ", log.Ldate|log.Ltime|log.Lmsgprefix),
+		Logger:                          l,
 	}
+	return p
 }
 
 type NodeDiscoveryProtocol struct {
@@ -48,7 +53,7 @@ func (n *NodeDiscoveryProtocol) StartTimingQueryEnableProtoNode(ctx context.Cont
 		for ok {
 			time.Sleep(timeout)
 			if err = n.Broadcast(protoMsg, false, 0, nil); err != nil {
-				if n.Logger.Writer() != nil {
+				if n.Logger != nil {
 					n.Logger.Println("err: StartTimingQueryEnableProtoNode Broadcast err", err)
 				}
 				stopChan <- struct{}{}
@@ -71,7 +76,7 @@ func (n *NodeDiscoveryProtocol) Connection(conn common.Conn) {
 		protoMsg.ParentNodeId = n.Id()
 		err := n.Broadcast(protoMsg, true, dstId, nil)
 		if err != nil {
-			if n.Logger.Writer() != nil {
+			if n.Logger != nil {
 				n.Logger.Println("err: Connection Broadcast err", err)
 			}
 			return
@@ -80,21 +85,21 @@ func (n *NodeDiscoveryProtocol) Connection(conn common.Conn) {
 		protoMsg.Nodes = nil
 		msg, err := n.NewMsgWithConn(conn, protoMsg)
 		if err != nil {
-			if n.Logger.Writer() != nil {
+			if n.Logger != nil {
 				n.Logger.Println("err: Connection Create protoMsg err", err)
 			}
 			return
 		}
 		for i := 1; i <= n.QueryEnableProtocolMaxNum; i++ {
 			if err = conn.WriteMsg(msg); err != nil {
-				if n.Logger.Writer() != nil {
+				if n.Logger != nil {
 					n.Logger.Println("err: Connection QueryEnableProtocol err", err)
 				}
 				return
 			}
 			time.Sleep(n.QueryEnableProtocolIntervalStep * time.Duration(i))
 			if _, ok := n.Find(dstId); ok {
-				if n.Logger.Writer() != nil {
+				if n.Logger != nil {
 					n.Logger.Println("Connection query enable protocol node id", conn.RemoteId())
 				}
 				return
@@ -103,7 +108,7 @@ func (n *NodeDiscoveryProtocol) Connection(conn common.Conn) {
 	}()
 }
 
-func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.Context) (next bool) {
+func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.CustomContext) (next bool) {
 	if n.ProtocolMsgType != ctx.Type() {
 		return true
 	}
@@ -112,7 +117,7 @@ func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.Context) (next bool) {
 		srcId := ctx.SrcId()
 		protoMsg, err := new(ProtoMsg).Decode(ctx.Data())
 		if err != nil {
-			if n.Logger.Writer() != nil {
+			if n.Logger != nil {
 				n.Logger.Println("err: CustomHandle Decode ProtoMsg err", err)
 			}
 			return
@@ -120,27 +125,27 @@ func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.Context) (next bool) {
 		switch protoMsg.Type {
 		case ProtoMsgTyp_QueryEnable:
 			if !n.AddNode(srcId) {
-				if n.Logger.Writer() != nil {
+				if n.Logger != nil {
 					n.Logger.Println("ProtoMsgTyp_QueryEnable err: CustomHandle Add Proto Node exist srcId", srcId)
 				}
 				return
 			}
 			protoMsg.Type = ProtoMsgTyp_ResponseEnable
 			if err = n.Reply(ctx, protoMsg); err != nil {
-				if n.Logger.Writer() != nil {
+				if n.Logger != nil {
 					n.Logger.Println("ProtoMsgTyp_QueryEnable err: CustomHandle enable node success reply err srcId", srcId, err)
 				}
 			}
 		case ProtoMsgTyp_ResponseEnable:
 			if !n.AddNode(srcId) {
-				if n.Logger.Writer() != nil {
+				if n.Logger != nil {
 					n.Logger.Println("ProtoMsgTyp_ResponseEnable err: CustomHandle Add Proto Node exist srcId", srcId)
 				}
 				return
 			}
 			protoMsg.Type = ProtoMsgTyp_QueryNodes
 			if err = n.Reply(ctx, protoMsg); err != nil {
-				if n.Logger.Writer() != nil {
+				if n.Logger != nil {
 					n.Logger.Println("ProtoMsgTyp_ResponseEnable err: CustomHandle enable node success reply err srcId", srcId, err)
 				}
 			}
@@ -151,7 +156,7 @@ func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.Context) (next bool) {
 			protoMsg.SetNodesWithLocalId(n.GetLocalConnIds(srcId))
 			if len(protoMsg.Nodes) > 0 {
 				if err = n.Reply(ctx, protoMsg); err != nil {
-					if n.Logger.Writer() != nil {
+					if n.Logger != nil {
 						n.Logger.Println("ProtoMsgTyp_QueryNodes err: CustomHandle enable node success reply err srcId", srcId, err)
 					}
 					return
@@ -160,7 +165,7 @@ func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.Context) (next bool) {
 			protoMsg.Type = ProtoMsgTyp_QueryNodes
 			protoMsg.Nodes = nil
 			if err = n.Broadcast(protoMsg, true, srcId, nil); err != nil {
-				if n.Logger.Writer() != nil {
+				if n.Logger != nil {
 					n.Logger.Println("ProtoMsgTyp_QueryNodes err: CustomHandle Broadcast err", err)
 				}
 				return
@@ -181,13 +186,13 @@ func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.Context) (next bool) {
 			}
 			protoMsg.AddNop(1)
 			if err = n.Broadcast(protoMsg, true, srcId, nil); err != nil {
-				if n.Logger.Writer() != nil {
+				if n.Logger != nil {
 					n.Logger.Println("ProtoMsgTyp_SetNodes err: CustomHandle Broadcast err", err)
 				}
 				return
 			}
 		default:
-			if n.Logger.Writer() != nil {
+			if n.Logger != nil {
 				n.Logger.Println("err: CustomHandle invalid protocol Message")
 			}
 		}

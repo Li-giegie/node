@@ -16,7 +16,6 @@ const (
 	MsgType_ReplyErrLenLimit
 	MsgType_ReplyErrCheckSum
 	MsgType_ReplyErr
-	MsgType_PushErrAuthFailIdExist
 	Null
 )
 
@@ -29,8 +28,6 @@ type Message struct {
 	DestId uint16
 	Data   []byte
 }
-
-func (m *Message) Message() {}
 
 func (m *Message) String() string {
 	return fmt.Sprintf("Message { type: %d, id: %v, srcId: %v, destId: %v, data: %s}", m.Type, m.Id, m.SrcId, m.DestId, m.Data)

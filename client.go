@@ -1,83 +1,132 @@
 package node
 
 import (
+	"context"
+	"errors"
+	go_jeans "github.com/Li-giegie/go-jeans"
 	"github.com/Li-giegie/node/common"
+	"github.com/Li-giegie/node/utils"
+	"io"
 	"net"
+	"time"
 )
 
-type Client interface {
-	Serve() (common.Conn, error)
-}
-
-type ClientOption func(c *client)
-
-type client struct {
+type Client struct {
 	*common.MsgReceiver
-	*common.MsgPool
-	common.Connections
-	net.Conn
-	Handler
-	localId uint16
+	lid  uint16
+	rid  uint16
+	conn net.Conn
 }
 
-func NewClient(conn net.Conn, localId uint16, h Handler, opts ...ClientOption) Client {
-	c := new(client)
-	c.Conn = conn
-	c.localId = localId
-	c.Handler = h
-	c.MsgPool = common.NewMsgPool(1024)
+func NewClient(conn net.Conn, localId, remoteId uint16) *Client {
+	c := new(Client)
+	c.conn = conn
+	c.lid = localId
+	c.rid = remoteId
 	c.MsgReceiver = common.NewMsgReceiver(1024)
-	for _, opt := range opts {
-		opt(c)
-	}
 	return c
 }
 
-func (c *client) Serve() (common.Conn, error) {
-	remoteId, err := c.Init(c.Conn)
+func (c *Client) InitConn(ctx context.Context, h Handler) (Conn, error) {
+	connInit := new(ConnInitializer)
+	connInit.LocalId = c.lid
+	connInit.RemoteId = c.rid
+	err := connInit.Send(c.conn)
 	if err != nil {
 		return nil, err
 	}
-	nodeConn := common.NewConn(c.localId, remoteId, c.Conn, c, c.Connections, nil)
-	go func() {
-		nodeConn.Serve(c)
-		_ = nodeConn.Close()
-	}()
-	return nodeConn, nil
+	if err = connInit.ReceptionWithCtx(ctx, c.conn); err != nil {
+		return nil, err
+	}
+	if err = connInit.Error(); err != nil {
+		return nil, err
+	}
+	conn := common.NewConn(c.lid, c.rid, c.conn, c.MsgReceiver, nil, nil, h)
+	go conn.Serve()
+	h.Connection(conn)
+	return conn, nil
 }
 
-// Dial network、address，同net.Dail相同，localId 本地节点Id，node 生命周期管理实现接口
-func Dial(network, address string, localId uint16, h Handler, opts ...ClientOption) (common.Conn, error) {
-	conn, err := net.Dial(network, address)
+// DialTCP 发起tcp连接并启动服务
+func DialTCP(ctx context.Context, localId, remoteId uint16, raddr string, h Handler) (Conn, error) {
+	conn, err := net.Dial("tcp", raddr)
 	if err != nil {
 		return nil, err
 	}
-	return NewClient(conn, localId, h, opts...).Serve()
+	return NewClient(conn, localId, remoteId).InitConn(ctx, h)
 }
 
-// Serve 非阻塞启动，net.Conn已建立的连接，localId 本地节点Id，node 生命周期管理实现接口、conns当前节点需要继承另一个服务端节点做边界网关节点时传入服务端节点，如不需要传入nil
-func Serve(conn net.Conn, localId uint16, h Handler, opts ...ClientOption) (common.Conn, error) {
-	return NewClient(conn, localId, h, opts...).Serve()
+// ConnInitializer 连接初始化，将本地节点Id告知远程节点
+type ConnInitializer struct {
+	LocalId  uint16
+	RemoteId uint16
+	code     uint8
+	checksum uint32
 }
 
-// WIthClientMsgPoolSize 消息池容量，消息在从池子中创建和销毁，这一行为是考虑到GC压力
-func WIthClientMsgPoolSize(n int) ClientOption {
-	return func(s *client) {
-		s.MsgPool = common.NewMsgPool(n)
-		return
+const (
+	authCode_UnknownErr uint8 = iota
+	authCode_init
+	authCode_ridErr
+	authCode_nodeExist
+	authCode_success
+)
+
+var nodeExistErr = errors.New("node already exists")
+var unknownErr = errors.New("unknown error")
+var invalidChecksum = errors.New("invalid checksum")
+var remoteIdErr = errors.New("remote id error")
+
+// Error 检查回复是否包含错误错误
+func (a *ConnInitializer) Error() error {
+	switch a.code {
+	case authCode_nodeExist:
+		return nodeExistErr
+	case authCode_ridErr:
+		return remoteIdErr
+	case authCode_success:
+		return nil
+	default:
+		return unknownErr
 	}
 }
 
-// WithClientMsgReceivePoolSize 消息接收池容量，消息接收每次创建的Channel从池子中创建和销毁，这一行为是考虑到GC压力
-func WithClientMsgReceivePoolSize(n int) ClientOption {
-	return func(s *client) {
-		s.MsgReceiver = common.NewMsgReceiver(n)
-		return
-	}
+// Send 发送初始化信息
+func (a *ConnInitializer) Send(w io.Writer) error {
+	a.checksum = uint32(byte(a.LocalId) + byte(a.LocalId>>8) + byte(a.RemoteId) + byte(a.RemoteId>>8) + a.code)
+	data, _ := go_jeans.EncodeBase(a.LocalId, a.RemoteId, a.code, a.checksum)
+	_, err := w.Write(data)
+	return err
 }
 
-func WithClientConnections(conns common.Connections) ClientOption {
-	return func(s *client) {
-		s.Connections = conns
+// ReceptionWithCtx ctx 接收远程节点返回的信息
+func (a *ConnInitializer) ReceptionWithCtx(ctx context.Context, r io.Reader) (err error) {
+	buf := make([]byte, 9)
+	if err = utils.ReadFullCtx(ctx, r, buf); err != nil {
+		return err
 	}
+	if err = go_jeans.Decode(buf, &a.LocalId, &a.RemoteId, &a.code, &a.checksum); err != nil {
+		return err
+	}
+	checksum := utils.CheckSum(buf[:5])
+	if checksum != a.checksum {
+		return invalidChecksum
+	}
+	return nil
+}
+
+// ReceptionWithTimeout 超时接收远程节点返回的信息
+func (a *ConnInitializer) ReceptionWithTimeout(t time.Duration, r io.Reader) (err error) {
+	buf := make([]byte, 9)
+	if err = utils.ReadFull(t, r, buf); err != nil {
+		return err
+	}
+	if err = go_jeans.Decode(buf, &a.LocalId, &a.RemoteId, &a.code, &a.checksum); err != nil {
+		return err
+	}
+	checksum := utils.CheckSum(buf[:5])
+	if checksum != a.checksum {
+		return invalidChecksum
+	}
+	return nil
 }

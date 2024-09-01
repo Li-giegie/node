@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"sync/atomic"
 	"time"
 )
 
@@ -35,41 +36,24 @@ type Conn interface {
 
 type Connections interface {
 	GetConn(id uint16) (Conn, bool)
-}
-
-// MsgController 消息的创建和接受抽象接口
-type MsgController interface {
-	// NewMsg 创建一个消息
-	NewMsg(srcId, dstId uint16, typ uint8, data []byte) *Message
-	// RecycleMsg 回收消息
-	RecycleMsg(m *Message)
-	// DefaultMsg 创建一个0值消息，id = 0
-	DefaultMsg() *Message
-	// CreateMsgChan 创建一个消息接收Channel，以准备接收
-	CreateMsgChan(id uint32) chan *Message
-	// SetMsgChan 在匹配消息的Id中设置Chan通知消息到达
-	SetMsgChan(msg *Message) bool
-	// DeleteMsgChan 删除已经处理完成的Chan，或已超时的Chan，这一步是必要的
-	DeleteMsgChan(id uint32) bool
+	GetConns() []Conn
 }
 
 type Handler interface {
-	// Connection 同步调用，连接第一次建立成功回调
-	Connection(conn Conn)
 	// Handle 接收到标准类型消息时触发回调
 	Handle(ctx Context)
 	// ErrHandle 发送失败触发的回调
-	ErrHandle(msg *Message, err error)
+	ErrHandle(ctx ErrContext, err error)
 	// CustomHandle 接收到自定义类型消息时触发回调
-	CustomHandle(ctx Context)
+	CustomHandle(ctx CustomContext)
 	// Disconnect 连接断开触发回调
 	Disconnect(id uint16, err error)
 }
 
-func NewConn(localId, remoteId uint16, conn net.Conn, msgCtrl MsgController, conns Connections, route Router) (c *Connect) {
+func NewConn(localId, remoteId uint16, conn net.Conn, r *MsgReceiver, conns Connections, route Router, h Handler) (c *Connect) {
 	c = new(Connect)
 	c.remoteId = remoteId
-	c.MsgController = msgCtrl
+	c.MsgReceiver = r
 	c.localId = localId
 	c.conn = conn
 	c.activate = time.Now().UnixMilli()
@@ -77,6 +61,7 @@ func NewConn(localId, remoteId uint16, conn net.Conn, msgCtrl MsgController, con
 	c.ReadBuffSize = 4096
 	c.Router = route
 	c.Connections = conns
+	c.Handler = h
 	return c
 }
 
@@ -89,57 +74,69 @@ type Connect struct {
 	MaxMsgLen    uint32
 	ReadBuffSize int
 	conn         net.Conn
-	MsgController
+	msgCounter   uint32
+	*MsgReceiver
 	Router
 	Connections
+	Handler
 }
 
 func (c *Connect) Activate() int64 {
 	return c.activate
 }
 
+func copyMsg(m *Message) *Message {
+	msg := new(Message)
+	msg.Id = m.Id
+	msg.Type = m.Type
+	msg.SrcId = m.SrcId
+	msg.DestId = m.DestId
+	msg.Data = make([]byte, len(m.Data))
+	copy(msg.Data, m.Data)
+	return msg
+}
+
 // Serve 开启服务
-func (c *Connect) Serve(handler Handler) {
+func (c *Connect) Serve() {
 	var err error
 	defer func() {
 		_ = c.Close()
-		handler.Disconnect(c.remoteId, err)
+		c.Disconnect(c.remoteId, err)
 	}()
 	c.state = ConnStateTypeOnConnect
 	headerBuf := make([]byte, MsgHeaderLen)
 	reader := bufio.NewReaderSize(c.conn, c.ReadBuffSize)
-	handler.Connection(c)
 	for {
-		msg := c.DefaultMsg()
+		msg := new(Message)
 		err = msg.Decode(reader, headerBuf, c.MaxMsgLen)
 		if err != nil {
-			err = c.connectionErr(ctx.WithValue(ctx.Background(), "msg", msg), err, handler)
+			err = c.connectionErr(ctx.WithValue(ctx.Background(), "msg", msg), err)
 			return
 		}
 		c.activate = time.Now().UnixMilli()
+		// 非本地节点
 		if msg.DestId != c.localId {
-			if c.Connections == nil {
-				if err = c.WriteMsg(msg.ErrReply(MsgType_ReplyErrConnNotExist, c.localId)); err != nil {
-					handler.ErrHandle(msg, &ErrWrite{err: err})
-				}
-				continue
-			}
-			conn, exist := c.Connections.GetConn(msg.DestId)
-			if exist {
-				if err = conn.WriteMsg(msg); err == nil {
-					continue
+			// 优先转发到本地连接
+			if c.Connections != nil {
+				if conn, exist := c.Connections.GetConn(msg.DestId); exist {
+					if err = conn.WriteMsg(msg); err == nil {
+						continue
+					}
 				}
 			}
+			// 本地连接不存在，转发对用路由
 			if c.Router != nil {
+				// 获取能到达目的路由的全部节点
 				nextList := c.Router.GetDstRoutes(msg.DestId)
 				success := false
 				for i := 0; i < len(nextList); i++ {
-					if conn, exist = c.Connections.GetConn(nextList[i].Next); !exist {
-						c.Router.deleteRoute(msg.DestId, nextList[i])
+					conn, exist := c.Connections.GetConn(nextList[i].Next)
+					if !exist {
+						c.Router.DeleteRoute(msg.DestId, nextList[i].Next, nextList[i].Hop, nextList[i].ParentNode)
 						continue
 					}
 					if err = conn.WriteMsg(msg); err != nil {
-						c.Router.deleteRoute(msg.DestId, nextList[i])
+						c.Router.DeleteRoute(msg.DestId, nextList[i].Next, nextList[i].Hop, nextList[i].ParentNode)
 						continue
 					}
 					success = true
@@ -152,23 +149,21 @@ func (c *Connect) Serve(handler Handler) {
 					c.Router.DeleteRouteAll(msg.DestId)
 				}
 			}
+			// 本地节点、路由均为目的节点，返回错误
 			if err = c.WriteMsg(msg.ErrReply(MsgType_ReplyErrConnNotExist, c.localId)); err != nil {
-				handler.ErrHandle(msg, &ErrWrite{err: err})
+				c.ErrHandle(&context{Message: msg, Connect: c}, &ErrWrite{err: err})
 			}
 			continue
 		}
 		switch msg.Type {
 		case MsgType_Send:
-			handler.Handle(&context{Message: msg, writerMsg: c})
+			c.Handle(&context{Message: msg, Connect: c})
 		case MsgType_Reply, MsgType_ReplyErr, MsgType_ReplyErrConnNotExist, MsgType_ReplyErrLenLimit, MsgType_ReplyErrCheckSum:
 			if !c.SetMsgChan(msg) {
-				handler.ErrHandle(msg, DEFAULT_ErrDrop)
+				c.ErrHandle(&context{Message: msg, Connect: c}, DEFAULT_ErrDrop)
 			}
-		case MsgType_PushErrAuthFailIdExist:
-			err = DEFAULT_ErrAuthIdExist
-			return
 		default:
-			handler.CustomHandle(&context{Message: msg, writerMsg: c})
+			c.CustomHandle(&context{Message: msg, Connect: c})
 		}
 	}
 }
@@ -185,18 +180,23 @@ func (c *Connect) State() uint8 {
 }
 
 func (c *Connect) Request(ctx ctx.Context, data []byte) ([]byte, error) {
-	req := c.NewMsg(c.localId, c.remoteId, MsgType_Send, data)
+	req := new(Message)
+	req.Id = atomic.AddUint32(&c.msgCounter, 1)
+	req.SrcId = c.localId
+	req.DestId = c.remoteId
+	req.Type = MsgType_Send
+	req.Data = data
 	return c.request(ctx, req)
 }
 
-var ErrForwardYourself = errors.New("can not forward yourself")
-
 // Forward only client use
 func (c *Connect) Forward(ctx ctx.Context, destId uint16, data []byte) ([]byte, error) {
-	if destId == c.localId {
-		return nil, ErrForwardYourself
-	}
-	req := c.NewMsg(c.localId, destId, MsgType_Send, data)
+	req := new(Message)
+	req.Id = atomic.AddUint32(&c.msgCounter, 1)
+	req.SrcId = c.localId
+	req.DestId = destId
+	req.Type = MsgType_Send
+	req.Data = data
 	return c.request(ctx, req)
 }
 
@@ -205,13 +205,25 @@ func (c *Connect) Write(data []byte) (n int, err error) {
 }
 
 func (c *Connect) WriteTo(dst uint16, data []byte) (n int, err error) {
-	msg := c.NewMsg(c.localId, dst, MsgType_Send, data)
+	if dst == c.localId {
+		return 0, ErrWriteYourself
+	}
+	msg := new(Message)
+	msg.Id = atomic.AddUint32(&c.msgCounter, 1)
+	msg.SrcId = c.localId
+	msg.DestId = dst
+	msg.Type = MsgType_Send
+	msg.Data = data
 	n, err = c.write(msg.Encode())
-	c.RecycleMsg(msg)
 	return n, err
 }
 
+var ErrWriteYourself = errors.New("can't send it to yourself")
+
 func (c *Connect) WriteMsg(m *Message) (err error) {
+	if m.DestId == c.localId {
+		return ErrWriteYourself
+	}
 	_, err = c.write(m.Encode())
 	return
 }
@@ -224,24 +236,21 @@ func (c *Connect) write(b []byte) (n int, err error) {
 }
 
 func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
-	respChan := c.CreateMsgChan(req.Id)
+	reqId := req.Id
+	respChan := c.CreateMsgChan(reqId)
 	err := c.WriteMsg(req)
 	if err != nil {
-		c.DeleteMsgChan(req.Id)
-		c.RecycleMsg(req)
+		c.DeleteMsgChan(reqId)
 		return nil, err
 	}
 	select {
 	case <-ctx.Done():
-		c.DeleteMsgChan(req.Id)
-		c.RecycleMsg(req)
+		c.DeleteMsgChan(reqId)
 		return nil, ctx.Err()
 	case resp := <-respChan:
+		c.DeleteMsgChan(reqId)
 		data := resp.Data
 		typ := resp.Type
-		c.DeleteMsgChan(req.Id)
-		c.RecycleMsg(req)
-		c.RecycleMsg(resp)
 		switch typ {
 		case MsgType_ReplyErrConnNotExist:
 			return nil, DEFAULT_ErrConnNotExist
@@ -262,7 +271,7 @@ func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
 	}
 }
 
-func (c *Connect) connectionErr(ctx ctx.Context, err error, handler Handler) error {
+func (c *Connect) connectionErr(ctx ctx.Context, err error) error {
 	switch c.state {
 	case ConnStateTypeOnClose:
 		return nil
@@ -286,7 +295,7 @@ func (c *Connect) connectionErr(ctx ctx.Context, err error, handler Handler) err
 		}
 		if ok {
 			if err = c.WriteMsg(msg.ErrReply(typ, c.localId)); err != nil {
-				handler.ErrHandle(msg, err)
+				c.ErrHandle(&context{Message: msg, Connect: c}, err)
 			}
 		}
 		return err

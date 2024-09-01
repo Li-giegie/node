@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,20 @@ func ReadFull(timeout time.Duration, r io.Reader, buf []byte) (err error) {
 	case err = <-errC:
 		return err
 	case <-time.After(timeout):
+		return ErrTimeout
+	}
+}
+
+func ReadFullCtx(ctx context.Context, r io.Reader, buf []byte) (err error) {
+	errC := make(chan struct{})
+	go func() {
+		_, err = io.ReadFull(r, buf)
+		errC <- struct{}{}
+	}()
+	select {
+	case <-errC:
+		return
+	case <-ctx.Done():
 		return ErrTimeout
 	}
 }
@@ -76,4 +91,34 @@ func JSONPackDecode(timeout time.Duration, r io.Reader, v any) (err error) {
 		return err
 	}
 	return json.Unmarshal(data, v)
+}
+
+func CheckSum(b []byte) (sum uint32) {
+	for i := 0; i < len(b); i++ {
+		sum += uint32(b[i])
+	}
+	return sum
+}
+
+// PackChecksum 打包成 len + checksum(len,data) + data
+func PackChecksum(b []byte) []byte {
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint32(buf, uint32(len(b)))
+	binary.LittleEndian.PutUint32(buf[4:], CheckSum(buf[:4])+CheckSum(b))
+	return append(buf, b...)
+}
+
+var ErrInvalidChecksum = errors.New("invalid checksum")
+var ErrInvalidPack = errors.New("invalid pack length less 8")
+
+func UnpackChecksum(b []byte) ([]byte, error) {
+	if len(b) < 8 {
+		return nil, ErrInvalidPack
+	}
+	sum1 := binary.LittleEndian.Uint32(b[4:])
+	sum2 := CheckSum(b[:4]) + CheckSum(b[8:])
+	if sum1 != sum2 {
+		return b[8:], ErrInvalidChecksum
+	}
+	return b[8:], nil
 }

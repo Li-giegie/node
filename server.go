@@ -10,75 +10,49 @@ import (
 	"time"
 )
 
-// ServerStateType 服务状态
-type ServerStateType uint8
+type StateType uint8
 
 const (
-	ServerStateTypeClose ServerStateType = iota
-	ServerStateTypeListen
-	ServerStateTypeErr
+	StateType_Close StateType = iota
+	StateType_Listen
+	StateType_Err
 )
 
-type Server interface {
-	// Serve 阻塞启动服务，node 连接生命周期接口
-	Serve() error
-	//GetConn 获取一个连接
-	GetConn(id uint16) (common.Conn, bool)
-	// GetConns 获取所有连接
-	GetConns() []common.Conn
-	// State 获取服务状态
-	State() ServerStateType
-	// Close 关闭服务
-	Close() error
-	// Id 获取服务Id
-	Id() uint16
-	// Bind 同步阻塞调用，绑定一个外部连接，通常用于其他域互联形成一个域
-	Bind(u ExternalDomainNode) error
-	// Request 发起一个请求
-	Request(ctx context.Context, dst uint16, data []byte) ([]byte, error)
-	WriteTo(dst uint16, data []byte) (int, error)
-	common.Router
-}
-
-type SrvOption func(s *server)
-
-type server struct {
-	id       uint16 // 唯一标识
+type Server struct {
+	id uint16 // 唯一标识
+	// 最大连接数 <=0 不限制 默认0
 	MaxConns int
-	state    ServerStateType
-	net.Listener
-	*connections
-	*common.MsgReceiver
-	*common.MsgPool
-	common.Router
-	Handler
+	// InitSessionTimeout 初始化连接，并在限定时间得到节点id，默认6s
+	InitSessionTimeout time.Duration
+	State              StateType
+	Conns              *Conns
+	msgReceiver        *common.MsgReceiver
+	Router             *common.RouteTable
+	handler            Handler
+	listen             net.Listener
 }
 
 // NewServer 创建一个Server类型的节点
-func NewServer(l net.Listener, id uint16, h Handler, opts ...SrvOption) Server {
-	srv := new(server)
+func NewServer(l net.Listener, id uint16) *Server {
+	srv := new(Server)
 	srv.id = id
-	srv.Listener = l
-	srv.Handler = h
-	srv.connections = newConns()
-	srv.MsgPool = common.NewMsgPool(1024)
-	srv.MsgReceiver = common.NewMsgReceiver(1024)
+	srv.listen = l
+	srv.InitSessionTimeout = time.Second * 6
+	srv.Conns = newConns()
+	srv.msgReceiver = common.NewMsgReceiver(1024)
 	srv.Router = common.NewRouter()
-	for _, opt := range opts {
-		opt(srv)
-	}
 	return srv
 }
 
-func (s *server) State() ServerStateType {
-	return s.state
+func (s *Server) SetMsgReceiver(n int) {
+	s.msgReceiver = common.NewMsgReceiver(n)
 }
-
-func (s *server) Serve() error {
-	s.state = ServerStateTypeListen
+func (s *Server) Serve(h Handler) error {
+	s.State = StateType_Listen
+	s.handler = h
 	i := int64(0)
 	for {
-		if s.MaxConns > 0 && s.connections.Len() >= s.MaxConns {
+		if s.MaxConns > 0 && s.Conns.Len() >= s.MaxConns {
 			if i <= 10 {
 				i++
 			}
@@ -87,143 +61,139 @@ func (s *server) Serve() error {
 			continue
 		}
 		i = 0
-		conn, err := s.Accept()
+		conn, err := s.listen.Accept()
 		if err != nil {
 			return s.checkErr(err)
 		}
-		go s.HandleConn(conn)
+		go s.handle(conn)
 	}
 }
 
-func (s *server) HandleConn(c net.Conn) {
-	remoteId, err := s.Handler.Init(c)
-	if err != nil {
+func (s *Server) handle(conn net.Conn) {
+	var err error
+	connInit := new(ConnInitializer)
+	if err = connInit.ReceptionWithTimeout(s.InitSessionTimeout, conn); err != nil {
+		_ = conn.Close()
 		return
 	}
-	conn := common.NewConn(s.id, remoteId, c, s, s.connections, s.Router)
-	if conn.RemoteId() == s.id || !s.Add(conn.RemoteId(), conn) {
-		s.Handler.Disconnect(conn.RemoteId(), common.DEFAULT_ErrAuthIdExist)
-		_ = conn.WriteMsg(&common.Message{
-			Type:   common.MsgType_PushErrAuthFailIdExist,
-			SrcId:  s.id,
-			DestId: conn.RemoteId(),
-		})
-		_ = c.Close()
+	c := common.NewConn(s.id, connInit.LocalId, conn, s.msgReceiver, s.Conns, s.Router, s.handler)
+	if connInit.RemoteId != s.id {
+		connInit.code = authCode_ridErr
+		_ = connInit.Send(conn)
+		_ = conn.Close()
+		return
+	}
+	if connInit.LocalId == s.id || !s.Conns.add(connInit.LocalId, c) {
+		connInit.code = authCode_nodeExist
+		_ = connInit.Send(conn)
+		_ = conn.Close()
+		return
+	}
+	connInit.code = authCode_success
+	if err = connInit.Send(conn); err != nil {
+		_ = conn.Close()
 		return
 	}
 	go func() {
-		conn.Serve(s.Handler)
-		s.connections.Del(conn.RemoteId())
+		c.Serve()
+		s.Conns.del(c.RemoteId())
 		_ = c.Close()
 	}()
+	s.handler.Connection(c)
 }
 
-var NodeExist = errors.New("node id exist")
+var nodeEqErr = errors.New("node ID cannot be the same as the server node ID")
 
-func (s *server) Bind(u ExternalDomainNode) error {
-	if s.id == u.RemoteId() {
-		return NodeExist
+// BindBridge 桥接一个域,使用一个客户端连接到其他节点并绑定到当前节点形成一个大的域
+func (s *Server) BindBridge(bd BridgeNode) error {
+	if s.id == bd.RemoteId() {
+		return nodeEqErr
 	}
-	conn := common.NewConn(s.id, u.RemoteId(), u.Conn(), s, s.connections, s.Router)
-	if !s.connections.Add(conn.RemoteId(), conn) {
-		return NodeExist
+	conn := common.NewConn(s.id, bd.RemoteId(), bd.Conn(), s.msgReceiver, s.Conns, s.Router, s.handler)
+	if !s.Conns.add(conn.RemoteId(), conn) {
+		return nodeExistErr
 	}
-	conn.Serve(s)
-	s.connections.Del(conn.RemoteId())
-	_ = conn.Close()
+	go func() {
+		conn.Serve()
+		s.Conns.del(conn.RemoteId())
+		_ = conn.Close()
+		bd.Disconnection()
+	}()
+	s.handler.Connection(conn)
 	return nil
 }
 
-func (s *server) Request(ctx context.Context, dst uint16, data []byte) ([]byte, error) {
-	conn, ok := s.GetConn(dst)
-	if ok {
-		return conn.Request(ctx, data)
+// Request 请求
+func (s *Server) Request(ctx context.Context, dst uint16, data []byte) ([]byte, error) {
+	conn, ok := s.findConn(dst)
+	if !ok {
+		return nil, common.DEFAULT_ErrConnNotExist
 	}
-	rInfo := s.GetDstRoutes(dst)
-	for i := 0; i < len(rInfo); i++ {
-		conn, ok = s.GetConn(rInfo[i].Next)
-		if ok {
-			return conn.Forward(ctx, dst, data)
-		}
-	}
-	return nil, common.DEFAULT_ErrConnNotExist
+	return conn.Forward(ctx, dst, data)
 }
 
-func (s *server) WriteTo(dst uint16, data []byte) (int, error) {
-	conn, ok := s.GetConn(dst)
-	if ok {
-		return conn.Write(data)
+func (s *Server) WriteTo(dst uint16, data []byte) (int, error) {
+	conn, ok := s.findConn(dst)
+	if !ok {
+		return 0, common.DEFAULT_ErrConnNotExist
 	}
-	rInfo := s.GetDstRoutes(dst)
-	for i := 0; i < len(rInfo); i++ {
-		conn, ok = s.GetConn(rInfo[i].Next)
-		if ok {
-			return conn.WriteTo(dst, data)
-		}
-	}
-	return 0, common.DEFAULT_ErrConnNotExist
+	return conn.WriteTo(dst, data)
 }
 
-func (s *server) Id() uint16 {
+func (s *Server) findConn(dst uint16) (conn common.Conn, exists bool) {
+	conn, exists = s.Conns.GetConn(dst)
+	if exists {
+		return
+	}
+	routes := s.Router.GetDstRoutes(dst)
+	for i := 0; i < len(routes); i++ {
+		conn, exists = s.Conns.GetConn(routes[i].Next)
+		if exists {
+			return
+		}
+	}
+	return nil, false
+}
+
+func (s *Server) Id() uint16 {
 	return s.id
 }
 
-func (s *server) checkErr(err error) error {
-	if s.state == ServerStateTypeClose {
+func (s *Server) checkErr(err error) error {
+	if s.State == StateType_Close {
 		return nil
 	}
-	s.state = ServerStateTypeErr
+	s.State = StateType_Err
 	return err
 }
 
-func (s *server) Close() error {
-	s.state = ServerStateTypeClose
-	return s.Listener.Close()
-}
-
-// WithSrvMaxConns 最大连接数 > 0 有效
-func WithSrvMaxConns(n int) SrvOption {
-	return func(s *server) {
-		s.MaxConns = n
-	}
-}
-
-// WIthSrvMsgPoolSize 消息池容量，消息在从池子中创建和销毁，这一行为是考虑到GC压力
-func WIthSrvMsgPoolSize(n int) SrvOption {
-	return func(s *server) {
-		s.MsgPool = common.NewMsgPool(n)
-	}
-}
-
-// WithSrvMsgReceivePoolSize 消息接收池容量，消息接收每次创建的Channel从池子中创建和销毁，这一行为是考虑到GC压力
-func WithSrvMsgReceivePoolSize(n int) SrvOption {
-	return func(s *server) {
-		s.MsgReceiver = common.NewMsgReceiver(n)
-	}
+func (s *Server) Close() error {
+	s.State = StateType_Close
+	return s.listen.Close()
 }
 
 // ListenTCP 侦听一个本地TCP端口,并创建服务节点
-func ListenTCP(id uint16, addr string, h Handler, opts ...SrvOption) (Server, error) {
+func ListenTCP(addr string, id uint16) (*Server, error) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-	return NewServer(l, id, h, opts...), nil
+	return NewServer(l, id), nil
 }
 
-type connections struct {
+type Conns struct {
 	m map[uint16]common.Conn
 	l sync.RWMutex
 }
 
-func newConns() *connections {
-	return &connections{
+func newConns() *Conns {
+	return &Conns{
 		m: make(map[uint16]common.Conn),
 		l: sync.RWMutex{},
 	}
 }
 
-func (s *connections) Add(id uint16, conn *common.Connect) bool {
+func (s *Conns) add(id uint16, conn *common.Connect) bool {
 	s.l.Lock()
 	v, exist := s.m[id]
 	if !exist || v.State() != common.ConnStateTypeOnConnect {
@@ -236,20 +206,20 @@ func (s *connections) Add(id uint16, conn *common.Connect) bool {
 	return exist
 }
 
-func (s *connections) Del(id uint16) {
+func (s *Conns) del(id uint16) {
 	s.l.Lock()
 	delete(s.m, id)
 	s.l.Unlock()
 }
 
-func (s *connections) GetConn(id uint16) (common.Conn, bool) {
+func (s *Conns) GetConn(id uint16) (common.Conn, bool) {
 	s.l.RLock()
 	v, ok := s.m[id]
 	s.l.RUnlock()
 	return v, ok
 }
 
-func (s *connections) GetConns() []common.Conn {
+func (s *Conns) GetConns() []common.Conn {
 	s.l.RLock()
 	result := make([]common.Conn, 0, len(s.m))
 	for _, conn := range s.m {
@@ -259,7 +229,7 @@ func (s *connections) GetConns() []common.Conn {
 	return result
 }
 
-func (s *connections) Len() (n int) {
+func (s *Conns) Len() (n int) {
 	s.l.RLock()
 	n = len(s.m)
 	s.l.RUnlock()
