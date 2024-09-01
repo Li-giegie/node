@@ -66,7 +66,6 @@ type ConnInitializer struct {
 
 const (
 	authCode_UnknownErr uint8 = iota
-	authCode_init
 	authCode_ridErr
 	authCode_nodeExist
 	authCode_success

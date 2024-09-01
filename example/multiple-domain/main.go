@@ -13,7 +13,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -172,7 +171,7 @@ func main() {
 		fmt.Print(">>")
 		for sc.Scan() && srv.State == node.StateType_Listen {
 			if sc.Text() != "" {
-				executeCmd, err := cmd.Group.ExecuteContext(context.WithValue(context.Background(), "server", srv), strings.Fields(sc.Text()))
+				executeCmd, err := cmd.Group.ExecuteCmdLineContext(context.WithValue(context.Background(), "server", srv), sc.Text())
 				if err != nil {
 					if executeCmd == nil {
 						cmd.Group.Usage()

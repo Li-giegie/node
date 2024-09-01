@@ -13,7 +13,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -108,12 +107,12 @@ func main() {
 	defer conn.Close()
 	// 命令解析处理
 	go func() {
-		ctx := context.WithValue(context.Background(), "client", conn)
+		ctx2 := context.WithValue(context.Background(), "client", conn)
 		s := bufio.NewScanner(os.Stdin)
 		fmt.Print(">>")
 		for s.Scan() && conn.State() == common.ConnStateTypeOnConnect {
 			if len(s.Text()) > 0 {
-				_, err := cmd.Group.ExecuteContext(ctx, strings.Fields(s.Text()))
+				_, err := cmd.Group.ExecuteCmdLineContext(ctx2, s.Text())
 				if err != nil {
 					log.Println(err)
 				}
