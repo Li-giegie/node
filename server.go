@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/Li-giegie/node/common"
+	"github.com/Li-giegie/node/utils"
 	"log"
 	"net"
 	"sync"
@@ -19,28 +20,29 @@ const (
 )
 
 type Server struct {
-	id uint16 // 唯一标识
 	// 最大连接数 <=0 不限制 默认0
 	MaxConns int
 	// InitSessionTimeout 初始化连接，并在限定时间得到节点id，默认6s
-	InitSessionTimeout time.Duration
-	State              StateType
-	Conns              *Conns
-	msgReceiver        *common.MsgReceiver
-	Router             *common.RouteTable
-	handler            Handler
-	listen             net.Listener
+	*Identity
+	State       StateType
+	Conns       *Conns
+	msgReceiver *common.MsgReceiver
+	Router      *common.RouteTable
+	handler     Handler
+	listen      net.Listener
 }
 
 // NewServer 创建一个Server类型的节点
-func NewServer(l net.Listener, id uint16) *Server {
+func NewServer(l net.Listener, id *Identity) *Server {
 	srv := new(Server)
-	srv.id = id
+	srv.Identity = id
 	srv.listen = l
-	srv.InitSessionTimeout = time.Second * 6
 	srv.Conns = newConns()
 	srv.msgReceiver = common.NewMsgReceiver(1024)
 	srv.Router = common.NewRouter()
+	if id == nil {
+		panic("BasicAuth can't be empty")
+	}
 	return srv
 }
 
@@ -70,28 +72,26 @@ func (s *Server) Serve(h Handler) error {
 }
 
 func (s *Server) handle(conn net.Conn) {
-	var err error
-	connInit := new(ConnInitializer)
-	if err = connInit.ReceptionWithTimeout(s.InitSessionTimeout, conn); err != nil {
+	rid, key, err := defaultBasicReq.Receive(conn, s.AccessTimeout)
+	if err != nil {
 		_ = conn.Close()
 		return
 	}
-	c := common.NewConn(s.id, connInit.LocalId, conn, s.msgReceiver, s.Conns, s.Router, s.handler)
-	if connInit.RemoteId != s.id {
-		connInit.code = authCode_ridErr
-		_ = connInit.Send(conn)
+	if !utils.BytesEqual(s.AccessKey, key) {
+		_ = defaultBasicResp.Send(conn, 0, false, "error: AccessKey invalid")
 		_ = conn.Close()
 		return
 	}
-	if connInit.LocalId == s.id || !s.Conns.add(connInit.LocalId, c) {
-		connInit.code = authCode_nodeExist
-		_ = connInit.Send(conn)
+	lid := s.Identity.Id
+	c := common.NewConn(lid, rid, conn, s.msgReceiver, s.Conns, s.Router, s.handler)
+	if rid == lid || !s.Conns.add(rid, c) {
+		_ = defaultBasicResp.Send(conn, 0, false, "error: id already exists")
 		_ = conn.Close()
 		return
 	}
-	connInit.code = authCode_success
-	if err = connInit.Send(conn); err != nil {
+	if err = defaultBasicResp.Send(conn, lid, true, ""); err != nil {
 		_ = conn.Close()
+		s.Conns.del(c.RemoteId())
 		return
 	}
 	go func() {
@@ -103,15 +103,16 @@ func (s *Server) handle(conn net.Conn) {
 }
 
 var nodeEqErr = errors.New("node ID cannot be the same as the server node ID")
+var errNodeExist = errors.New("node already exists")
 
 // BindBridge 桥接一个域,使用一个客户端连接到其他节点并绑定到当前节点形成一个大的域
 func (s *Server) BindBridge(bd BridgeNode) error {
-	if s.id == bd.RemoteId() {
+	if s.Identity.Id == bd.RemoteId() {
 		return nodeEqErr
 	}
-	conn := common.NewConn(s.id, bd.RemoteId(), bd.Conn(), s.msgReceiver, s.Conns, s.Router, s.handler)
+	conn := common.NewConn(s.Identity.Id, bd.RemoteId(), bd.Conn(), s.msgReceiver, s.Conns, s.Router, s.handler)
 	if !s.Conns.add(conn.RemoteId(), conn) {
-		return nodeExistErr
+		return errNodeExist
 	}
 	go func() {
 		conn.Serve()
@@ -156,7 +157,7 @@ func (s *Server) findConn(dst uint16) (conn common.Conn, exists bool) {
 }
 
 func (s *Server) Id() uint16 {
-	return s.id
+	return s.Identity.Id
 }
 
 func (s *Server) checkErr(err error) error {
@@ -173,12 +174,12 @@ func (s *Server) Close() error {
 }
 
 // ListenTCP 侦听一个本地TCP端口,并创建服务节点
-func ListenTCP(addr string, id uint16) (*Server, error) {
+func ListenTCP(addr string, auth *Identity) (*Server, error) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-	return NewServer(l, id), nil
+	return NewServer(l, auth), nil
 }
 
 type Conns struct {

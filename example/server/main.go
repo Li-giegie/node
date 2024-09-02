@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/common"
-	"github.com/Li-giegie/node/example/multiple-domain/cmd"
+	"github.com/Li-giegie/node/example/server/cmd"
 	"github.com/Li-giegie/node/protocol"
 	"gopkg.in/yaml.v3"
 	"io"
@@ -17,9 +17,8 @@ import (
 )
 
 type Conf struct {
-	Id              uint16
-	Addr            string
-	InitConnTimeout time.Duration
+	Addr string
+	*node.Identity
 	*NodeDiscoveryProtocol
 	*HelloProtocol
 }
@@ -47,9 +46,12 @@ func init() {
 	flag.Parse()
 	if *genConfFile != "" {
 		data, err := yaml.Marshal(&Conf{
-			Id:              8000,
-			Addr:            "0.0.0.0:8000",
-			InitConnTimeout: time.Second * 6,
+			Addr: "0.0.0.0:8000",
+			Identity: &node.Identity{
+				Id:            0,
+				AccessKey:     []byte("hello"),
+				AccessTimeout: time.Second * 6,
+			},
 			NodeDiscoveryProtocol: &NodeDiscoveryProtocol{
 				Enable:        false,
 				QueryInterval: time.Second * 30,
@@ -130,7 +132,7 @@ func (h *ServerHandle) Disconnect(id uint16, err error) {
 }
 
 func main() {
-	srv, err := node.ListenTCP(c.Addr, c.Id)
+	srv, err := node.ListenTCP(c.Addr, c.Identity)
 	if err != nil {
 		log.Fatalln(err)
 	}

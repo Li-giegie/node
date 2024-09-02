@@ -1,6 +1,7 @@
-raddr: 0.0.0.0:8000
+addr: 0.0.0.0:8000
 identity:
-    id: 8001
+    id: 8000
+    # hello
     accesskey:
         - 104
         - 101
@@ -8,10 +9,13 @@ identity:
         - 108
         - 111
     accesstimeout: 6s
+nodediscoveryprotocol:
+    enable: true
+    queryinterval: 30s
 helloprotocol:
     enable: true
     enablestdout: true
     outfile: "hello.log"
-    interval: 10s
+    interval: 30s
     timeout: 30s
-    timeoutclose: 60s
+    timeoutclose: 90s

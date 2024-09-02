@@ -3,19 +3,11 @@ package utils
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
+	"hash/crc32"
 	"io"
-	"math/rand"
 	"time"
 )
-
-var _rnd *rand.Rand
-
-func init() {
-	source := rand.NewSource(time.Now().UnixNano())
-	_rnd = rand.New(source)
-}
 
 var ErrTimeout = errors.New("timeout")
 
@@ -48,7 +40,6 @@ func ReadFullCtx(ctx context.Context, r io.Reader, buf []byte) (err error) {
 }
 
 func EncodeUint24(b []byte, n2 uint32) {
-	n2 = n2 & 0x00FFFFFF
 	b[0] = byte(n2)
 	b[1] = byte(n2 >> 8)
 	b[2] = byte(n2 >> 16)
@@ -58,67 +49,49 @@ func DecodeUint24(b []byte) (n uint32) {
 	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16
 }
 
-func JSONPackEncode(w io.Writer, v any) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint32(b, uint32(len(data)))
-	binary.LittleEndian.PutUint32(b[4:], uint32(b[0]+b[1]+b[2]+b[3]))
-	if _, err = w.Write(b); err != nil {
-		return err
-	}
-	_, err = w.Write(data)
-	return err
-}
+var ErrLimitPackSize = errors.New("b exceeds the length limit")
 
-var ErrJsonPackDecode = errors.New("json pack invalid checksum fail")
-
-// JSONPackDecode 从Reader中解码JSON包格式的字符串到结构体中，在经过timeout时间后没有完成结束并返回超时
-func JSONPackDecode(timeout time.Duration, r io.Reader, v any) (err error) {
-	b := make([]byte, 8)
-	if err = ReadFull(timeout, r, b); err != nil {
-		return err
+// Packet len + len_checksum  + b
+func Packet(b []byte) ([]byte, error) {
+	l := len(b)
+	if l >= 0xfffffff0 {
+		return nil, ErrLimitPackSize
 	}
-	dataLen := binary.LittleEndian.Uint32(b)
-	checkSum := binary.LittleEndian.Uint32(b[4:])
-	if uint32(b[0]+b[1]+b[2]+b[3]) != checkSum {
-		return ErrJsonPackDecode
-	}
-	data := make([]byte, dataLen)
-	if err = ReadFull(timeout, r, data); err != nil {
-		return err
-	}
-	return json.Unmarshal(data, v)
-}
-
-func CheckSum(b []byte) (sum uint32) {
-	for i := 0; i < len(b); i++ {
-		sum += uint32(b[i])
-	}
-	return sum
-}
-
-// PackChecksum 打包成 len + checksum(len,data) + data
-func PackChecksum(b []byte) []byte {
 	buf := make([]byte, 8)
-	binary.LittleEndian.PutUint32(buf, uint32(len(b)))
-	binary.LittleEndian.PutUint32(buf[4:], CheckSum(buf[:4])+CheckSum(b))
-	return append(buf, b...)
+	// 4byte len
+	binary.LittleEndian.PutUint32(buf, uint32(l))
+	// 4byte len_checksum
+	binary.LittleEndian.PutUint32(buf[4:], crc32.ChecksumIEEE(buf[:4]))
+	return append(buf, b...), nil
 }
 
-var ErrInvalidChecksum = errors.New("invalid checksum")
-var ErrInvalidPack = errors.New("invalid pack length less 8")
+var ErrChecksumInvalid = errors.New("checksum invalid")
 
-func UnpackChecksum(b []byte) ([]byte, error) {
-	if len(b) < 8 {
-		return nil, ErrInvalidPack
+func Unpack(r io.Reader, t time.Duration) ([]byte, error) {
+	buf := make([]byte, 8)
+	err := ReadFull(t, r, buf)
+	if err != nil {
+		return nil, err
 	}
-	sum1 := binary.LittleEndian.Uint32(b[4:])
-	sum2 := CheckSum(b[:4]) + CheckSum(b[8:])
+	sum1 := binary.LittleEndian.Uint32(buf[4:])
+	sum2 := crc32.ChecksumIEEE(buf[:4])
 	if sum1 != sum2 {
-		return b[8:], ErrInvalidChecksum
+		return nil, ErrChecksumInvalid
 	}
-	return b[8:], nil
+	length := binary.LittleEndian.Uint32(buf)
+	buf = make([]byte, length)
+	err = ReadFull(t, r, buf)
+	return buf, err
+}
+
+func BytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
