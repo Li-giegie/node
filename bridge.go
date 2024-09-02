@@ -1,7 +1,7 @@
 package node
 
 import (
-	"context"
+	"errors"
 	"net"
 )
 
@@ -18,24 +18,25 @@ type bridge struct {
 	conn   net.Conn
 }
 
-func CreateBridgeNode(ctx context.Context, conn net.Conn, lid, rid uint16, disconnectionFunc func()) (BridgeNode, error) {
-	connInit := new(ConnInitializer)
-	connInit.LocalId = lid
-	connInit.RemoteId = rid
-	err := error(nil)
-	if err = connInit.Send(conn); err != nil {
+func CreateBridgeNode(conn net.Conn, id *Identity, disconnectionFunc func()) (BridgeNode, error) {
+	err := defaultBasicReq.Send(conn, id.Id, id.AccessKey)
+	if err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
-	if err = connInit.ReceptionWithCtx(ctx, conn); err != nil {
+	rid, permit, msg, err := defaultBasicResp.Receive(conn, id.AccessTimeout)
+	if err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
-	if err = connInit.Error(); err != nil {
-		return nil, err
+	if !permit {
+		_ = conn.Close()
+		return nil, errors.New(msg)
 	}
 	b := new(bridge)
 	b.conn = conn
 	b.rid = rid
-	b.lid = lid
+	b.lid = id.Id
 	b.disFun = disconnectionFunc
 	return b, nil
 }

@@ -17,10 +17,8 @@ import (
 )
 
 type Config struct {
-	LId             uint16
-	RId             uint16
-	RAddr           string
-	ConnInitTimeout time.Duration
+	RAddr string
+	*node.Identity
 	*HelloProtocol
 }
 
@@ -42,15 +40,19 @@ func init() {
 	flag.Parse()
 	if *gen != "" {
 		data, err := yaml.Marshal(&Config{
-			LId:   0,
 			RAddr: "0.0.0.0:8000",
+			Identity: &node.Identity{
+				Id:            8001,
+				AccessKey:     []byte("hello"),
+				AccessTimeout: time.Second * 6,
+			},
 			HelloProtocol: &HelloProtocol{
 				Enable:       false,
 				EnableStdout: false,
 				OutFile:      "",
-				Interval:     0,
-				Timeout:      0,
-				TimeoutClose: 0,
+				Interval:     time.Second * 3,
+				Timeout:      time.Second * 15,
+				TimeoutClose: time.Second * 30,
 			},
 		})
 		if err != nil {
@@ -94,16 +96,17 @@ func main() {
 		}
 		handler.HelloProtocol = protocol.NewHelloProtocol(c.HelloProtocol.Interval, c.HelloProtocol.Timeout, c.HelloProtocol.TimeoutClose, w)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), c.ConnInitTimeout)
-	defer cancel()
-	conn, err := node.DialTCP(ctx, c.LId, c.RId, c.RAddr, handler)
+
+	conn, err := node.DialTCP(c.RAddr, c.Identity, handler)
 	if err != nil {
 		log.Println(err)
 		return
 	}
 	handler.Conn = conn
-	go handler.HelloProtocol.KeepAlive(conn)
-	log.Printf("client %d start success\n", c.LId)
+	if c.HelloProtocol.Enable {
+		go handler.HelloProtocol.KeepAlive(conn)
+	}
+	log.Printf("client %d start success\n", c.Identity.Id)
 	defer conn.Close()
 	// 命令解析处理
 	go func() {

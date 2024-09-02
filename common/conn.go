@@ -85,17 +85,6 @@ func (c *Connect) Activate() int64 {
 	return c.activate
 }
 
-func copyMsg(m *Message) *Message {
-	msg := new(Message)
-	msg.Id = m.Id
-	msg.Type = m.Type
-	msg.SrcId = m.SrcId
-	msg.DestId = m.DestId
-	msg.Data = make([]byte, len(m.Data))
-	copy(msg.Data, m.Data)
-	return msg
-}
-
 // Serve 开启服务
 func (c *Connect) Serve() {
 	var err error
