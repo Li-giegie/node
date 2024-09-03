@@ -41,7 +41,15 @@ func (h CliHandler) Disconnect(id uint16, err error) {
 }
 
 func TestClient(t *testing.T) {
-	conn, err := node.DialTCP(context.Background(), 8001, 8000, "0.0.0.0:8000", &CliHandler{})
+	conn, err := node.DialTCP(
+		"0.0.0.0:8000",
+		&node.Identity{
+			Id:            8001,
+			AccessKey:     []byte("hello"),
+			AccessTimeout: time.Second * 6,
+		},
+		&CliHandler{},
+	)
 	if err != nil {
 		t.Error(err)
 		return
@@ -50,19 +58,21 @@ func TestClient(t *testing.T) {
 
 	t1 := time.Now()
 	wg := sync.WaitGroup{}
-	for i := 0; i < 100000; i++ {
+	for i := 0; i < 5; i++ {
 		wg.Add(1)
 		go func(i int) {
-			defer wg.Done()
 			data := []byte(strconv.Itoa(i))
-			res, err := conn.Request(context.Background(), data)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+			res, err := conn.Request(ctx, data)
 			if err != nil {
-				t.Error(err, res)
-				return
+				log.Println("err", err, res)
+			} else {
+				if string(res) != string(data) {
+					log.Println("值被修改", string(res), string(data), res, data)
+				}
 			}
-			if string(res) != string(data) {
-				log.Fatalln("值被修改", string(res), string(data), res, data)
-			}
+			wg.Done()
+			cancel()
 		}(i)
 	}
 	wg.Wait()

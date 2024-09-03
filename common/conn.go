@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -50,10 +51,11 @@ type Handler interface {
 	Disconnect(id uint16, err error)
 }
 
-func NewConn(localId, remoteId uint16, conn net.Conn, r *MsgReceiver, conns Connections, route Router, h Handler) (c *Connect) {
+func NewConn(localId, remoteId uint16, conn net.Conn, revChan map[uint32]chan *Message, lock *sync.Mutex, conns Connections, route Router, h Handler) (c *Connect) {
 	c = new(Connect)
 	c.remoteId = remoteId
-	c.MsgReceiver = r
+	c.revChan = revChan
+	c.lock = lock
 	c.localId = localId
 	c.conn = conn
 	c.activate = time.Now().UnixMilli()
@@ -75,7 +77,8 @@ type Connect struct {
 	ReadBuffSize int
 	conn         net.Conn
 	msgCounter   uint32
-	*MsgReceiver
+	revChan      map[uint32]chan *Message
+	lock         *sync.Mutex
 	Router
 	Connections
 	Handler
@@ -148,7 +151,13 @@ func (c *Connect) Serve() {
 		case MsgType_Send:
 			c.Handle(&context{Message: msg, Connect: c})
 		case MsgType_Reply, MsgType_ReplyErr, MsgType_ReplyErrConnNotExist, MsgType_ReplyErrLenLimit, MsgType_ReplyErrCheckSum:
-			if !c.SetMsgChan(msg) {
+			c.lock.Lock()
+			ch, ok := c.revChan[msg.Id]
+			if ok {
+				ch <- msg
+			}
+			c.lock.Unlock()
+			if !ok {
 				c.ErrHandle(&context{Message: msg, Connect: c}, DEFAULT_ErrDrop)
 			}
 		default:
@@ -226,21 +235,37 @@ func (c *Connect) write(b []byte) (n int, err error) {
 
 func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
 	reqId := req.Id
-	respChan := c.CreateMsgChan(reqId)
+	ch := make(chan *Message, 1)
+	c.lock.Lock()
+	c.revChan[reqId] = ch
+	c.lock.Unlock()
 	err := c.WriteMsg(req)
 	if err != nil {
-		c.DeleteMsgChan(reqId)
+		c.lock.Lock()
+		delete(c.revChan, reqId)
+		c.lock.Unlock()
+		close(ch)
 		return nil, err
 	}
 	select {
 	case <-ctx.Done():
-		c.DeleteMsgChan(reqId)
+		c.lock.Lock()
+		_ch, ok := c.revChan[reqId]
+		if ok {
+			close(_ch)
+			delete(c.revChan, reqId)
+		}
+		c.lock.Unlock()
 		return nil, ctx.Err()
-	case resp := <-respChan:
-		c.DeleteMsgChan(reqId)
-		data := resp.Data
-		typ := resp.Type
-		switch typ {
+	case resp := <-ch:
+		c.lock.Lock()
+		_ch, ok := c.revChan[reqId]
+		if ok {
+			close(_ch)
+			delete(c.revChan, reqId)
+		}
+		c.lock.Unlock()
+		switch resp.Type {
 		case MsgType_ReplyErrConnNotExist:
 			return nil, DEFAULT_ErrConnNotExist
 		case MsgType_ReplyErrLenLimit:
@@ -248,14 +273,14 @@ func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
 		case MsgType_ReplyErrCheckSum:
 			return nil, DEFAULT_ErrMsgLenLimit
 		case MsgType_ReplyErr:
-			n := binary.LittleEndian.Uint16(data)
+			n := binary.LittleEndian.Uint16(resp.Data)
 			if n > limitErrLen {
-				return data[2:], nil
+				return resp.Data[2:], nil
 			}
 			n += 2
-			return data[n:], &ErrReplyError{b: data[2:n]}
+			return resp.Data[n:], &ErrReplyError{b: resp.Data[2:n]}
 		default:
-			return data, nil
+			return resp.Data, nil
 		}
 	}
 }

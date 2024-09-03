@@ -37,7 +37,7 @@ type HelloProtocol struct {
 	TimeoutClose time.Duration
 }
 
-var confFile = flag.String("conf", "./conf.yaml", "configure file")
+var confFile = flag.String("conf", "./conf8000.yaml", "configure file")
 var genConfFile = flag.String("gen", "", "gen config file template")
 
 var c *Conf

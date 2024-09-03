@@ -4,10 +4,10 @@ import (
 	"errors"
 	"github.com/Li-giegie/node/common"
 	"net"
+	"sync"
 )
 
 type Client struct {
-	*common.MsgReceiver
 	*Identity
 	conn net.Conn
 }
@@ -16,7 +16,6 @@ func NewClient(conn net.Conn, id *Identity) *Client {
 	c := new(Client)
 	c.conn = conn
 	c.Identity = id
-	c.MsgReceiver = common.NewMsgReceiver(1024)
 	return c
 }
 
@@ -35,7 +34,7 @@ func (c *Client) InitConn(h Handler) (Conn, error) {
 		_ = c.conn.Close()
 		return nil, errors.New(msg)
 	}
-	conn := common.NewConn(c.Identity.Id, rid, c.conn, c.MsgReceiver, nil, nil, h)
+	conn := common.NewConn(c.Identity.Id, rid, c.conn, make(map[uint32]chan *common.Message), &sync.Mutex{}, nil, nil, h)
 	go conn.Serve()
 	h.Connection(conn)
 	return conn, nil
