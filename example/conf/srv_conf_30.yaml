@@ -1,0 +1,21 @@
+addr: 0.0.0.0:8030
+identity:
+    id: 30
+    # hello
+    accesskey:
+        - 104
+        - 101
+        - 108
+        - 108
+        - 111
+    accesstimeout: 6s
+nodediscoveryprotocol:
+    enable: true
+    queryinterval: 30s
+helloprotocol:
+    enable: true
+    enablestdout: true
+    outfile: "hello-30.log"
+    interval: 30s
+    timeout: 30s
+    timeoutclose: 90s

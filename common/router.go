@@ -3,7 +3,6 @@ package common
 import (
 	"bytes"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -104,6 +103,7 @@ func (r *RouteTable) DeleteRoute(dst, next, hop, parentNode uint16) bool {
 	r.Unlock()
 	return true
 }
+
 func (r *RouteTable) DeleteNextRoute(next uint16) bool {
 	nextList := make([]*RouteInfo, 0, 5)
 	dst := make([]uint16, 0, 5)
@@ -136,16 +136,12 @@ func (r *RouteTable) RouteTableOutput() []byte {
 		return []byte("route is empty\n")
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, 128))
-	buf.WriteString("next\thop\tparent-node\ttime\t\n")
+	buf.WriteString("dest \tnext \thop  \tparent-node\ttime\t\n")
 	for u, infos := range r.routes {
-		buf.WriteString("Route: " + strconv.Itoa(int(u)) + "\n")
-		buf.Write(bytes.Repeat([]byte("-"), 55))
-		buf.WriteByte(10)
 		for i := 0; i < len(infos); i++ {
-			_, _ = fmt.Fprintf(buf, "%d    \t%d   \t%d           \t%s    \t\n", infos[i].Next, infos[i].Hop, infos[i].ParentNode, time.UnixMilli(infos[i].UnixMilli).Format("2006-01-02 15:04:05"))
+			_, _ = fmt.Fprintf(buf, "%d \t%d \t%d  \t%d           \t%s    \t\n", u, infos[i].Next, infos[i].Hop, infos[i].ParentNode, time.UnixMilli(infos[i].UnixMilli).Format("2006-01-02 15:04:05"))
 		}
-		buf.Write(bytes.Repeat([]byte("-"), 55))
-		buf.Write([]byte{10, 10})
+		buf.Write([]byte{10})
 	}
 	r.RUnlock()
 	return buf.Bytes()

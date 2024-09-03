@@ -1,6 +1,6 @@
-raddr: 0.0.0.0:8000
+raddr: 0.0.0.0:8040
 identity:
-    id: 8001
+    id: 41
     accesskey:
         - 104
         - 101
@@ -11,7 +11,7 @@ identity:
 helloprotocol:
     enable: true
     enablestdout: true
-    outfile: "hello.log"
+    outfile: "hello-41.log"
     interval: 10s
     timeout: 30s
     timeoutclose: 60s

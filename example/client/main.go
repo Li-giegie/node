@@ -31,7 +31,7 @@ type HelloProtocol struct {
 	TimeoutClose time.Duration
 }
 
-var conf = flag.String("conf", "./conf.yaml", "configure file path")
+var conf = flag.String("conf", "./conf8000.yaml", "configure file path")
 var gen = flag.String("gen", "", "generate configure file template")
 
 var c = new(Config)

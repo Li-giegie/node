@@ -11,7 +11,7 @@ import (
 
 var bind = &rabbit.Cmd{
 	Name:        "bind",
-	Description: "创建一个客户端连接，并绑定",
+	Description: "绑定一个服务端节点",
 	RunE: func(c *rabbit.Cmd, args []string) error {
 		key := c.Flags().Lookup("key").Value.String()
 		addr := c.Flags().Lookup("addr").Value.String()

@@ -24,12 +24,13 @@ type Server struct {
 	MaxConns int
 	// InitSessionTimeout 初始化连接，并在限定时间得到节点id，默认6s
 	*Identity
-	State       StateType
-	Conns       *Conns
-	msgReceiver *common.MsgReceiver
-	Router      *common.RouteTable
-	handler     Handler
-	listen      net.Listener
+	State   StateType
+	Conns   *Conns
+	revChan map[uint32]chan *common.Message
+	lock    *sync.Mutex
+	Router  *common.RouteTable
+	handler Handler
+	listen  net.Listener
 }
 
 // NewServer 创建一个Server类型的节点
@@ -38,7 +39,8 @@ func NewServer(l net.Listener, id *Identity) *Server {
 	srv.Identity = id
 	srv.listen = l
 	srv.Conns = newConns()
-	srv.msgReceiver = common.NewMsgReceiver(1024)
+	srv.revChan = make(map[uint32]chan *common.Message)
+	srv.lock = new(sync.Mutex)
 	srv.Router = common.NewRouter()
 	if id == nil {
 		panic("BasicAuth can't be empty")
@@ -46,9 +48,6 @@ func NewServer(l net.Listener, id *Identity) *Server {
 	return srv
 }
 
-func (s *Server) SetMsgReceiver(n int) {
-	s.msgReceiver = common.NewMsgReceiver(n)
-}
 func (s *Server) Serve(h Handler) error {
 	s.State = StateType_Listen
 	s.handler = h
@@ -83,7 +82,7 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 	lid := s.Identity.Id
-	c := common.NewConn(lid, rid, conn, s.msgReceiver, s.Conns, s.Router, s.handler)
+	c := common.NewConn(lid, rid, conn, s.revChan, s.lock, s.Conns, s.Router, s.handler)
 	if rid == lid || !s.Conns.add(rid, c) {
 		_ = defaultBasicResp.Send(conn, 0, false, "error: id already exists")
 		_ = conn.Close()
@@ -110,7 +109,7 @@ func (s *Server) BindBridge(bd BridgeNode) error {
 	if s.Identity.Id == bd.RemoteId() {
 		return nodeEqErr
 	}
-	conn := common.NewConn(s.Identity.Id, bd.RemoteId(), bd.Conn(), s.msgReceiver, s.Conns, s.Router, s.handler)
+	conn := common.NewConn(s.Identity.Id, bd.RemoteId(), bd.Conn(), s.revChan, s.lock, s.Conns, s.Router, s.handler)
 	if !s.Conns.add(conn.RemoteId(), conn) {
 		return errNodeExist
 	}

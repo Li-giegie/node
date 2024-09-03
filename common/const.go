@@ -1,7 +1,6 @@
 package common
 
 import (
-	"fmt"
 	"strconv"
 )
 
@@ -34,16 +33,13 @@ type ErrConnNotExist struct {
 func (ErrConnNotExist) Error() string {
 	return "connect not exist"
 }
-func (ErrConnNotExist) Type() uint8 {
-	return MsgType_ReplyErrConnNotExist
-}
 
 type ErrTimeout struct {
 	text string
 }
 
 func (e *ErrTimeout) Error() string {
-	return fmt.Sprintf("timeout %s", e.text)
+	return "timeout"
 }
 
 const limitErrLen = 65533

@@ -1,6 +1,7 @@
-addr: 0.0.0.0:9000
+addr: 0.0.0.0:8020
 identity:
-    id: 9000
+    id: 20
+    # hello
     accesskey:
         - 104
         - 101
@@ -13,8 +14,8 @@ nodediscoveryprotocol:
     queryinterval: 30s
 helloprotocol:
     enable: true
-    enablestdout: false
-    outfile: ""
-    interval: 5s
-    timeout: 10s
-    timeoutclose: 30s
+    enablestdout: true
+    outfile: "hello-20.log"
+    interval: 30s
+    timeout: 30s
+    timeoutclose: 90s
