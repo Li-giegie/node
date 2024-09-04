@@ -177,24 +177,30 @@ func (c *Connect) State() uint8 {
 	return c.state
 }
 
-func (c *Connect) Request(ctx ctx.Context, data []byte) ([]byte, error) {
+func (c *Connect) newSendMsg(data []byte) *Message {
 	req := new(Message)
 	req.Id = atomic.AddUint32(&c.msgCounter, 1)
+	if req.Id > 0xffffff {
+		req.Id = req.Id - 0xffffff
+		if c.msgCounter > 0xffffff {
+			c.msgCounter = req.Id
+		}
+	}
 	req.SrcId = c.localId
 	req.DestId = c.remoteId
 	req.Type = MsgType_Send
 	req.Data = data
-	return c.request(ctx, req)
+	return req
+}
+
+func (c *Connect) Request(ctx ctx.Context, data []byte) ([]byte, error) {
+	return c.request(ctx, c.newSendMsg(data))
 }
 
 // Forward only client use
 func (c *Connect) Forward(ctx ctx.Context, destId uint16, data []byte) ([]byte, error) {
-	req := new(Message)
-	req.Id = atomic.AddUint32(&c.msgCounter, 1)
-	req.SrcId = c.localId
+	req := c.newSendMsg(data)
 	req.DestId = destId
-	req.Type = MsgType_Send
-	req.Data = data
 	return c.request(ctx, req)
 }
 
@@ -206,12 +212,8 @@ func (c *Connect) WriteTo(dst uint16, data []byte) (n int, err error) {
 	if dst == c.localId {
 		return 0, ErrWriteYourself
 	}
-	msg := new(Message)
-	msg.Id = atomic.AddUint32(&c.msgCounter, 1)
-	msg.SrcId = c.localId
+	msg := c.newSendMsg(data)
 	msg.DestId = dst
-	msg.Type = MsgType_Send
-	msg.Data = data
 	n, err = c.write(msg.Encode())
 	return n, err
 }
