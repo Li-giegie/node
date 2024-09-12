@@ -34,7 +34,7 @@ func (c *Client) InitConn(h Handler) (Conn, error) {
 		_ = c.conn.Close()
 		return nil, errors.New(msg)
 	}
-	conn := common.NewConn(c.Identity.Id, rid, c.conn, make(map[uint32]chan *common.Message), &sync.Mutex{}, nil, nil, h)
+	conn := common.NewConn(c.Identity.Id, rid, c.conn, make(map[uint32]chan *common.Message), &sync.Mutex{}, nil, nil, h, new(uint32))
 	go conn.Serve()
 	h.Connection(conn)
 	return conn, nil

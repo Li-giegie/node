@@ -31,6 +31,7 @@ type Server struct {
 	Router  *common.RouteTable
 	handler Handler
 	listen  net.Listener
+	counter uint32
 }
 
 // NewServer 创建一个Server类型的节点
@@ -82,7 +83,7 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 	lid := s.Identity.Id
-	c := common.NewConn(lid, rid, conn, s.revChan, s.lock, s.Conns, s.Router, s.handler)
+	c := common.NewConn(lid, rid, conn, s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter)
 	if rid == lid || !s.Conns.add(rid, c) {
 		_ = defaultBasicResp.Send(conn, 0, false, "error: id already exists")
 		_ = conn.Close()
@@ -109,7 +110,7 @@ func (s *Server) BindBridge(bd BridgeNode) error {
 	if s.Identity.Id == bd.RemoteId() {
 		return nodeEqErr
 	}
-	conn := common.NewConn(s.Identity.Id, bd.RemoteId(), bd.Conn(), s.revChan, s.lock, s.Conns, s.Router, s.handler)
+	conn := common.NewConn(s.Identity.Id, bd.RemoteId(), bd.Conn(), s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter)
 	if !s.Conns.add(conn.RemoteId(), conn) {
 		return errNodeExist
 	}

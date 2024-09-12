@@ -78,16 +78,3 @@ func TestClient(t *testing.T) {
 	wg.Wait()
 	fmt.Println(time.Since(t1))
 }
-
-func TestAAA(t *testing.T) {
-	c := make(chan int, 1)
-
-	go func() {
-		time.Sleep(time.Second)
-		close(c)
-	}()
-	select {
-	case v := <-c:
-		fmt.Println(v)
-	}
-}

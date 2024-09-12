@@ -51,7 +51,7 @@ type Handler interface {
 	Disconnect(id uint16, err error)
 }
 
-func NewConn(localId, remoteId uint16, conn net.Conn, revChan map[uint32]chan *Message, lock *sync.Mutex, conns Connections, route Router, h Handler) (c *Connect) {
+func NewConn(localId, remoteId uint16, conn net.Conn, revChan map[uint32]chan *Message, lock *sync.Mutex, conns Connections, route Router, h Handler, counter *uint32) (c *Connect) {
 	c = new(Connect)
 	c.remoteId = remoteId
 	c.revChan = revChan
@@ -64,6 +64,7 @@ func NewConn(localId, remoteId uint16, conn net.Conn, revChan map[uint32]chan *M
 	c.Router = route
 	c.Connections = conns
 	c.Handler = h
+	c.counter = counter
 	return c
 }
 
@@ -76,7 +77,7 @@ type Connect struct {
 	MaxMsgLen    uint32
 	ReadBuffSize int
 	conn         net.Conn
-	msgCounter   uint32
+	counter      *uint32
 	revChan      map[uint32]chan *Message
 	lock         *sync.Mutex
 	Router
@@ -177,15 +178,9 @@ func (c *Connect) State() uint8 {
 	return c.state
 }
 
-func (c *Connect) newSendMsg(data []byte) *Message {
+func (c *Connect) newMsg(data []byte) *Message {
 	req := new(Message)
-	req.Id = atomic.AddUint32(&c.msgCounter, 1)
-	if req.Id > 0xffffff {
-		req.Id = req.Id - 0xffffff
-		if c.msgCounter > 0xffffff {
-			c.msgCounter = req.Id
-		}
-	}
+	req.Id = atomic.AddUint32(c.counter, 1) % 0xffffff
 	req.SrcId = c.localId
 	req.DestId = c.remoteId
 	req.Type = MsgType_Send
@@ -194,12 +189,12 @@ func (c *Connect) newSendMsg(data []byte) *Message {
 }
 
 func (c *Connect) Request(ctx ctx.Context, data []byte) ([]byte, error) {
-	return c.request(ctx, c.newSendMsg(data))
+	return c.request(ctx, c.newMsg(data))
 }
 
 // Forward only client use
 func (c *Connect) Forward(ctx ctx.Context, destId uint16, data []byte) ([]byte, error) {
-	req := c.newSendMsg(data)
+	req := c.newMsg(data)
 	req.DestId = destId
 	return c.request(ctx, req)
 }
@@ -212,7 +207,7 @@ func (c *Connect) WriteTo(dst uint16, data []byte) (n int, err error) {
 	if dst == c.localId {
 		return 0, ErrWriteYourself
 	}
-	msg := c.newSendMsg(data)
+	msg := c.newMsg(data)
 	msg.DestId = dst
 	n, err = c.write(msg.Encode())
 	return n, err

@@ -1,6 +1,6 @@
 ## 下文将演示图中多节点互联场景
 
-![](../.README_images/multiple.png)
+![联合场景图](../.README_images/multiple.png)
 
 ### 指定配置启动服务端节点
 节点开启：节点发现（转发节点消息）、hell心跳检测
