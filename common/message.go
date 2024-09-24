@@ -58,7 +58,7 @@ func (m *Message) Decode(r io.Reader, b []byte, limit uint32) (err error) {
 	checkSum := binary.LittleEndian.Uint16(b[11:])
 	ok := uint16(m.Type)^uint16(m.Id)^m.SrcId^m.DestId^uint16(dataLen) == checkSum
 	if !ok {
-		return DEFAULT_ErrMsgCheck
+		return DEFAULT_ErrMsgChecksum
 	}
 	if limit > 0 && dataLen > limit {
 		return DEFAULT_ErrMsgLenLimit

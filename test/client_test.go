@@ -69,6 +69,8 @@ func TestClient(t *testing.T) {
 			} else {
 				if string(res) != string(data) {
 					log.Println("值被修改", string(res), string(data), res, data)
+				} else {
+					log.Println(string(res))
 				}
 			}
 			wg.Done()
@@ -76,5 +78,6 @@ func TestClient(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+	time.Sleep(time.Second * 5)
 	fmt.Println(time.Since(t1))
 }

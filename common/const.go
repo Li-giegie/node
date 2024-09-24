@@ -6,7 +6,7 @@ import (
 
 var (
 	DEFAULT_ErrMsgLenLimit       = new(ErrMsgLenLimit)
-	DEFAULT_ErrMsgCheck          = new(ErrMsgCheck)
+	DEFAULT_ErrMsgChecksum       = new(ErrMsgChecksum)
 	DEFAULT_ErrTimeout           = new(ErrTimeout)
 	DEFAULT_ErrConnNotExist      = new(ErrConnNotExist)
 	DEFAULT_ErrReplyErrorInvalid = new(ErrReplyErrorInvalid)
@@ -17,14 +17,14 @@ type ErrMsgLenLimit struct {
 }
 
 func (*ErrMsgLenLimit) Error() string {
-	return "message length exceeds the limit size 0x00FFFFFF"
+	return "message length exceeds the limit size"
 }
 
-type ErrMsgCheck struct {
+type ErrMsgChecksum struct {
 }
 
-func (*ErrMsgCheck) Error() string {
-	return "message header invalid check"
+func (*ErrMsgChecksum) Error() string {
+	return "invalid message checksum error"
 }
 
 type ErrConnNotExist struct {
@@ -71,5 +71,5 @@ type ErrDrop struct {
 }
 
 func (e *ErrDrop) Error() string {
-	return "message id not exist or timeout message"
+	return "timeout or invalid messages"
 }

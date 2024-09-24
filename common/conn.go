@@ -5,6 +5,7 @@ import (
 	ctx "context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -73,7 +74,6 @@ type Connect struct {
 	localId      uint16
 	remoteId     uint16
 	activate     int64
-	err          error
 	MaxMsgLen    uint32
 	ReadBuffSize int
 	conn         net.Conn
@@ -92,10 +92,6 @@ func (c *Connect) Activate() int64 {
 // Serve 开启服务
 func (c *Connect) Serve() {
 	var err error
-	defer func() {
-		_ = c.Close()
-		c.Disconnect(c.remoteId, err)
-	}()
 	c.state = ConnStateTypeOnConnect
 	headerBuf := make([]byte, MsgHeaderLen)
 	reader := bufio.NewReaderSize(c.conn, c.ReadBuffSize)
@@ -103,7 +99,7 @@ func (c *Connect) Serve() {
 		msg := new(Message)
 		err = msg.Decode(reader, headerBuf, c.MaxMsgLen)
 		if err != nil {
-			err = c.connectionErr(ctx.WithValue(ctx.Background(), "msg", msg), err)
+			c.handleServeErr(msg, err)
 			return
 		}
 		c.activate = time.Now().UnixMilli()
@@ -144,7 +140,7 @@ func (c *Connect) Serve() {
 			}
 			// 本地节点、路由均为目的节点，返回错误
 			if err = c.WriteMsg(msg.ErrReply(MsgType_ReplyErrConnNotExist, c.localId)); err != nil {
-				c.ErrHandle(&context{Message: msg, Connect: c}, &ErrWrite{err: err})
+				_ = c.conn.Close()
 			}
 			continue
 		}
@@ -268,7 +264,7 @@ func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
 		case MsgType_ReplyErrLenLimit:
 			return nil, DEFAULT_ErrMsgLenLimit
 		case MsgType_ReplyErrCheckSum:
-			return nil, DEFAULT_ErrMsgLenLimit
+			return nil, DEFAULT_ErrMsgChecksum
 		case MsgType_ReplyErr:
 			n := binary.LittleEndian.Uint16(resp.Data)
 			if n > limitErrLen {
@@ -282,35 +278,27 @@ func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
 	}
 }
 
-func (c *Connect) connectionErr(ctx ctx.Context, err error) error {
-	switch c.state {
-	case ConnStateTypeOnClose:
-		return nil
-	case ConnStateTypeOnError:
-		return c.err
-	default:
-		msg, ok := ctx.Value("msg").(*Message)
-		typ := MsgType_ReplyErrCheckSum
-		switch err.(type) {
-		case *ErrMsgCheck:
-			c.state = ConnStateTypeOnError
-			c.err = err
-		case *ErrMsgLenLimit:
-			c.state = ConnStateTypeOnError
-			c.err = err
-			typ = MsgType_ReplyErrLenLimit
-		default:
-			c.state = ConnStateTypeOnError
-			c.err = err
-			return err
-		}
-		if ok {
-			if err = c.WriteMsg(msg.ErrReply(typ, c.localId)); err != nil {
-				c.ErrHandle(&context{Message: msg, Connect: c}, err)
-			}
-		}
-		return err
+func (c *Connect) handleServeErr(m *Message, err error) {
+	defer func() {
+		_ = c.conn.Close()
+		c.Disconnect(c.remoteId, err)
+	}()
+	if c.state == ConnStateTypeOnClose || errors.Is(err, io.EOF) {
+		return
 	}
+	c.state = ConnStateTypeOnError
+	if errors.Is(err, DEFAULT_ErrMsgChecksum) {
+		c.ErrHandle(&context{Message: m}, err)
+		m.Type = MsgType_ReplyErrCheckSum
+	} else if errors.Is(err, DEFAULT_ErrMsgLenLimit) {
+		c.ErrHandle(&context{Message: m}, err)
+		m.Type = MsgType_ReplyErrLenLimit
+	} else {
+		return
+	}
+	m.SrcId, m.DestId = c.localId, m.SrcId
+	_ = c.WriteMsg(m)
+	return
 }
 
 func (c *Connect) Close() error {
