@@ -24,18 +24,23 @@ type Server struct {
 	MaxConns int
 	// InitSessionTimeout 初始化连接，并在限定时间得到节点id，默认6s
 	*Identity
-	State   StateType
-	Conns   *Conns
-	revChan map[uint32]chan *common.Message
-	lock    *sync.Mutex
-	Router  *common.RouteTable
-	handler Handler
-	listen  net.Listener
-	counter uint32
+	State         StateType
+	Conns         *Conns
+	revChan       map[uint32]chan *common.Message
+	lock          *sync.Mutex
+	Router        *common.RouteTable
+	handler       Handler
+	listen        net.Listener
+	counter       uint32
+	ReaderBufSize int
+	WriterBufSize int
 }
 
 // NewServer 创建一个Server类型的节点
 func NewServer(l net.Listener, id *Identity) *Server {
+	if id == nil {
+		panic("BasicAuth can't be empty")
+	}
 	srv := new(Server)
 	srv.Identity = id
 	srv.listen = l
@@ -43,9 +48,8 @@ func NewServer(l net.Listener, id *Identity) *Server {
 	srv.revChan = make(map[uint32]chan *common.Message)
 	srv.lock = new(sync.Mutex)
 	srv.Router = common.NewRouter()
-	if id == nil {
-		panic("BasicAuth can't be empty")
-	}
+	srv.ReaderBufSize = 4096
+	srv.WriterBufSize = 4096
 	return srv
 }
 
@@ -83,7 +87,7 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 	lid := s.Identity.Id
-	c := common.NewConn(lid, rid, conn, s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter)
+	c := common.NewConn(lid, rid, conn, s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter, s.ReaderBufSize, s.WriterBufSize)
 	if rid == lid || !s.Conns.add(rid, c) {
 		_ = defaultBasicResp.Send(conn, 0, false, "error: id already exists")
 		_ = conn.Close()
@@ -110,7 +114,7 @@ func (s *Server) BindBridge(bd BridgeNode) error {
 	if s.Identity.Id == bd.RemoteId() {
 		return nodeEqErr
 	}
-	conn := common.NewConn(s.Identity.Id, bd.RemoteId(), bd.Conn(), s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter)
+	conn := common.NewConn(s.Identity.Id, bd.RemoteId(), bd.Conn(), s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter, s.ReaderBufSize, s.WriterBufSize)
 	if !s.Conns.add(conn.RemoteId(), conn) {
 		return errNodeExist
 	}

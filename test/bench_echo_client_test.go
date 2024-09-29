@@ -2,7 +2,10 @@ package test
 
 import (
 	"context"
+	"fmt"
 	"github.com/Li-giegie/node"
+	"math/rand"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +27,7 @@ func Dial() {
 		panic(err)
 	}
 	echoConn = conn
+
 }
 
 var once = sync.Once{}
@@ -41,6 +45,8 @@ func BenchmarkEchoRequest(b *testing.B) {
 			return
 		}
 	}
+	//fmt.Println()
+	//common.PrintTrace()
 }
 
 func BenchmarkEchoRequestGo(b *testing.B) {
@@ -63,4 +69,33 @@ func BenchmarkEchoRequestGo(b *testing.B) {
 		}()
 	}
 	w.Wait()
+	//fmt.Println()
+	//common.PrintTrace()
+}
+
+func TestEchoClient(t *testing.T) {
+	Dial()
+	ctx := context.Background()
+	t1 := time.Now()
+	w := sync.WaitGroup{}
+	for i := 0; i < 1000000; i++ {
+		w.Add(1)
+		go func() {
+			n := strconv.Itoa(rand.Int())
+			res, err := echoConn.Request(ctx, []byte(n))
+			if err != nil {
+				fmt.Println(err)
+				w.Done()
+				return
+			}
+			if n != string(res) {
+				fmt.Println("错误", n, res)
+				return
+			}
+			w.Done()
+		}()
+	}
+	w.Wait()
+	fmt.Println(time.Since(t1))
+	//common.PrintTrace()
 }

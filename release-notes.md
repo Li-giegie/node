@@ -3,6 +3,7 @@
 - [v1.1](#v11)
 - [v1.2](#v12)
 - [v1.3](#v13)
+- [v1.4](#v14)
 ___
 
 ## v1.0
@@ -58,5 +59,31 @@ pkg: github.com/Li-giegie/node/test
 cpu: AMD Ryzen 5 5600H with Radeon Graphics
 BenchmarkEchoRequest-12            67322             53411 ns/op             186 B/op          6 allocs/op
 BenchmarkEchoRequestGo-12         146332             24469 ns/op             743 B/op          8 allocs/op
+```
+___
+
+## v1.4
+### FEAT
+- feat：增加Writer缓冲区，多核心并发提升50%性能，每秒可达10w次请求响应
+### BENCHMARK
+- 文件：test/bench_echo_client_test.go、test/bench_echo_server_test.go
+- 函数：TestEchoServer、BenchmarkEchoRequest、BenchmarkEchoRequestGo
+- benchmark
+```go
+go test -run none -bench BenchmarkEchoRequest -benchtime 3s -cpu 1
+goos: windows
+goarch: amd64
+pkg: github.com/Li-giegie/node/test
+cpu: AMD Ryzen 5 5600H with Radeon Graphics
+BenchmarkEchoRequest       69897             51011 ns/op
+BenchmarkEchoRequestGo    237777             16545 ns/op
+
+go test -run none -bench BenchmarkEchoRequest -benchmem -benchtime 3s -cpu 12
+goos: windows
+goarch: amd64
+pkg: github.com/Li-giegie/node/test
+cpu: AMD Ryzen 5 5600H with Radeon Graphics
+BenchmarkEchoRequest-12            66759             53607 ns/op             186 B/op          6 allocs/op
+BenchmarkEchoRequestGo-12         304437             12316 ns/op             735 B/op          8 allocs/op
 ```
 ___

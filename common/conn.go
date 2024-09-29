@@ -52,7 +52,7 @@ type Handler interface {
 	Disconnect(id uint16, err error)
 }
 
-func NewConn(localId, remoteId uint16, conn net.Conn, revChan map[uint32]chan *Message, lock *sync.Mutex, conns Connections, route Router, h Handler, counter *uint32) (c *Connect) {
+func NewConn(localId, remoteId uint16, conn net.Conn, revChan map[uint32]chan *Message, lock *sync.Mutex, conns Connections, route Router, h Handler, counter *uint32, rBufSize, wBufSize int) (c *Connect) {
 	c = new(Connect)
 	c.remoteId = remoteId
 	c.revChan = revChan
@@ -61,25 +61,27 @@ func NewConn(localId, remoteId uint16, conn net.Conn, revChan map[uint32]chan *M
 	c.conn = conn
 	c.activate = time.Now().UnixMilli()
 	c.MaxMsgLen = 0x00FFFFFF
-	c.ReadBuffSize = 4096
 	c.Router = route
 	c.Connections = conns
 	c.Handler = h
 	c.counter = counter
+	c.Writer = NewWriter(conn, wBufSize)
+	c.Reader = bufio.NewReaderSize(conn, rBufSize)
 	return c
 }
 
 type Connect struct {
-	state        uint8
-	localId      uint16
-	remoteId     uint16
-	activate     int64
-	MaxMsgLen    uint32
-	ReadBuffSize int
-	conn         net.Conn
-	counter      *uint32
-	revChan      map[uint32]chan *Message
-	lock         *sync.Mutex
+	state     uint8
+	localId   uint16
+	remoteId  uint16
+	activate  int64
+	MaxMsgLen uint32
+	counter   *uint32
+	revChan   map[uint32]chan *Message
+	lock      *sync.Mutex
+	conn      net.Conn
+	*Writer
+	*bufio.Reader
 	Router
 	Connections
 	Handler
@@ -94,10 +96,9 @@ func (c *Connect) Serve() {
 	var err error
 	c.state = ConnStateTypeOnConnect
 	headerBuf := make([]byte, MsgHeaderLen)
-	reader := bufio.NewReaderSize(c.conn, c.ReadBuffSize)
 	for {
 		msg := new(Message)
-		err = msg.Decode(reader, headerBuf, c.MaxMsgLen)
+		err = msg.Decode(c.Reader, headerBuf, c.MaxMsgLen)
 		if err != nil {
 			c.handleServeErr(msg, err)
 			return
@@ -223,7 +224,7 @@ func (c *Connect) write(b []byte) (n int, err error) {
 	if len(b)-MsgHeaderLen > int(c.MaxMsgLen) {
 		return 0, DEFAULT_ErrMsgLenLimit
 	}
-	return c.conn.Write(b)
+	return c.Writer.Write(b)
 }
 
 func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
