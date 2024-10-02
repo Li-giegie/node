@@ -5,6 +5,7 @@ import (
 	ctx "context"
 	"encoding/binary"
 	"errors"
+	"github.com/Li-giegie/node/utils"
 	"io"
 	"net"
 	"sync"
@@ -21,15 +22,17 @@ const (
 type Conn interface {
 	//Request 发起一个请求，得到一个响应
 	Request(ctx ctx.Context, data []byte) ([]byte, error)
+	AsyncRequest(ctx ctx.Context, data []byte, callback func(res []byte, err error))
 	//Forward 转发一个请求到目的连接中，得到一个响应
 	Forward(ctx ctx.Context, destId uint16, data []byte) ([]byte, error)
+	AsyncForward(ctx ctx.Context, destId uint16, data []byte, callback func(res []byte, err error))
 	Write(data []byte) (n int, err error)
 	WriteTo(dst uint16, data []byte) (n int, err error)
+	//WriteMsg 发送一条自定义类型的消息，当消息Type不是内部定义的类型时消息的响应在CustomHandle回调中触发。标准消息类型应该使用Write、Request、Forward方法，
+	WriteMsg(m *Message) (n int, err error)
 	Close() error
 	//State ConnStateTypeOnClose=0、ConnStateTypeOnConnect=1、ConnStateTypeOnError
 	State() uint8
-	//WriteMsg 适用于自定义消息类型，当消息Type不是内部定义的类型时消息的响应在CustomHandle回调中触发。标准消息类型应该使用Send、Request、Forward方法，
-	WriteMsg(m *Message) (err error)
 	LocalId() uint16
 	RemoteId() uint16
 	//Activate unix mill
@@ -52,7 +55,7 @@ type Handler interface {
 	Disconnect(id uint16, err error)
 }
 
-func NewConn(localId, remoteId uint16, conn net.Conn, revChan map[uint32]chan *Message, lock *sync.Mutex, conns Connections, route Router, h Handler, counter *uint32, rBufSize, wBufSize int) (c *Connect) {
+func NewConn(localId, remoteId uint16, conn net.Conn, revChan map[uint32]chan *Message, lock *sync.Mutex, conns Connections, route Router, h Handler, counter *uint32, rBufSize, wBufSize, maxMsgLen int) (c *Connect) {
 	c = new(Connect)
 	c.remoteId = remoteId
 	c.revChan = revChan
@@ -60,13 +63,13 @@ func NewConn(localId, remoteId uint16, conn net.Conn, revChan map[uint32]chan *M
 	c.localId = localId
 	c.conn = conn
 	c.activate = time.Now().UnixMilli()
-	c.MaxMsgLen = 0x00FFFFFF
+	c.MaxMsgLen = uint32(maxMsgLen) & 0xFFFFFF
 	c.Router = route
 	c.Connections = conns
 	c.Handler = h
 	c.counter = counter
-	c.Writer = NewWriter(conn, wBufSize)
-	c.Reader = bufio.NewReaderSize(conn, rBufSize)
+	c.Writer = NewWriter(c.conn, wBufSize)
+	c.Reader = bufio.NewReaderSize(c.conn, rBufSize)
 	return c
 }
 
@@ -91,14 +94,11 @@ func (c *Connect) Activate() int64 {
 	return c.activate
 }
 
-// Serve 开启服务
 func (c *Connect) Serve() {
-	var err error
 	c.state = ConnStateTypeOnConnect
 	headerBuf := make([]byte, MsgHeaderLen)
 	for {
-		msg := new(Message)
-		err = msg.Decode(c.Reader, headerBuf, c.MaxMsgLen)
+		msg, err := c.ReadMsg(headerBuf)
 		if err != nil {
 			c.handleServeErr(msg, err)
 			return
@@ -109,7 +109,7 @@ func (c *Connect) Serve() {
 			// 优先转发到本地连接
 			if c.Connections != nil {
 				if conn, exist := c.Connections.GetConn(msg.DestId); exist {
-					if err = conn.WriteMsg(msg); err == nil {
+					if _, err = conn.WriteMsg(msg); err == nil {
 						continue
 					}
 				}
@@ -125,7 +125,7 @@ func (c *Connect) Serve() {
 						c.Router.DeleteRoute(msg.DestId, nextList[i].Next, nextList[i].Hop, nextList[i].ParentNode)
 						continue
 					}
-					if err = conn.WriteMsg(msg); err != nil {
+					if _, err = conn.WriteMsg(msg); err != nil {
 						c.Router.DeleteRoute(msg.DestId, nextList[i].Next, nextList[i].Hop, nextList[i].ParentNode)
 						continue
 					}
@@ -140,7 +140,10 @@ func (c *Connect) Serve() {
 				}
 			}
 			// 本地节点、路由均为目的节点，返回错误
-			if err = c.WriteMsg(msg.ErrReply(MsgType_ReplyErrConnNotExist, c.localId)); err != nil {
+			msg.Type = MsgType_ReplyErrConnNotExist
+			msg.DestId = msg.SrcId
+			msg.SrcId = c.localId
+			if _, err = c.WriteMsg(msg); err != nil {
 				_ = c.conn.Close()
 			}
 			continue
@@ -153,10 +156,11 @@ func (c *Connect) Serve() {
 			ch, ok := c.revChan[msg.Id]
 			if ok {
 				ch <- msg
+				delete(c.revChan, msg.Id)
 			}
 			c.lock.Unlock()
 			if !ok {
-				c.ErrHandle(&context{Message: msg, Connect: c}, DEFAULT_ErrDrop)
+				c.ErrHandle(&context{Message: msg, Connect: c}, DEFAULT_ErrTimeoutMsg)
 			}
 		default:
 			c.CustomHandle(&context{Message: msg, Connect: c})
@@ -164,79 +168,95 @@ func (c *Connect) Serve() {
 	}
 }
 
-func (c *Connect) LocalId() uint16 {
-	return c.localId
-}
-func (c *Connect) RemoteId() uint16 {
-	return c.remoteId
+func (c *Connect) ReadMsg(headerBuf []byte) (*Message, error) {
+	_, err := io.ReadAtLeast(c.Reader, headerBuf, MsgHeaderLen)
+	if err != nil {
+		return nil, err
+	}
+	var checksum uint16
+	for i := 0; i < 11; i++ {
+		checksum += uint16(headerBuf[i])
+	}
+	if checksum != binary.LittleEndian.Uint16(headerBuf[11:]) {
+		return nil, DEFAULT_ErrMsgChecksum
+	}
+	dataLen := utils.DecodeUint24(headerBuf[8:11])
+	if dataLen > c.MaxMsgLen && c.MaxMsgLen > 0 {
+		return nil, DEFAULT_ErrMsgLenLimit
+	}
+	var m Message
+	m.Type = headerBuf[0]
+	m.Id = utils.DecodeUint24(headerBuf[1:4])
+	m.SrcId = binary.LittleEndian.Uint16(headerBuf[4:6])
+	m.DestId = binary.LittleEndian.Uint16(headerBuf[6:8])
+	if dataLen > 0 {
+		m.Data = make([]byte, dataLen)
+		_, err = io.ReadAtLeast(c.Reader, m.Data, int(dataLen))
+	}
+	return &m, err
 }
 
-func (c *Connect) State() uint8 {
-	return c.state
-}
-
-func (c *Connect) newMsg(data []byte) *Message {
-	req := new(Message)
-	req.Id = atomic.AddUint32(c.counter, 1) % 0xffffff
-	req.SrcId = c.localId
-	req.DestId = c.remoteId
-	req.Type = MsgType_Send
-	req.Data = data
-	return req
+func (c *Connect) WriteMsg(m *Message) (n int, err error) {
+	if m.DestId == c.localId {
+		return 0, DEFAULT_ErrWriteYourself
+	}
+	msgLen := MsgHeaderLen + len(m.Data)
+	if msgLen > int(c.MaxMsgLen) && c.MaxMsgLen > 0 {
+		return 0, DEFAULT_ErrMsgLenLimit
+	}
+	data := make([]byte, msgLen)
+	data[0] = m.Type
+	utils.EncodeUint24(data[1:4], m.Id)
+	binary.LittleEndian.PutUint16(data[4:6], m.SrcId)
+	binary.LittleEndian.PutUint16(data[6:8], m.DestId)
+	utils.EncodeUint24(data[8:11], uint32(len(m.Data)))
+	var checksum uint16
+	for i := 0; i < 11; i++ {
+		checksum += uint16(data[i])
+	}
+	binary.LittleEndian.PutUint16(data[11:], checksum)
+	copy(data[MsgHeaderLen:], m.Data)
+	return c.Writer.Write(data)
 }
 
 func (c *Connect) Request(ctx ctx.Context, data []byte) ([]byte, error) {
 	return c.request(ctx, c.newMsg(data))
 }
 
-// Forward only client use
+func (c *Connect) AsyncRequest(ctx ctx.Context, data []byte, callback func(res []byte, err error)) {
+	go callback(c.Request(ctx, data))
+}
+
 func (c *Connect) Forward(ctx ctx.Context, destId uint16, data []byte) ([]byte, error) {
 	req := c.newMsg(data)
 	req.DestId = destId
 	return c.request(ctx, req)
 }
 
+func (c *Connect) AsyncForward(ctx ctx.Context, destId uint16, data []byte, callback func(res []byte, err error)) {
+	go callback(c.Forward(ctx, destId, data))
+}
+
 func (c *Connect) Write(data []byte) (n int, err error) {
-	return c.WriteTo(c.remoteId, data)
+	return c.WriteMsg(c.newMsg(data))
 }
 
 func (c *Connect) WriteTo(dst uint16, data []byte) (n int, err error) {
-	if dst == c.localId {
-		return 0, ErrWriteYourself
-	}
-	msg := c.newMsg(data)
-	msg.DestId = dst
-	n, err = c.write(msg.Encode())
-	return n, err
-}
-
-var ErrWriteYourself = errors.New("can't send it to yourself")
-
-func (c *Connect) WriteMsg(m *Message) (err error) {
-	if m.DestId == c.localId {
-		return ErrWriteYourself
-	}
-	_, err = c.write(m.Encode())
-	return
-}
-
-func (c *Connect) write(b []byte) (n int, err error) {
-	if len(b)-MsgHeaderLen > int(c.MaxMsgLen) {
-		return 0, DEFAULT_ErrMsgLenLimit
-	}
-	return c.Writer.Write(b)
+	m := c.newMsg(data)
+	m.DestId = dst
+	return c.WriteMsg(m)
 }
 
 func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
-	reqId := req.Id
 	ch := make(chan *Message, 1)
+	id := req.Id
 	c.lock.Lock()
-	c.revChan[reqId] = ch
+	c.revChan[id] = ch
 	c.lock.Unlock()
-	err := c.WriteMsg(req)
+	_, err := c.WriteMsg(req)
 	if err != nil {
 		c.lock.Lock()
-		delete(c.revChan, reqId)
+		delete(c.revChan, id)
 		c.lock.Unlock()
 		close(ch)
 		return nil, err
@@ -244,21 +264,15 @@ func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
 	select {
 	case <-ctx.Done():
 		c.lock.Lock()
-		_ch, ok := c.revChan[reqId]
+		_ch, ok := c.revChan[id]
 		if ok {
 			close(_ch)
-			delete(c.revChan, reqId)
+			delete(c.revChan, id)
 		}
 		c.lock.Unlock()
 		return nil, ctx.Err()
 	case resp := <-ch:
-		c.lock.Lock()
-		_ch, ok := c.revChan[reqId]
-		if ok {
-			close(_ch)
-			delete(c.revChan, reqId)
-		}
-		c.lock.Unlock()
+		close(ch)
 		switch resp.Type {
 		case MsgType_ReplyErrConnNotExist:
 			return nil, DEFAULT_ErrConnNotExist
@@ -268,7 +282,7 @@ func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
 			return nil, DEFAULT_ErrMsgChecksum
 		case MsgType_ReplyErr:
 			n := binary.LittleEndian.Uint16(resp.Data)
-			if n > limitErrLen {
+			if n > maxErrReplySize {
 				return resp.Data[2:], nil
 			}
 			n += 2
@@ -285,6 +299,7 @@ func (c *Connect) handleServeErr(m *Message, err error) {
 		c.Disconnect(c.remoteId, err)
 	}()
 	if c.state == ConnStateTypeOnClose || errors.Is(err, io.EOF) {
+		err = nil
 		return
 	}
 	c.state = ConnStateTypeOnError
@@ -298,8 +313,30 @@ func (c *Connect) handleServeErr(m *Message, err error) {
 		return
 	}
 	m.SrcId, m.DestId = c.localId, m.SrcId
-	_ = c.WriteMsg(m)
+	_, _ = c.WriteMsg(m)
 	return
+}
+
+func (c *Connect) LocalId() uint16 {
+	return c.localId
+}
+
+func (c *Connect) RemoteId() uint16 {
+	return c.remoteId
+}
+
+func (c *Connect) State() uint8 {
+	return c.state
+}
+
+func (c *Connect) newMsg(data []byte) *Message {
+	req := new(Message)
+	req.Id = atomic.AddUint32(c.counter, 1) % 0xffffff
+	req.SrcId = c.localId
+	req.DestId = c.remoteId
+	req.Type = MsgType_Send
+	req.Data = data
+	return req
 }
 
 func (c *Connect) Close() error {

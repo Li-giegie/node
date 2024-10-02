@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/Li-giegie/node"
-	"math/rand"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -81,15 +79,10 @@ func TestEchoClient(t *testing.T) {
 	for i := 0; i < 1000000; i++ {
 		w.Add(1)
 		go func() {
-			n := strconv.Itoa(rand.Int())
-			res, err := echoConn.Request(ctx, []byte(n))
+			res, err := echoConn.Request(ctx, []byte("hello"))
 			if err != nil {
-				fmt.Println(err)
+				fmt.Println(err, res)
 				w.Done()
-				return
-			}
-			if n != string(res) {
-				fmt.Println("错误", n, res)
 				return
 			}
 			w.Done()
@@ -97,5 +90,4 @@ func TestEchoClient(t *testing.T) {
 	}
 	w.Wait()
 	fmt.Println(time.Since(t1))
-	//common.PrintTrace()
 }

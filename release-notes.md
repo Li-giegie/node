@@ -4,6 +4,7 @@
 - [v1.2](#v12)
 - [v1.3](#v13)
 - [v1.4](#v14)
+- [v1.5](#v15)
 ___
 
 ## v1.0
@@ -87,3 +88,8 @@ BenchmarkEchoRequest-12            66759             53607 ns/op             186
 BenchmarkEchoRequestGo-12         304437             12316 ns/op             735 B/op          8 allocs/op
 ```
 ___
+
+## v1.5
+### CI
+- ci：优化一些实现逻辑，更新一些文档
+

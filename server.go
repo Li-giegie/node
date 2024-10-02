@@ -22,8 +22,8 @@ const (
 type Server struct {
 	// 最大连接数 <=0 不限制 默认0
 	MaxConns int
-	// InitSessionTimeout 初始化连接，并在限定时间得到节点id，默认6s
-	*Identity
+	// 最大接收消息长度 1-0xffffff byte（16777215）,如果为0则为最大值
+	MaxMsgLen     int
 	State         StateType
 	Conns         *Conns
 	revChan       map[uint32]chan *common.Message
@@ -34,6 +34,7 @@ type Server struct {
 	counter       uint32
 	ReaderBufSize int
 	WriterBufSize int
+	*Identity
 }
 
 // NewServer 创建一个Server类型的节点
@@ -47,9 +48,10 @@ func NewServer(l net.Listener, id *Identity) *Server {
 	srv.Conns = newConns()
 	srv.revChan = make(map[uint32]chan *common.Message)
 	srv.lock = new(sync.Mutex)
-	srv.Router = common.NewRouter()
 	srv.ReaderBufSize = 4096
 	srv.WriterBufSize = 4096
+	srv.MaxMsgLen = 0xffffff
+	srv.Router = common.NewRouter()
 	return srv
 }
 
@@ -87,7 +89,7 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 	lid := s.Identity.Id
-	c := common.NewConn(lid, rid, conn, s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter, s.ReaderBufSize, s.WriterBufSize)
+	c := common.NewConn(lid, rid, conn, s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter, s.ReaderBufSize, s.WriterBufSize, s.MaxMsgLen)
 	if rid == lid || !s.Conns.add(rid, c) {
 		_ = defaultBasicResp.Send(conn, 0, false, "error: id already exists")
 		_ = conn.Close()
@@ -114,7 +116,7 @@ func (s *Server) BindBridge(bd BridgeNode) error {
 	if s.Identity.Id == bd.RemoteId() {
 		return nodeEqErr
 	}
-	conn := common.NewConn(s.Identity.Id, bd.RemoteId(), bd.Conn(), s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter, s.ReaderBufSize, s.WriterBufSize)
+	conn := common.NewConn(s.Identity.Id, bd.RemoteId(), bd.Conn(), s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter, s.ReaderBufSize, s.WriterBufSize, s.MaxMsgLen)
 	if !s.Conns.add(conn.RemoteId(), conn) {
 		return errNodeExist
 	}

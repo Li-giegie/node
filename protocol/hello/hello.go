@@ -77,7 +77,7 @@ func (h *HelloProtocol) handle(c common.Conn) (exit bool) {
 		return true
 	}
 	if duration > h.Timeout.Milliseconds() {
-		if err := c.WriteMsg(msg); err != nil {
+		if _, err := c.WriteMsg(msg); err != nil {
 			_ = c.Close()
 			if h.Logger != nil {
 				h.Logger.Println("err: send hello ASK pack fail destId", c.RemoteId(), err)

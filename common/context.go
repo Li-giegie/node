@@ -1,10 +1,5 @@
 package common
 
-import (
-	"encoding/binary"
-	"errors"
-)
-
 type IMessage interface {
 	Id() uint32
 	Type() uint8
@@ -58,43 +53,35 @@ func (c *context) Data() []byte {
 	return c.Message.Data
 }
 
-var ErrLimitReply = errors.New("limit reply to one time")
-
 // Reply 响应内容，限制回复一次，不要尝试多次回复，多次回复返回 var ErrLimitReply = errors.New("limit reply to one time")
-func (c *context) Reply(data []byte) error {
-	if c.once {
-		return ErrLimitReply
-	}
-	c.once = true
-	return c.WriteMsg(c.Message.Reply(MsgType_Reply, data))
+func (c *context) Reply(data []byte) (err error) {
+	return c.CustomReply(MsgType_Reply, data)
 }
 
-// ErrReply err length (uint16) <= 65533
+// ErrReply err length <= 65533 byte
 func (c *context) ErrReply(data []byte, err error) error {
-	if c.once {
-		return ErrLimitReply
-	}
-	c.once = true
 	var errB = make([]byte, 2)
 	if err == nil {
 		errB[0], errB[1] = 255, 255 //65535
 	} else {
-		errB2 := []byte(err.Error())
-		errB2L := len(errB2)
-		if errB2L > limitErrLen {
-			return DEFAULT_ErrReplyErrorInvalid
+		errBytes := []byte(err.Error())
+		if len(errBytes) > maxErrReplySize {
+			return DEFAULT_ErrReplyErrorLengthOverflow
 		}
-		errB = make([]byte, 2, 2+errB2L)
-		binary.LittleEndian.PutUint16(errB, uint16(errB2L))
-		errB = append(errB, errB2...)
+		errB[0], errB[1] = byte(len(errBytes)), byte(len(errBytes)>>8)
+		errB = append(errB, errBytes...)
 	}
-	return c.WriteMsg(c.Message.Reply(MsgType_ReplyErr, append(errB, data...)))
+	return c.CustomReply(MsgType_ReplyErr, append(errB, data...))
 }
 
-func (c *context) CustomReply(typ uint8, data []byte) error {
+func (c *context) CustomReply(typ uint8, data []byte) (err error) {
 	if c.once {
-		return ErrLimitReply
+		return DEFAULT_ErrReplyLimitOnce
 	}
 	c.once = true
-	return c.WriteMsg(c.Message.Reply(typ, data))
+	c.Message.Type = typ
+	c.Message.SrcId, c.Message.DestId = c.Message.DestId, c.Message.SrcId
+	c.Message.Data = data
+	_, err = c.WriteMsg(c.Message)
+	return err
 }

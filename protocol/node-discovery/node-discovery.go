@@ -91,7 +91,7 @@ func (n *NodeDiscoveryProtocol) Connection(conn common.Conn) {
 			return
 		}
 		for i := 1; i <= n.QueryEnableProtocolMaxNum; i++ {
-			if err = conn.WriteMsg(msg); err != nil {
+			if _, err = conn.WriteMsg(msg); err != nil {
 				if n.Logger != nil {
 					n.Logger.Println("err: Connection QueryEnableProtocol err", err)
 				}
@@ -254,7 +254,7 @@ func (n *NodeDiscoveryProtocol) Broadcast(en Encoder, enableFilter bool, filterI
 		}
 		m.SrcId = info.LocalId()
 		m.DestId = info.RemoteId()
-		if err = info.WriteMsg(m); err != nil {
+		if _, err = info.WriteMsg(m); err != nil {
 			if errFunc != nil {
 				if err = errFunc(err); err != nil {
 					n.l.Unlock()
