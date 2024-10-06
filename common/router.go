@@ -8,27 +8,27 @@ import (
 )
 
 type Router interface {
-	AddRoute(dst, next, hop, parentNode uint16)
-	DeleteRoute(dst, next, hop, parentNode uint16) bool
-	DeleteRouteAll(dst uint16)
-	DeleteNextRoute(next uint16) bool
+	AddRoute(dst, next, parentNode uint32, hop uint16)
+	DeleteRoute(dst, next, parentNode uint32, hop uint16) bool
+	DeleteRouteAll(dst uint32)
+	DeleteNextRoute(next uint32) bool
 	RouteTableOutput() []byte
-	GetDstRoutes(dst uint16) []*RouteInfo
+	GetDstRoutes(dst uint32) []*RouteInfo
 }
 
 type RouteTable struct {
-	routes map[uint16][]*RouteInfo
+	routes map[uint32][]*RouteInfo
 	*sync.RWMutex
 }
 
 func NewRouter() *RouteTable {
 	return &RouteTable{
-		routes:  make(map[uint16][]*RouteInfo),
+		routes:  make(map[uint32][]*RouteInfo),
 		RWMutex: &sync.RWMutex{},
 	}
 }
 
-func (r *RouteTable) AddRoute(dst, next, hop, parentNode uint16) {
+func (r *RouteTable) AddRoute(dst, next, parentNode uint32, hop uint16) {
 	route := &RouteInfo{
 		UnixMilli:  time.Now().UnixMilli(),
 		Next:       next,
@@ -69,7 +69,7 @@ func (r *RouteTable) AddRoute(dst, next, hop, parentNode uint16) {
 	r.Unlock()
 }
 
-func (r *RouteTable) DeleteRoute(dst, next, hop, parentNode uint16) bool {
+func (r *RouteTable) DeleteRoute(dst, next, parentNode uint32, hop uint16) bool {
 	r.Lock()
 	info, ok := r.routes[dst]
 	if !ok {
@@ -104,9 +104,9 @@ func (r *RouteTable) DeleteRoute(dst, next, hop, parentNode uint16) bool {
 	return true
 }
 
-func (r *RouteTable) DeleteNextRoute(next uint16) bool {
+func (r *RouteTable) DeleteNextRoute(next uint32) bool {
 	nextList := make([]*RouteInfo, 0, 5)
-	dst := make([]uint16, 0, 5)
+	dst := make([]uint32, 0, 5)
 	r.Lock()
 	for u, infos := range r.routes {
 		for _, info := range infos {
@@ -118,12 +118,12 @@ func (r *RouteTable) DeleteNextRoute(next uint16) bool {
 	}
 	r.Unlock()
 	for i, u := range dst {
-		r.DeleteRoute(u, nextList[i].Next, nextList[i].Hop, nextList[i].ParentNode)
+		r.DeleteRoute(u, nextList[i].Next, nextList[i].ParentNode, nextList[i].Hop)
 	}
 	return true
 }
 
-func (r *RouteTable) DeleteRouteAll(dst uint16) {
+func (r *RouteTable) DeleteRouteAll(dst uint32) {
 	r.Lock()
 	delete(r.routes, dst)
 	r.Unlock()
@@ -147,7 +147,7 @@ func (r *RouteTable) RouteTableOutput() []byte {
 	return buf.Bytes()
 }
 
-func (r *RouteTable) GetDstRoutes(dst uint16) []*RouteInfo {
+func (r *RouteTable) GetDstRoutes(dst uint32) []*RouteInfo {
 	r.RLock()
 	v, _ := r.routes[dst]
 	r.RUnlock()
@@ -156,17 +156,17 @@ func (r *RouteTable) GetDstRoutes(dst uint16) []*RouteInfo {
 
 type RouteInfo struct {
 	UnixMilli  int64
-	Next       uint16
+	Next       uint32
+	ParentNode uint32
 	Hop        uint16
-	ParentNode uint16
 }
 
-func searchRouteInfoHop(info []*RouteInfo, target uint16) int {
+func searchRouteInfoHop(info []*RouteInfo, hop uint16) int {
 	left, right := 0, len(info)-1
 	for left <= right {
 		mid := left + (right-left)/2
-		if info[mid].Hop > target {
-			if mid == 0 || info[mid-1].Hop <= target {
+		if info[mid].Hop > hop {
+			if mid == 0 || info[mid-1].Hop <= hop {
 				return mid
 			}
 			right = mid - 1
@@ -177,7 +177,7 @@ func searchRouteInfoHop(info []*RouteInfo, target uint16) int {
 	return -1
 }
 
-func searchRouteInfoNext(info []*RouteInfo, next uint16) int {
+func searchRouteInfoNext(info []*RouteInfo, next uint32) int {
 	left, right := 0, len(info)-1
 	result := -1 // 如果没有找到，则返回-1
 	for left <= right {

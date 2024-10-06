@@ -28,7 +28,7 @@ func (h Handler) CustomHandle(ctx common.CustomContext) {
 	log.Println("CustomHandle", ctx.String())
 }
 
-func (h Handler) Disconnect(id uint16, err error) {
+func (h Handler) Disconnect(id uint32, err error) {
 	log.Println("Disconnect", id, err)
 }
 

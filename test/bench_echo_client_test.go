@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/Li-giegie/node"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +16,7 @@ func Dial() {
 	conn, err := node.DialTCP(
 		"0.0.0.0:8888",
 		&node.Identity{
-			Id:            10,
+			Id:            0xffffff,
 			AccessKey:     []byte("echo"),
 			AccessTimeout: time.Second * 3,
 		},
@@ -79,7 +80,7 @@ func TestEchoClient(t *testing.T) {
 	for i := 0; i < 1000000; i++ {
 		w.Add(1)
 		go func() {
-			res, err := echoConn.Request(ctx, []byte("hello"))
+			res, err := echoConn.Request(ctx, []byte(strconv.Itoa(i)))
 			if err != nil {
 				fmt.Println(err, res)
 				w.Done()

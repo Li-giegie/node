@@ -9,7 +9,7 @@ import (
 )
 
 type Identity struct {
-	Id            uint16
+	Id            uint32
 	AccessKey     []byte
 	AccessTimeout time.Duration
 }
@@ -21,7 +21,7 @@ type basicAuthReq struct{}
 
 var errBytesLimit = errors.New("number of bytes exceeds the limit size")
 
-func (basicAuthReq) Send(w io.Writer, id uint16, accessKey []byte) error {
+func (basicAuthReq) Send(w io.Writer, id uint32, accessKey []byte) error {
 	if len(accessKey) > 65520 {
 		return errBytesLimit
 	}
@@ -31,7 +31,7 @@ func (basicAuthReq) Send(w io.Writer, id uint16, accessKey []byte) error {
 	return err
 }
 
-func (basicAuthReq) Receive(r io.Reader, t time.Duration) (id uint16, accessKey []byte, err error) {
+func (basicAuthReq) Receive(r io.Reader, t time.Duration) (id uint32, accessKey []byte, err error) {
 	data, err := utils.Unpack(r, t)
 	if err != nil {
 		return 0, nil, err
@@ -42,7 +42,7 @@ func (basicAuthReq) Receive(r io.Reader, t time.Duration) (id uint16, accessKey 
 
 type basicAuthResp struct{}
 
-func (basicAuthResp) Send(w io.Writer, id uint16, permit bool, msg string) error {
+func (basicAuthResp) Send(w io.Writer, id uint32, permit bool, msg string) error {
 	if len(msg) > 65520 {
 		return errBytesLimit
 	}
@@ -52,7 +52,7 @@ func (basicAuthResp) Send(w io.Writer, id uint16, permit bool, msg string) error
 	return err
 }
 
-func (basicAuthResp) Receive(r io.Reader, t time.Duration) (id uint16, permit bool, msg string, err error) {
+func (basicAuthResp) Receive(r io.Reader, t time.Duration) (id uint32, permit bool, msg string, err error) {
 	data, err := utils.Unpack(r, t)
 	if err != nil {
 		return 0, false, "", err

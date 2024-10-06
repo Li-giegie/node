@@ -7,13 +7,13 @@ import (
 
 type BridgeNode interface {
 	Conn() net.Conn
-	RemoteId() uint16
+	RemoteId() uint32
 	Disconnection()
 }
 
 type bridge struct {
-	rid    uint16
-	lid    uint16
+	rid    uint32
+	lid    uint32
 	disFun func()
 	conn   net.Conn
 }
@@ -45,7 +45,7 @@ func (b *bridge) Conn() net.Conn {
 	return b.conn
 }
 
-func (b *bridge) RemoteId() uint16 {
+func (b *bridge) RemoteId() uint32 {
 	return b.rid
 }
 

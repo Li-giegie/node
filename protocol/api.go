@@ -19,7 +19,7 @@ type NodeDiscoveryProtocol interface {
 	StartTimingQueryEnableProtoNode(ctx context.Context, timeout time.Duration) (err error)
 	Connection(conn common.Conn)
 	CustomHandle(ctx common.CustomContext) (next bool)
-	Disconnect(id uint16, err error)
+	Disconnect(id uint32, err error)
 }
 
 func NewNodeDiscoveryProtocol(n node_discovery.DiscoveryNode, out io.Writer) NodeDiscoveryProtocol {

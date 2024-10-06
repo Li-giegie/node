@@ -28,7 +28,7 @@ func (h CliHandler) CustomHandle(ctx common.CustomContext) {
 	log.Println("CustomHandle", ctx.String())
 }
 
-func (h CliHandler) Disconnect(id uint16, err error) {
+func (h CliHandler) Disconnect(id uint32, err error) {
 	fmt.Println("Disconnect", id, err)
 }
 

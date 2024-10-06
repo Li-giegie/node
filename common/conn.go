@@ -5,7 +5,6 @@ import (
 	ctx "context"
 	"encoding/binary"
 	"errors"
-	"github.com/Li-giegie/node/utils"
 	"io"
 	"net"
 	"sync"
@@ -24,23 +23,23 @@ type Conn interface {
 	Request(ctx ctx.Context, data []byte) ([]byte, error)
 	AsyncRequest(ctx ctx.Context, data []byte, callback func(res []byte, err error))
 	//Forward 转发一个请求到目的连接中，得到一个响应
-	Forward(ctx ctx.Context, destId uint16, data []byte) ([]byte, error)
-	AsyncForward(ctx ctx.Context, destId uint16, data []byte, callback func(res []byte, err error))
+	Forward(ctx ctx.Context, destId uint32, data []byte) ([]byte, error)
+	AsyncForward(ctx ctx.Context, destId uint32, data []byte, callback func(res []byte, err error))
 	Write(data []byte) (n int, err error)
-	WriteTo(dst uint16, data []byte) (n int, err error)
+	WriteTo(dst uint32, data []byte) (n int, err error)
 	//WriteMsg 发送一条自定义类型的消息，当消息Type不是内部定义的类型时消息的响应在CustomHandle回调中触发。标准消息类型应该使用Write、Request、Forward方法，
 	WriteMsg(m *Message) (n int, err error)
 	Close() error
 	//State ConnStateTypeOnClose=0、ConnStateTypeOnConnect=1、ConnStateTypeOnError
 	State() uint8
-	LocalId() uint16
-	RemoteId() uint16
+	LocalId() uint32
+	RemoteId() uint32
 	//Activate unix mill
 	Activate() int64
 }
 
 type Connections interface {
-	GetConn(id uint16) (Conn, bool)
+	GetConn(id uint32) (Conn, bool)
 	GetConns() []Conn
 }
 
@@ -52,38 +51,38 @@ type Handler interface {
 	// CustomHandle 接收到自定义类型消息时触发回调
 	CustomHandle(ctx CustomContext)
 	// Disconnect 连接断开触发回调
-	Disconnect(id uint16, err error)
+	Disconnect(id uint32, err error)
 }
 
-func NewConn(localId, remoteId uint16, conn net.Conn, revChan map[uint32]chan *Message, lock *sync.Mutex, conns Connections, route Router, h Handler, counter *uint32, rBufSize, wBufSize, maxMsgLen int) (c *Connect) {
+func NewConn(localId, remoteId uint32, conn net.Conn, revChan map[uint32]chan *Message, revLock *sync.Mutex, conns Connections, route Router, h Handler, msgIdCounter *uint32, rBufSize, wBufSize, writerQueueSize int, maxMsgLen uint32) (c *Connect) {
 	c = new(Connect)
 	c.remoteId = remoteId
 	c.revChan = revChan
-	c.lock = lock
+	c.revLock = revLock
 	c.localId = localId
 	c.conn = conn
 	c.activate = time.Now().UnixMilli()
-	c.MaxMsgLen = uint32(maxMsgLen) & 0xFFFFFF
+	c.MaxMsgLen = maxMsgLen
 	c.Router = route
 	c.Connections = conns
 	c.Handler = h
-	c.counter = counter
-	c.Writer = NewWriter(c.conn, wBufSize)
+	c.msgIdCounter = msgIdCounter
+	c.WriterQueue = NewWriteQueue(conn, writerQueueSize, wBufSize)
 	c.Reader = bufio.NewReaderSize(c.conn, rBufSize)
 	return c
 }
 
 type Connect struct {
-	state     uint8
-	localId   uint16
-	remoteId  uint16
-	activate  int64
-	MaxMsgLen uint32
-	counter   *uint32
-	revChan   map[uint32]chan *Message
-	lock      *sync.Mutex
-	conn      net.Conn
-	*Writer
+	state        uint8
+	localId      uint32
+	remoteId     uint32
+	activate     int64
+	MaxMsgLen    uint32
+	msgIdCounter *uint32
+	revChan      map[uint32]chan *Message
+	revLock      *sync.Mutex
+	conn         net.Conn
+	*WriterQueue
 	*bufio.Reader
 	Router
 	Connections
@@ -97,6 +96,7 @@ func (c *Connect) Activate() int64 {
 func (c *Connect) Serve() {
 	c.state = ConnStateTypeOnConnect
 	headerBuf := make([]byte, MsgHeaderLen)
+	defer c.WriterQueue.Freed()
 	for {
 		msg, err := c.ReadMsg(headerBuf)
 		if err != nil {
@@ -122,11 +122,11 @@ func (c *Connect) Serve() {
 				for i := 0; i < len(nextList); i++ {
 					conn, exist := c.Connections.GetConn(nextList[i].Next)
 					if !exist {
-						c.Router.DeleteRoute(msg.DestId, nextList[i].Next, nextList[i].Hop, nextList[i].ParentNode)
+						c.Router.DeleteRoute(msg.DestId, nextList[i].Next, nextList[i].ParentNode, nextList[i].Hop)
 						continue
 					}
 					if _, err = conn.WriteMsg(msg); err != nil {
-						c.Router.DeleteRoute(msg.DestId, nextList[i].Next, nextList[i].Hop, nextList[i].ParentNode)
+						c.Router.DeleteRoute(msg.DestId, nextList[i].Next, nextList[i].ParentNode, nextList[i].Hop)
 						continue
 					}
 					success = true
@@ -152,13 +152,13 @@ func (c *Connect) Serve() {
 		case MsgType_Send:
 			c.Handle(&context{Message: msg, Connect: c})
 		case MsgType_Reply, MsgType_ReplyErr, MsgType_ReplyErrConnNotExist, MsgType_ReplyErrLenLimit, MsgType_ReplyErrCheckSum:
-			c.lock.Lock()
+			c.revLock.Lock()
 			ch, ok := c.revChan[msg.Id]
 			if ok {
 				ch <- msg
 				delete(c.revChan, msg.Id)
 			}
-			c.lock.Unlock()
+			c.revLock.Unlock()
 			if !ok {
 				c.ErrHandle(&context{Message: msg, Connect: c}, DEFAULT_ErrTimeoutMsg)
 			}
@@ -174,21 +174,21 @@ func (c *Connect) ReadMsg(headerBuf []byte) (*Message, error) {
 		return nil, err
 	}
 	var checksum uint16
-	for i := 0; i < 11; i++ {
+	for i := 0; i < MsgHeaderLen-2; i++ {
 		checksum += uint16(headerBuf[i])
 	}
-	if checksum != binary.LittleEndian.Uint16(headerBuf[11:]) {
+	if checksum != binary.LittleEndian.Uint16(headerBuf[MsgHeaderLen-2:]) {
 		return nil, DEFAULT_ErrMsgChecksum
 	}
-	dataLen := utils.DecodeUint24(headerBuf[8:11])
+	dataLen := binary.LittleEndian.Uint32(headerBuf[13:17])
 	if dataLen > c.MaxMsgLen && c.MaxMsgLen > 0 {
 		return nil, DEFAULT_ErrMsgLenLimit
 	}
 	var m Message
 	m.Type = headerBuf[0]
-	m.Id = utils.DecodeUint24(headerBuf[1:4])
-	m.SrcId = binary.LittleEndian.Uint16(headerBuf[4:6])
-	m.DestId = binary.LittleEndian.Uint16(headerBuf[6:8])
+	m.Id = binary.LittleEndian.Uint32(headerBuf[1:5])
+	m.SrcId = binary.LittleEndian.Uint32(headerBuf[5:9])
+	m.DestId = binary.LittleEndian.Uint32(headerBuf[9:13])
 	if dataLen > 0 {
 		m.Data = make([]byte, dataLen)
 		_, err = io.ReadAtLeast(c.Reader, m.Data, int(dataLen))
@@ -206,17 +206,17 @@ func (c *Connect) WriteMsg(m *Message) (n int, err error) {
 	}
 	data := make([]byte, msgLen)
 	data[0] = m.Type
-	utils.EncodeUint24(data[1:4], m.Id)
-	binary.LittleEndian.PutUint16(data[4:6], m.SrcId)
-	binary.LittleEndian.PutUint16(data[6:8], m.DestId)
-	utils.EncodeUint24(data[8:11], uint32(len(m.Data)))
+	binary.LittleEndian.PutUint32(data[1:5], m.Id)
+	binary.LittleEndian.PutUint32(data[5:9], m.SrcId)
+	binary.LittleEndian.PutUint32(data[9:13], m.DestId)
+	binary.LittleEndian.PutUint32(data[13:17], uint32(len(m.Data)))
 	var checksum uint16
-	for i := 0; i < 11; i++ {
+	for i := 0; i < 17; i++ {
 		checksum += uint16(data[i])
 	}
-	binary.LittleEndian.PutUint16(data[11:], checksum)
+	binary.LittleEndian.PutUint16(data[17:], checksum)
 	copy(data[MsgHeaderLen:], m.Data)
-	return c.Writer.Write(data)
+	return c.WriterQueue.Write(data)
 }
 
 func (c *Connect) Request(ctx ctx.Context, data []byte) ([]byte, error) {
@@ -227,13 +227,13 @@ func (c *Connect) AsyncRequest(ctx ctx.Context, data []byte, callback func(res [
 	go callback(c.Request(ctx, data))
 }
 
-func (c *Connect) Forward(ctx ctx.Context, destId uint16, data []byte) ([]byte, error) {
+func (c *Connect) Forward(ctx ctx.Context, destId uint32, data []byte) ([]byte, error) {
 	req := c.newMsg(data)
 	req.DestId = destId
 	return c.request(ctx, req)
 }
 
-func (c *Connect) AsyncForward(ctx ctx.Context, destId uint16, data []byte, callback func(res []byte, err error)) {
+func (c *Connect) AsyncForward(ctx ctx.Context, destId uint32, data []byte, callback func(res []byte, err error)) {
 	go callback(c.Forward(ctx, destId, data))
 }
 
@@ -241,7 +241,7 @@ func (c *Connect) Write(data []byte) (n int, err error) {
 	return c.WriteMsg(c.newMsg(data))
 }
 
-func (c *Connect) WriteTo(dst uint16, data []byte) (n int, err error) {
+func (c *Connect) WriteTo(dst uint32, data []byte) (n int, err error) {
 	m := c.newMsg(data)
 	m.DestId = dst
 	return c.WriteMsg(m)
@@ -250,26 +250,26 @@ func (c *Connect) WriteTo(dst uint16, data []byte) (n int, err error) {
 func (c *Connect) request(ctx ctx.Context, req *Message) ([]byte, error) {
 	ch := make(chan *Message, 1)
 	id := req.Id
-	c.lock.Lock()
+	c.revLock.Lock()
 	c.revChan[id] = ch
-	c.lock.Unlock()
+	c.revLock.Unlock()
 	_, err := c.WriteMsg(req)
 	if err != nil {
-		c.lock.Lock()
+		c.revLock.Lock()
 		delete(c.revChan, id)
-		c.lock.Unlock()
+		c.revLock.Unlock()
 		close(ch)
 		return nil, err
 	}
 	select {
 	case <-ctx.Done():
-		c.lock.Lock()
+		c.revLock.Lock()
 		_ch, ok := c.revChan[id]
 		if ok {
 			close(_ch)
 			delete(c.revChan, id)
 		}
-		c.lock.Unlock()
+		c.revLock.Unlock()
 		return nil, ctx.Err()
 	case resp := <-ch:
 		close(ch)
@@ -317,11 +317,11 @@ func (c *Connect) handleServeErr(m *Message, err error) {
 	return
 }
 
-func (c *Connect) LocalId() uint16 {
+func (c *Connect) LocalId() uint32 {
 	return c.localId
 }
 
-func (c *Connect) RemoteId() uint16 {
+func (c *Connect) RemoteId() uint32 {
 	return c.remoteId
 }
 
@@ -331,7 +331,7 @@ func (c *Connect) State() uint8 {
 
 func (c *Connect) newMsg(data []byte) *Message {
 	req := new(Message)
-	req.Id = atomic.AddUint32(c.counter, 1) % 0xffffff
+	req.Id = atomic.AddUint32(c.msgIdCounter, 1)
 	req.SrcId = c.localId
 	req.DestId = c.remoteId
 	req.Type = MsgType_Send

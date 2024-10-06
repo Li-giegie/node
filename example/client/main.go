@@ -154,6 +154,6 @@ func (c *ClientHandler) CustomHandle(ctx common.CustomContext) {
 	log.Println("client CustomHandle: ", ctx.String())
 }
 
-func (c *ClientHandler) Disconnect(id uint16, err error) {
+func (c *ClientHandler) Disconnect(id uint32, err error) {
 	c.stopChan <- err
 }

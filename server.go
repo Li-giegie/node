@@ -20,20 +20,19 @@ const (
 )
 
 type Server struct {
-	// 最大连接数 <=0 不限制 默认0
-	MaxConns int
-	// 最大接收消息长度 1-0xffffff byte（16777215）,如果为0则为最大值
-	MaxMsgLen     int
-	State         StateType
-	Conns         *Conns
-	revChan       map[uint32]chan *common.Message
-	lock          *sync.Mutex
-	Router        *common.RouteTable
-	handler       Handler
-	listen        net.Listener
-	counter       uint32
-	ReaderBufSize int
-	WriterBufSize int
+	MaxConns        int
+	MaxMsgLen       uint32
+	WriterQueueSize int
+	State           StateType
+	Conns           *Conns
+	revChan         map[uint32]chan *common.Message
+	lock            *sync.Mutex
+	Router          *common.RouteTable
+	handler         Handler
+	listen          net.Listener
+	counter         uint32
+	ReaderBufSize   int
+	WriterBufSize   int
 	*Identity
 }
 
@@ -51,6 +50,7 @@ func NewServer(l net.Listener, id *Identity) *Server {
 	srv.ReaderBufSize = 4096
 	srv.WriterBufSize = 4096
 	srv.MaxMsgLen = 0xffffff
+	srv.WriterQueueSize = 1024
 	srv.Router = common.NewRouter()
 	return srv
 }
@@ -89,7 +89,7 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 	lid := s.Identity.Id
-	c := common.NewConn(lid, rid, conn, s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter, s.ReaderBufSize, s.WriterBufSize, s.MaxMsgLen)
+	c := common.NewConn(lid, rid, conn, s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
 	if rid == lid || !s.Conns.add(rid, c) {
 		_ = defaultBasicResp.Send(conn, 0, false, "error: id already exists")
 		_ = conn.Close()
@@ -116,7 +116,7 @@ func (s *Server) BindBridge(bd BridgeNode) error {
 	if s.Identity.Id == bd.RemoteId() {
 		return nodeEqErr
 	}
-	conn := common.NewConn(s.Identity.Id, bd.RemoteId(), bd.Conn(), s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter, s.ReaderBufSize, s.WriterBufSize, s.MaxMsgLen)
+	conn := common.NewConn(s.Identity.Id, bd.RemoteId(), bd.Conn(), s.revChan, s.lock, s.Conns, s.Router, s.handler, &s.counter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
 	if !s.Conns.add(conn.RemoteId(), conn) {
 		return errNodeExist
 	}
@@ -131,7 +131,7 @@ func (s *Server) BindBridge(bd BridgeNode) error {
 }
 
 // Request 请求
-func (s *Server) Request(ctx context.Context, dst uint16, data []byte) ([]byte, error) {
+func (s *Server) Request(ctx context.Context, dst uint32, data []byte) ([]byte, error) {
 	conn, ok := s.findConn(dst)
 	if !ok {
 		return nil, common.DEFAULT_ErrConnNotExist
@@ -139,7 +139,7 @@ func (s *Server) Request(ctx context.Context, dst uint16, data []byte) ([]byte, 
 	return conn.Forward(ctx, dst, data)
 }
 
-func (s *Server) WriteTo(dst uint16, data []byte) (int, error) {
+func (s *Server) WriteTo(dst uint32, data []byte) (int, error) {
 	conn, ok := s.findConn(dst)
 	if !ok {
 		return 0, common.DEFAULT_ErrConnNotExist
@@ -147,7 +147,7 @@ func (s *Server) WriteTo(dst uint16, data []byte) (int, error) {
 	return conn.WriteTo(dst, data)
 }
 
-func (s *Server) findConn(dst uint16) (conn common.Conn, exists bool) {
+func (s *Server) findConn(dst uint32) (conn common.Conn, exists bool) {
 	conn, exists = s.Conns.GetConn(dst)
 	if exists {
 		return
@@ -162,7 +162,7 @@ func (s *Server) findConn(dst uint16) (conn common.Conn, exists bool) {
 	return nil, false
 }
 
-func (s *Server) Id() uint16 {
+func (s *Server) Id() uint32 {
 	return s.Identity.Id
 }
 
@@ -189,18 +189,18 @@ func ListenTCP(addr string, auth *Identity) (*Server, error) {
 }
 
 type Conns struct {
-	m map[uint16]common.Conn
+	m map[uint32]common.Conn
 	l sync.RWMutex
 }
 
 func newConns() *Conns {
 	return &Conns{
-		m: make(map[uint16]common.Conn),
+		m: make(map[uint32]common.Conn),
 		l: sync.RWMutex{},
 	}
 }
 
-func (s *Conns) add(id uint16, conn *common.Connect) bool {
+func (s *Conns) add(id uint32, conn *common.Connect) bool {
 	s.l.Lock()
 	v, exist := s.m[id]
 	if !exist || v.State() != common.ConnStateTypeOnConnect {
@@ -213,13 +213,13 @@ func (s *Conns) add(id uint16, conn *common.Connect) bool {
 	return exist
 }
 
-func (s *Conns) del(id uint16) {
+func (s *Conns) del(id uint32) {
 	s.l.Lock()
 	delete(s.m, id)
 	s.l.Unlock()
 }
 
-func (s *Conns) GetConn(id uint16) (common.Conn, bool) {
+func (s *Conns) GetConn(id uint32) (common.Conn, bool) {
 	s.l.RLock()
 	v, ok := s.m[id]
 	s.l.RUnlock()

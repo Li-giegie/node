@@ -3,8 +3,8 @@ package common
 type IMessage interface {
 	Id() uint32
 	Type() uint8
-	SrcId() uint16
-	DestId() uint16
+	SrcId() uint32
+	DestId() uint32
 	Data() []byte
 	String() string
 }
@@ -41,11 +41,11 @@ func (c *context) Type() uint8 {
 	return c.Message.Type
 }
 
-func (c *context) SrcId() uint16 {
+func (c *context) SrcId() uint32 {
 	return c.Message.SrcId
 }
 
-func (c *context) DestId() uint16 {
+func (c *context) DestId() uint32 {
 	return c.Message.DestId
 }
 

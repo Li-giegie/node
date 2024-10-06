@@ -5,6 +5,7 @@
 - [v1.3](#v13)
 - [v1.4](#v14)
 - [v1.5](#v15)
+- [v2.0](#v20)
 ___
 
 ## v1.0
@@ -93,3 +94,29 @@ ___
 ### CI
 - ci：优化一些实现逻辑，更新一些文档
 
+## v2.0
+### FEAT
+- feat：增加write队列，提升性能可达100万并发请求响应
+### REFACTOR
+- refactor：重构消息结果，id、srcId、destId使用uint32四个字节范围表示
+### BENCHMARK
+- 文件：test/bench_echo_client_test.go、test/bench_echo_server_test.go
+- 函数：TestEchoServer、BenchmarkEchoRequest、BenchmarkEchoRequestGo
+- benchmark
+```go
+go test -run none -bench BenchmarkEchoRequest -benchtime 3s -cpu 1
+goos: windows
+goarch: amd64
+pkg: github.com/Li-giegie/node/test
+cpu: AMD Ryzen 5 5600H with Radeon Graphics
+BenchmarkEchoRequest       57748             62148 ns/op
+BenchmarkEchoRequestGo    698731              6537 ns/op
+
+go test -run none -bench BenchmarkEchoRequest -benchmem -benchtime 3s -cpu 12
+goos: windows
+goarch: amd64
+pkg: github.com/Li-giegie/node/test
+cpu: AMD Ryzen 5 5600H with Radeon Graphics
+BenchmarkEchoRequest-12            56014             64310 ns/op             186 B/op          6 allocs/op
+BenchmarkEchoRequestGo-12        2179160              1808 ns/op             441 B/op          7 allocs/op
+```

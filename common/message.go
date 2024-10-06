@@ -15,13 +15,13 @@ const (
 	Null
 )
 
-const MsgHeaderLen = 1 + 3 + 2 + 2 + 3 + 2
+const MsgHeaderLen = 1 + 4 + 4 + 4 + 4 + 2
 
 type Message struct {
 	Type   uint8
 	Id     uint32
-	SrcId  uint16
-	DestId uint16
+	SrcId  uint32
+	DestId uint32
 	Data   []byte
 }
 

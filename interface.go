@@ -8,16 +8,16 @@ import (
 type Conn interface {
 	Request(ctx context.Context, data []byte) ([]byte, error)
 	AsyncRequest(ctx context.Context, data []byte, callback func(res []byte, err error))
-	Forward(ctx context.Context, destId uint16, data []byte) ([]byte, error)
-	AsyncForward(ctx context.Context, destId uint16, data []byte, callback func(res []byte, err error))
+	Forward(ctx context.Context, destId uint32, data []byte) ([]byte, error)
+	AsyncForward(ctx context.Context, destId uint32, data []byte, callback func(res []byte, err error))
 	Write(data []byte) (n int, err error)
-	WriteTo(dst uint16, data []byte) (n int, err error)
+	WriteTo(dst uint32, data []byte) (n int, err error)
 	// WriteMsg 构建一条自定义类型的消息发送
 	WriteMsg(m *common.Message) (n int, err error)
 	Close() error
 	State() uint8
-	LocalId() uint16
-	RemoteId() uint16
+	LocalId() uint32
+	RemoteId() uint32
 	Activate() int64
 }
 
@@ -39,5 +39,5 @@ type Handler interface {
 	// CustomHandle 接收到自定义类型消息时触发回调
 	CustomHandle(ctx common.CustomContext)
 	// Disconnect 连接断开触发回调
-	Disconnect(id uint16, err error)
+	Disconnect(id uint32, err error)
 }

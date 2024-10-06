@@ -14,7 +14,7 @@ var write = &rabbit.Cmd{
 	RunE: func(c *rabbit.Cmd, args []string) error {
 		id, _ := strconv.Atoi(c.Flags().Lookup("id").Value.String())
 		conn := c.Context().Value("client").(common.Conn)
-		_, err := conn.WriteTo(uint16(id), []byte(strings.Join(args, " ")))
+		_, err := conn.WriteTo(uint32(id), []byte(strings.Join(args, " ")))
 		if err != nil {
 			return err
 		}

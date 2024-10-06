@@ -83,12 +83,12 @@ func init() {
 }
 
 type NodeDiscoveryConf struct {
-	id uint16
+	id uint32
 	*node.Conns
 	common.Router
 }
 
-func (n *NodeDiscoveryConf) Id() uint16 {
+func (n *NodeDiscoveryConf) Id() uint32 {
 	return n.id
 }
 
@@ -124,7 +124,7 @@ func (h *ServerHandle) CustomHandle(ctx common.CustomContext) {
 	log.Println("CustomHandle", ctx.String())
 }
 
-func (h *ServerHandle) Disconnect(id uint16, err error) {
+func (h *ServerHandle) Disconnect(id uint32, err error) {
 	log.Println("Disconnect", id, err)
 	if h.NodeDiscoveryProtocol != nil {
 		h.NodeDiscoveryProtocol.Disconnect(id, err)

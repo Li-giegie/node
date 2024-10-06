@@ -19,7 +19,7 @@ func NewProtoMsg(pt uint8, isAdd bool, n []*Node) *ProtoMsg {
 		Nodes: n,
 	}
 }
-func NewProtoMsgWithOneNode(pt uint8, isAdd bool, id uint16) *ProtoMsg {
+func NewProtoMsgWithOneNode(pt uint8, isAdd bool, id uint32) *ProtoMsg {
 	return &ProtoMsg{
 		Type:  pt,
 		IsAdd: isAdd,
@@ -31,7 +31,7 @@ func NewProtoMsgWithType(pt uint8) *ProtoMsg {
 		Type: pt,
 	}
 }
-func NewProtoMsgWithIds(pt uint8, isAdd bool, id []uint16) *ProtoMsg {
+func NewProtoMsgWithIds(pt uint8, isAdd bool, id []uint32) *ProtoMsg {
 	pm := new(ProtoMsg)
 	pm.Type = pt
 	pm.IsAdd = isAdd
@@ -45,7 +45,7 @@ func NewProtoMsgWithIds(pt uint8, isAdd bool, id []uint16) *ProtoMsg {
 type ProtoMsg struct {
 	Type         uint8
 	IsAdd        bool
-	ParentNodeId uint16
+	ParentNodeId uint32
 	Nodes        []*Node
 }
 
@@ -55,7 +55,7 @@ func (p *ProtoMsg) String() string {
 }
 
 type Node struct {
-	Id  uint16
+	Id  uint32
 	Hop uint16
 }
 
@@ -63,7 +63,7 @@ func (n *Node) String() string {
 	return fmt.Sprintf("id: %d, hop: %d", n.Id, n.Hop)
 }
 
-func (p *ProtoMsg) SetNodesWithLocalId(id []uint16) {
+func (p *ProtoMsg) SetNodesWithLocalId(id []uint32) {
 	p.Nodes = make([]*Node, len(id))
 	for i := 0; i < len(id); i++ {
 		p.Nodes[i] = &Node{Id: id[i], Hop: 1}

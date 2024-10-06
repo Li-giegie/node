@@ -7,16 +7,15 @@ node是一个Go（Golang）编写的轻量级TCP框架，node帮助您轻松、�
 - [Message](#传输协议)协议实现通信
 - 支持请求响应模型
 - 支持多服务端节点桥接组网
-- 并发100000/s 请求响应
-
+- 并发100w/s 请求响应
 
 ## 传输协议
 ```go
 type Message struct {
   Type   uint8
   Id     uint32
-  SrcId  uint16
-  DestId uint16
+  SrcId  uint32
+  DestId uint32
   Data   []byte
 }
 ```
@@ -24,10 +23,10 @@ type Message struct {
   <tr>
     <th rowspan="2" >Header 13Byte</th>
     <td >Typ 1Byte</td>
-    <td >Id 3Byte</td>
-    <td >SrcId 2Byte</td>
-    <td >DestId 2Byte</td>
-    <td >DataLength 3Byte</td>
+    <td >Id 4Byte</td>
+    <td >SrcId 4Byte</td>
+    <td >DestId 4Byte</td>
+    <td >DataLength 4Byte</td>
   </tr>
   <tr >
     <td align="center" colspan="5">CheckSum 2Byte</td>
@@ -36,8 +35,6 @@ type Message struct {
     <td align="center" colspan="6">Data</td>
   </tr>
 </table>
-
-单次数据最大发送长度为3个字节的正整数容量0xFFFFFF(大约15MB)
 
 ## 安装
 ```
@@ -51,7 +48,7 @@ type Handler interface {
     Handle(ctx common.Context)
     ErrHandle(msg *common.Message, err error)
     CustomHandle(ctx common.Context)
-    Disconnect(id uint16, err error)
+    Disconnect(id uint32, err error)
 }
 ```
 1. Connection 连接第一次建立成功回调
@@ -91,7 +88,7 @@ func (h Handler) CustomHandle(ctx common.CustomContext) {
 	log.Println("CustomHandle", ctx.String())
 }
 
-func (h Handler) Disconnect(id uint16, err error) {
+func (h Handler) Disconnect(id uint32, err error) {
 	log.Println("Disconnect", id, err)
 }
 
@@ -145,7 +142,7 @@ func (h CliHandler) CustomHandle(ctx common.CustomContext) {
 	log.Println("CustomHandle", ctx.String())
 }
 
-func (h CliHandler) Disconnect(id uint16, err error) {
+func (h CliHandler) Disconnect(id uint32, err error) {
 	fmt.Println("Disconnect", id, err)
 }
 
@@ -192,14 +189,13 @@ func TestClient(t *testing.T) {
 - BenchmarkEchoRequest 同步请求
 - BenchmarkEchoRequestGo 并发请求
 ```go
-go test -run none -bench BenchmarkEchoRequest -benchmem -benchtime 3s
-
+go test -run none -bench BenchmarkEchoRequest -benchmem
 goos: windows
 goarch: amd64
 pkg: github.com/Li-giegie/node/test
 cpu: AMD Ryzen 5 5600H with Radeon Graphics
-BenchmarkEchoRequest-12            64927             55108 ns/op             186 B/op          6 allocs/op
-BenchmarkEchoRequestGo-12         295760             12545 ns/op             735 B/op          8 allocs/op
+BenchmarkEchoRequest-12            18549             65039 ns/op             186 B/op          6 allocs/op
+BenchmarkEchoRequestGo-12        1000000              1619 ns/op             393 B/op          7 allocs/op
 ```
 
 ## 功能

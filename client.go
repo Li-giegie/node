@@ -8,10 +8,12 @@ import (
 )
 
 type Client struct {
+	ReaderBufSize   int
+	WriterBufSize   int
+	WriterQueueSize int
+	MaxMsgLen       uint32
+	conn            net.Conn
 	*Identity
-	conn          net.Conn
-	ReaderBufSize int
-	WriterBufSize int
 }
 
 func NewClient(conn net.Conn, id *Identity) *Client {
@@ -20,6 +22,8 @@ func NewClient(conn net.Conn, id *Identity) *Client {
 	c.Identity = id
 	c.ReaderBufSize = 4096
 	c.WriterBufSize = 4096
+	c.WriterQueueSize = 1024
+	c.MaxMsgLen = 0xffffff
 	return c
 }
 
@@ -38,7 +42,7 @@ func (c *Client) InitConn(h Handler) (Conn, error) {
 		_ = c.conn.Close()
 		return nil, errors.New(msg)
 	}
-	conn := common.NewConn(c.Identity.Id, rid, c.conn, make(map[uint32]chan *common.Message), &sync.Mutex{}, nil, nil, h, new(uint32), c.ReaderBufSize, c.WriterBufSize, 0xffffff)
+	conn := common.NewConn(c.Identity.Id, rid, c.conn, make(map[uint32]chan *common.Message), &sync.Mutex{}, nil, nil, h, new(uint32), c.ReaderBufSize, c.WriterBufSize, c.WriterQueueSize, c.MaxMsgLen)
 	go conn.Serve()
 	h.Connection(conn)
 	return conn, nil
