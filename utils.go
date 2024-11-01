@@ -1,7 +1,6 @@
-package utils
+package node
 
 import (
-	"context"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
@@ -23,30 +22,6 @@ func ReadFull(timeout time.Duration, r io.Reader, buf []byte) (err error) {
 	case <-time.After(timeout):
 		return ErrTimeout
 	}
-}
-
-func ReadFullCtx(ctx context.Context, r io.Reader, buf []byte) (err error) {
-	errC := make(chan struct{})
-	go func() {
-		_, err = io.ReadFull(r, buf)
-		errC <- struct{}{}
-	}()
-	select {
-	case <-errC:
-		return
-	case <-ctx.Done():
-		return ErrTimeout
-	}
-}
-
-func EncodeUint24(b []byte, n2 uint32) {
-	b[0] = byte(n2)
-	b[1] = byte(n2 >> 8)
-	b[2] = byte(n2 >> 16)
-}
-
-func DecodeUint24(b []byte) (n uint32) {
-	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16
 }
 
 var ErrLimitPackSize = errors.New("b exceeds the length limit")

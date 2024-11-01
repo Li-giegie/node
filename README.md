@@ -41,137 +41,114 @@ type Message struct {
 go get -u github.com/Li-giegie/node@latest
 ```
 ## 快速开始
-Handler接口负责连接的生命周期，下文对Handler接口进行了介绍，默认接口生命周期是同步调用。
-```go
-type Handler interface {
-    Connection(conn common.Conn)
-    Handle(ctx common.Context)
-    ErrHandle(msg *common.Message, err error)
-    CustomHandle(ctx common.Context)
-    Disconnect(id uint32, err error)
-}
-```
-1. Connection 连接第一次建立成功回调
-2. Handle 接到标准类型消息会被触发，如果该回调阻塞将阻塞当前节点整个生命周期回调（在同步调用模式中如果在这个回调中发起请求需要另外开启协程否则会陷入阻塞，无法接收到消息），框架并没有集成协程池，第三方框架众多，合理选择
-3. ErrHandle 当收到：超过限制长度的消息0xffffff、校验和错误、超时、服务节点返回的消息但没有接收的消息都会在这里触发回调
-4. CustomHandle 自定义消息类型处理，框架内部默认集成了多种消息类型，当需要一些特定的功能时可以自定义消息类型，例如心跳消息，只需把消息类型声明成框架内部不存在的类型，框架看到不认识的消息就会回调当前函数
-5. Disconnect 连接断开会被触发
 ### Server
+
 ```go
-package test
-
-import (
-	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/common"
-	"log"
-	"testing"
-	"time"
-)
-
-type Handler struct {
-	*node.Server
-}
-
-func (h Handler) Connection(conn common.Conn) {
-	log.Println("connection", conn.RemoteId())
-}
-
-func (h Handler) Handle(ctx common.Context) {
-	ctx.Reply([]byte("pong"))
-}
-
-func (h Handler) ErrHandle(ctx common.ErrContext, err error) {
-	log.Println("ErrHandle", err, ctx.String())
-}
-
-func (h Handler) CustomHandle(ctx common.CustomContext) {
-	log.Println("CustomHandle", ctx.String())
-}
-
-func (h Handler) Disconnect(id uint32, err error) {
-	log.Println("Disconnect", id, err)
-}
-
 func TestServer(t *testing.T) {
-	srv, err := node.ListenTCP("0.0.0.0:8000", &node.Identity{
-		Id:            8000,
-		AccessKey:     []byte("hello"),
-		AccessTimeout: time.Second * 6,
-	})
+	l, err := net.Listen("tcp", "0.0.0.0:8000")
 	if err != nil {
 		t.Error(err)
 		return
 	}
+	srv := node.NewServer(l, &node.SrvConf{
+		// 节点的身份信息
+		Identity: &node.Identity{
+			// 唯一ID
+			Id:          1,
+			// 节点的秘钥，想与该节点建立连接需要提供相同的秘钥
+			AuthKey:     []byte("hello"),
+			// 认证过程超时
+			AuthTimeout: time.Second * 6,
+		},
+		// 最大消息长度
+		MaxMsgLen:          0xffffff,
+		// 写入队列大小 Request、Write....发送时进入队列
+		WriterQueueSize:    1024,
+		// 读缓冲区大小
+		ReaderBufSize:      4096,
+		// 写缓冲区大小
+		WriterBufSize:      4096,
+		// 最大连接数 > 0有效 
+		MaxConns:           0,
+		// 超过最大连接数时，进入休眠的最大时间，按照步长递增
+		MaxListenSleepTime: time.Minute,
+		// 超过限制连接数量，递增休眠步长，直到达到最大休眠时长后停止递增
+		ListenStepTime:     time.Second,
+	})
+	// 以下函数均为同步调用
+	// 建立连接回调
+	srv.OnConnection = func(conn node.Conn) {
+		log.Println("OnConnection", conn.RemoteId())
+	}
+	// 收到消息回调
+	srv.OnMessage = func(ctx node.Context) {
+		log.Println("OnMessage", ctx.String())
+		ctx.Reply(ctx.Data())
+	}
+	// 收到自定义消息回调
+	srv.OnCustomMessage = func(ctx node.CustomContext) {
+		log.Println("OnCustomMessage", ctx.String())
+	}
+	// 断开连接回调
+	srv.OnClose = func(id uint32, err error) {
+		log.Println("OnClose", id, err)
+	}
 	defer srv.Close()
-	if err = srv.Serve(&Handler{srv}); err != nil {
+	// 阻塞启动服务
+	if err = srv.Serve(); err != nil {
 		t.Error(err)
 		return
 	}
 }
+
 ```
 
 ### Client
+
 ```go
-package test
-
-import (
-	"context"
-	"fmt"
-	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/common"
-	"log"
-	"testing"
-	"time"
-)
-
-type CliHandler struct {}
-
-func (h CliHandler) Connection(conn common.Conn) {
-	log.Println("Handle", conn.RemoteId())
-}
-
-func (h CliHandler) Handle(ctx common.Context) {
-	log.Println("Handle", ctx.String())
-}
-
-func (h CliHandler) ErrHandle(ctx common.ErrContext, err error) {
-	log.Println("ErrHandle", err, ctx.String())
-}
-
-func (h CliHandler) CustomHandle(ctx common.CustomContext) {
-	log.Println("CustomHandle", ctx.String())
-}
-
-func (h CliHandler) Disconnect(id uint32, err error) {
-	fmt.Println("Disconnect", id, err)
-}
-
 func TestClient(t *testing.T) {
-	conn, err := node.DialTCP(
-		"0.0.0.0:8000",
-		&node.Identity{
-			// Local node Id
-			Id:            8001,
-			// Remote Node Access key
-			AccessKey:     []byte("hello"),
-			// Timeout
-			AccessTimeout: time.Second * 6,
-		},
-		&CliHandler{},
-	)
+	conn, err := net.Dial("tcp", "0.0.0.0:8000")
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	defer conn.Close()
+	// 关闭管道
+	stopC := make(chan struct{})
+	c := node.NewClient(conn, &node.CliConf{
+		ReaderBufSize:   4096,
+		WriterBufSize:   4096,
+		WriterQueueSize: 1024,
+		MaxMsgLen:       0xffffff,
+		ClientIdentity: &node.ClientIdentity{
+			Id:            1234,
+			RemoteAuthKey: []byte("hello"),
+			Timeout:       time.Second * 6,
+		},
+	})
+	c.OnConnection = func(conn node.Conn) {
+		log.Println("OnConnection", conn.RemoteId())
+	}
+	c.OnMessage = func(ctx node.Context) {
+		log.Println("OnMessage", ctx.String())
+	}
+	c.OnClose = func(id uint32, err error) {
+		log.Println("OnClose", id, err)
+		stopC <- struct{}{}
+	}
+	if err = c.Start(); err != nil {
+		log.Fatalln(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
-	res, err := conn.Request(ctx, []byte("ping"))
+	// 发起一个请求
+	res, err := c.Request(ctx, []byte("ping"))
 	if err != nil {
 		t.Error(err)
 		return
 	}
 	println(string(res))
+	c.Close()
+	<-stopC
 }
 ```
 

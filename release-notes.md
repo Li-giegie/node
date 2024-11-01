@@ -6,6 +6,7 @@
 - [v1.4](#v14)
 - [v1.5](#v15)
 - [v2.0](#v20)
+- [v2.1](#v21)
 ___
 
 ## v1.0
@@ -93,6 +94,7 @@ ___
 ## v1.5
 ### CI
 - ci：优化一些实现逻辑，更新一些文档
+___
 
 ## v2.0
 ### FEAT
@@ -120,3 +122,9 @@ cpu: AMD Ryzen 5 5600H with Radeon Graphics
 BenchmarkEchoRequest-12            56014             64310 ns/op             186 B/op          6 allocs/op
 BenchmarkEchoRequestGo-12        2179160              1808 ns/op             441 B/op          7 allocs/op
 ```
+___
+
+## v2.1
+### REFACTOR
+- refactor：重构一些代码
+

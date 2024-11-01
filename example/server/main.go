@@ -6,21 +6,21 @@ import (
 	"flag"
 	"fmt"
 	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/common"
 	"github.com/Li-giegie/node/example/server/cmd"
 	"github.com/Li-giegie/node/protocol"
 	"gopkg.in/yaml.v3"
 	"io"
 	"log"
+	"net"
 	"os"
 	"time"
 )
 
 type Conf struct {
 	Addr string
-	*node.Identity
-	*NodeDiscoveryProtocol
-	*HelloProtocol
+	*node.SrvConf
+	NodeDiscoveryProtocol
+	HelloProtocol
 }
 
 type NodeDiscoveryProtocol struct {
@@ -46,18 +46,27 @@ func init() {
 	flag.Parse()
 	if *genConfFile != "" {
 		data, err := yaml.Marshal(&Conf{
-			Addr: "0.0.0.0:8000",
-			Identity: &node.Identity{
-				Id:            0,
-				AccessKey:     []byte("hello"),
-				AccessTimeout: time.Second * 6,
+			Addr: "0.0.0.0:8010",
+			SrvConf: &node.SrvConf{
+				Identity: &node.Identity{
+					Id:          10,
+					AuthKey:     []byte("hello"),
+					AuthTimeout: time.Second * 6,
+				},
+				MaxMsgLen:          0xffffff,
+				WriterQueueSize:    1024,
+				ReaderBufSize:      4096,
+				WriterBufSize:      4096,
+				MaxConns:           0,
+				MaxListenSleepTime: time.Minute,
+				ListenStepTime:     time.Second,
 			},
-			NodeDiscoveryProtocol: &NodeDiscoveryProtocol{
-				Enable:        false,
+			NodeDiscoveryProtocol: NodeDiscoveryProtocol{
+				Enable:        true,
 				QueryInterval: time.Second * 30,
 			},
-			HelloProtocol: &HelloProtocol{
-				Enable:       false,
+			HelloProtocol: HelloProtocol{
+				Enable:       true,
 				Interval:     time.Second * 5,
 				Timeout:      time.Second * 10,
 				TimeoutClose: time.Second * 30,
@@ -82,65 +91,54 @@ func init() {
 	}
 }
 
-type NodeDiscoveryConf struct {
-	id uint32
-	*node.Conns
-	common.Router
-}
-
-func (n *NodeDiscoveryConf) Id() uint32 {
-	return n.id
-}
-
-type ServerHandle struct {
-	protocol.NodeDiscoveryProtocol
-	protocol.HelloProtocol
-	*node.Server
-}
-
-func (h *ServerHandle) Connection(conn common.Conn) {
-	log.Println("connection", conn.RemoteId())
-	if h.NodeDiscoveryProtocol != nil {
-		h.NodeDiscoveryProtocol.Connection(conn)
-	}
-}
-
-func (h *ServerHandle) Handle(ctx common.Context) {
-	log.Printf("server [%d] Handl datae %s\n", ctx.SrcId(), ctx.Data())
-	ctx.Reply([]byte(fmt.Sprintf("server [%d] handle reply: %s", h.Server.Id(), ctx.Data())))
-}
-
-func (h *ServerHandle) ErrHandle(msg common.ErrContext, err error) {
-	log.Println("ErrHandle", msg.String())
-}
-
-func (h *ServerHandle) CustomHandle(ctx common.CustomContext) {
-	if h.HelloProtocol != nil && !h.HelloProtocol.CustomHandle(ctx) {
-		return
-	}
-	if h.NodeDiscoveryProtocol != nil && !h.NodeDiscoveryProtocol.CustomHandle(ctx) {
-		return
-	}
-	log.Println("CustomHandle", ctx.String())
-}
-
-func (h *ServerHandle) Disconnect(id uint32, err error) {
-	log.Println("Disconnect", id, err)
-	if h.NodeDiscoveryProtocol != nil {
-		h.NodeDiscoveryProtocol.Disconnect(id, err)
-	}
-}
+type OnCustomMessageCallback func(ctx node.CustomContext) bool
+type OnConnectionCallback func(ctx node.Conn)
+type OnCloseCallback func(id uint32, err error)
 
 func main() {
-	srv, err := node.ListenTCP(c.Addr, c.Identity)
+	l, err := net.Listen("tcp", c.Addr)
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer srv.Close()
-
-	s := new(ServerHandle)
-	s.Server = srv
-	if c.HelloProtocol != nil && c.HelloProtocol.Enable {
+	s := node.NewServer(l, &node.SrvConf{
+		Identity:           c.Identity,
+		MaxMsgLen:          0xffffff,
+		WriterQueueSize:    1024,
+		ReaderBufSize:      4096,
+		WriterBufSize:      4096,
+		MaxConns:           0,
+		MaxListenSleepTime: time.Minute,
+		ListenStepTime:     time.Second,
+	})
+	defer s.Close()
+	var OnCustomMessage []OnCustomMessageCallback
+	var OnConnection []OnConnectionCallback
+	var OnClose []OnCloseCallback
+	s.OnConnection = func(conn node.Conn) {
+		for _, callback := range OnConnection {
+			callback(conn)
+		}
+		log.Println("OnConnection", conn.RemoteId())
+	}
+	s.OnMessage = func(ctx node.Context) {
+		log.Println("OnMessage", ctx.String())
+		ctx.Reply(ctx.Data())
+	}
+	s.OnCustomMessage = func(ctx node.CustomContext) {
+		for _, callback := range OnCustomMessage {
+			if next := callback(ctx); !next {
+				return
+			}
+		}
+		log.Println("OnCustomMessage", ctx.String())
+	}
+	s.OnClose = func(id uint32, err error) {
+		for _, callback := range OnClose {
+			callback(id, err)
+		}
+		log.Println("OnClose", id, err)
+	}
+	if c.HelloProtocol.Enable {
 		var w io.Writer
 		if c.HelloProtocol.EnableStdout {
 			w = os.Stdout
@@ -154,26 +152,28 @@ func main() {
 			defer f.Close()
 			if c.HelloProtocol.EnableStdout {
 				w = io.MultiWriter(os.Stdout, f)
-			} else {
-				w = f
 			}
 		}
-		s.HelloProtocol = protocol.NewHelloProtocol(c.HelloProtocol.Interval, c.HelloProtocol.Timeout, c.HelloProtocol.TimeoutClose, w)
-		go s.HelloProtocol.KeepAliveMultiple(srv.Conns)
+		h := protocol.NewHelloProtocol(c.HelloProtocol.Interval, c.HelloProtocol.Timeout, c.HelloProtocol.TimeoutClose, w)
+		defer h.Stop()
+		go h.KeepAliveMultiple(s.ConnManager)
+		OnCustomMessage = append(OnCustomMessage, h.OnCustomMessage)
 	}
 
-	if c.NodeDiscoveryProtocol != nil && c.NodeDiscoveryProtocol.Enable {
-		s.NodeDiscoveryProtocol = protocol.NewNodeDiscoveryProtocol(&NodeDiscoveryConf{srv.Id(), srv.Conns, srv.Router}, os.Stdout)
-		go s.NodeDiscoveryProtocol.StartTimingQueryEnableProtoNode(context.Background(), c.NodeDiscoveryProtocol.QueryInterval)
+	if c.NodeDiscoveryProtocol.Enable {
+		nd := protocol.NewNodeDiscoveryProtocol(s.Id(), s.ConnManager, s.Router, os.Stdout)
+		OnConnection = append(OnConnection, nd.Connection)
+		OnCustomMessage = append(OnCustomMessage, nd.CustomHandle)
+		OnClose = append(OnClose, nd.Disconnect)
 	}
 	// 解析命令
 	go func() {
 		time.Sleep(time.Second)
 		sc := bufio.NewScanner(os.Stdin)
 		fmt.Print(">>")
-		for sc.Scan() && srv.State == node.StateType_Listen {
+		for sc.Scan() {
 			if sc.Text() != "" {
-				executeCmd, err := cmd.Group.ExecuteCmdLineContext(context.WithValue(context.Background(), "server", srv), sc.Text())
+				executeCmd, err := cmd.Group.ExecuteCmdLineContext(context.WithValue(context.Background(), "server", s), sc.Text())
 				if err != nil {
 					if executeCmd == nil {
 						cmd.Group.Usage()
@@ -186,7 +186,7 @@ func main() {
 		}
 	}()
 	log.Println("start success", c.Addr)
-	if err = srv.Serve(s); err != nil {
+	if err = s.Serve(); err != nil {
 		println(err)
 		return
 	}

@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/Li-giegie/node/common"
+	"github.com/Li-giegie/node"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"strconv"
 	"strings"
@@ -13,7 +13,7 @@ var write = &rabbit.Cmd{
 	Run:         nil,
 	RunE: func(c *rabbit.Cmd, args []string) error {
 		id, _ := strconv.Atoi(c.Flags().Lookup("id").Value.String())
-		conn := c.Context().Value("client").(common.Conn)
+		conn := c.Context().Value("client").(*node.Client)
 		_, err := conn.WriteTo(uint32(id), []byte(strings.Join(args, " ")))
 		if err != nil {
 			return err

@@ -25,7 +25,7 @@ func init() {
 				return errors.New("server is null")
 			}
 			srv := i.(*node.Server)
-			for i2, conn := range srv.Conns.GetConns() {
+			for i2, conn := range srv.ConnManager.GetAll() {
 				fmt.Println(i2, conn.RemoteId())
 			}
 			return nil

@@ -1,7 +1,8 @@
 package hello
 
 import (
-	"github.com/Li-giegie/node/common"
+	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/net"
 	"io"
 	"log"
 	"time"
@@ -31,7 +32,7 @@ func NewHelloProtocol(msgTypeSend, msgTypeReply uint8, interval, timeout, timeou
 }
 
 // KeepAlive 维持一个连接
-func (h *HelloProtocol) KeepAlive(c common.Conn) {
+func (h *HelloProtocol) KeepAlive(c node.Conn) {
 	// 连续三次状态错误、或者发送失败、超时关闭将会结束
 	h.Ticker = time.NewTicker(h.Interval)
 	i := 0
@@ -40,10 +41,7 @@ func (h *HelloProtocol) KeepAlive(c common.Conn) {
 			h.Ticker.Stop()
 			return
 		}
-		if c.State() != 1 {
-			i++
-			continue
-		}
+
 		i = 0
 		if h.handle(c) {
 			h.Ticker.Stop()
@@ -52,19 +50,23 @@ func (h *HelloProtocol) KeepAlive(c common.Conn) {
 	}
 }
 
+type Conns interface {
+	GetAll() []node.Conn
+}
+
 // KeepAliveMultiple 维持多个连接，这通常用作服务节点
-func (h *HelloProtocol) KeepAliveMultiple(conns common.Connections) {
+func (h *HelloProtocol) KeepAliveMultiple(conns Conns) {
 	h.Ticker = time.NewTicker(h.Interval)
 	defer h.Ticker.Stop()
 	for _ = range h.Ticker.C {
-		for _, conn := range conns.GetConns() {
+		for _, conn := range conns.GetAll() {
 			h.handle(conn)
 		}
 	}
 }
 
-func (h *HelloProtocol) handle(c common.Conn) (exit bool) {
-	msg := new(common.Message)
+func (h *HelloProtocol) handle(c node.Conn) (exit bool) {
+	msg := new(net.Message)
 	msg.Type = h.HelloProtocolMsgType_Send
 	msg.SrcId = c.LocalId()
 	msg.DestId = c.RemoteId()
@@ -91,7 +93,7 @@ func (h *HelloProtocol) handle(c common.Conn) (exit bool) {
 	return false
 }
 
-func (h *HelloProtocol) CustomHandle(ctx common.CustomContext) (next bool) {
+func (h *HelloProtocol) OnCustomMessage(ctx node.CustomContext) (next bool) {
 	switch ctx.Type() {
 	case h.HelloProtocolMsgType_Send:
 		if h.Logger != nil {

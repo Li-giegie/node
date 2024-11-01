@@ -1,4 +1,6 @@
-package common
+package node
+
+import "github.com/Li-giegie/node/net"
 
 type IMessage interface {
 	Id() uint32
@@ -23,60 +25,58 @@ type CustomContext interface {
 	CustomReply(typ uint8, data []byte) error
 }
 
-type ErrContext interface {
-	IMessage
-}
-
-type context struct {
-	*Message
-	*Connect
+type connContext struct {
+	*net.Message
+	*net.Connect
 	once bool
 }
 
-func (c *context) Id() uint32 {
+func (c *connContext) Id() uint32 {
 	return c.Message.Id
 }
 
-func (c *context) Type() uint8 {
+func (c *connContext) Type() uint8 {
 	return c.Message.Type
 }
 
-func (c *context) SrcId() uint32 {
+func (c *connContext) SrcId() uint32 {
 	return c.Message.SrcId
 }
 
-func (c *context) DestId() uint32 {
+func (c *connContext) DestId() uint32 {
 	return c.Message.DestId
 }
 
-func (c *context) Data() []byte {
+func (c *connContext) Data() []byte {
 	return c.Message.Data
 }
 
 // Reply 响应内容，限制回复一次，不要尝试多次回复，多次回复返回 var ErrLimitReply = errors.New("limit reply to one time")
-func (c *context) Reply(data []byte) (err error) {
-	return c.CustomReply(MsgType_Reply, data)
+func (c *connContext) Reply(data []byte) (err error) {
+	return c.CustomReply(net.MsgType_Reply, data)
 }
 
+const maxErrReplySize = 65533
+
 // ErrReply err length <= 65533 byte
-func (c *context) ErrReply(data []byte, err error) error {
+func (c *connContext) ErrReply(data []byte, err error) error {
 	var errB = make([]byte, 2)
 	if err == nil {
 		errB[0], errB[1] = 255, 255 //65535
 	} else {
 		errBytes := []byte(err.Error())
 		if len(errBytes) > maxErrReplySize {
-			return DEFAULT_ErrReplyErrorLengthOverflow
+			return net.DEFAULT_ErrReplyErrorLengthOverflow
 		}
 		errB[0], errB[1] = byte(len(errBytes)), byte(len(errBytes)>>8)
 		errB = append(errB, errBytes...)
 	}
-	return c.CustomReply(MsgType_ReplyErr, append(errB, data...))
+	return c.CustomReply(net.MsgType_ReplyErr, append(errB, data...))
 }
 
-func (c *context) CustomReply(typ uint8, data []byte) (err error) {
+func (c *connContext) CustomReply(typ uint8, data []byte) (err error) {
 	if c.once {
-		return DEFAULT_ErrReplyLimitOnce
+		return net.DEFAULT_ErrReplyLimitOnce
 	}
 	c.once = true
 	c.Message.Type = typ

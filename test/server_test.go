@@ -2,48 +2,47 @@ package test
 
 import (
 	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/common"
 	"log"
+	"net"
 	"testing"
 	"time"
 )
 
-type Handler struct {
-	*node.Server
-}
-
-func (h Handler) Connection(conn common.Conn) {
-	log.Println("connection", conn.RemoteId())
-}
-
-func (h Handler) Handle(ctx common.Context) {
-	ctx.Reply([]byte("pong"))
-}
-
-func (h Handler) ErrHandle(ctx common.ErrContext, err error) {
-	log.Println("ErrHandle", err, ctx.String())
-}
-
-func (h Handler) CustomHandle(ctx common.CustomContext) {
-	log.Println("CustomHandle", ctx.String())
-}
-
-func (h Handler) Disconnect(id uint32, err error) {
-	log.Println("Disconnect", id, err)
-}
-
 func TestServer(t *testing.T) {
-	srv, err := node.ListenTCP("0.0.0.0:8000", &node.Identity{
-		Id:            8000,
-		AccessKey:     []byte("hello"),
-		AccessTimeout: time.Second * 6,
-	})
+	l, err := net.Listen("tcp", "0.0.0.0:8000")
 	if err != nil {
 		t.Error(err)
 		return
 	}
+	srv := node.NewServer(l, &node.SrvConf{
+		Identity: &node.Identity{
+			Id:          1,
+			AuthKey:     []byte("hello"),
+			AuthTimeout: time.Second * 6,
+		},
+		MaxMsgLen:          0xffffff,
+		WriterQueueSize:    1024,
+		ReaderBufSize:      4096,
+		WriterBufSize:      4096,
+		MaxConns:           0,
+		MaxListenSleepTime: time.Minute,
+		ListenStepTime:     time.Second,
+	})
+	srv.OnConnection = func(conn node.Conn) {
+		log.Println("OnConnection", conn.RemoteId())
+	}
+	srv.OnMessage = func(ctx node.Context) {
+		log.Println("OnMessage", ctx.String())
+		ctx.Reply(ctx.Data())
+	}
+	srv.OnCustomMessage = func(ctx node.CustomContext) {
+		log.Println("OnCustomMessage", ctx.String())
+	}
+	srv.OnClose = func(id uint32, err error) {
+		log.Println("OnClose", id, err)
+	}
 	defer srv.Close()
-	if err = srv.Serve(&Handler{srv}); err != nil {
+	if err = srv.Serve(); err != nil {
 		t.Error(err)
 		return
 	}

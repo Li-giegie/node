@@ -1,10 +1,8 @@
 package cmd
 
 import (
-	"fmt"
 	"github.com/Li-giegie/node"
 	rabbit "github.com/Li-giegie/rabbit-cli"
-	"log"
 	"net"
 	"time"
 )
@@ -20,27 +18,9 @@ var bind = &rabbit.Cmd{
 		if err != nil {
 			return err
 		}
-		i := c.Context().Value("server")
-		if i == nil {
-			return fmt.Errorf("server is null")
-		}
-		srv := i.(*node.Server)
-		bn, err := node.CreateBridgeNode(
-			conn,
-			&node.Identity{
-				Id:            srv.Id(),
-				AccessKey:     []byte(key),
-				AccessTimeout: timeout,
-			},
-			func() {
-				log.Println("桥接节点断开连接")
-			},
-		)
-		if err != nil {
-			_ = conn.Close()
-			return err
-		}
-		return srv.BindBridge(bn)
+		s := c.Context().Value("server").(*node.Server)
+		_, err = s.BindBridge(conn, []byte(key), timeout)
+		return err
 	},
 }
 

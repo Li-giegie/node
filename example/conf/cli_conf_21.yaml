@@ -1,17 +1,17 @@
 raddr: 0.0.0.0:8020
 identity:
     id: 21
-    accesskey:
+    authkey:
         - 104
         - 101
         - 108
         - 108
         - 111
-    accesstimeout: 6s
+    authtimeout: 6s
 helloprotocol:
     enable: true
     enablestdout: true
-    outfile: "hello-21.log"
-    interval: 10s
-    timeout: 30s
-    timeoutclose: 60s
+    outfile: ""
+    interval: 3s
+    timeout: 15s
+    timeoutclose: 30s

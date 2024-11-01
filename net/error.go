@@ -1,4 +1,4 @@
-package common
+package net
 
 import "strconv"
 
@@ -18,6 +18,7 @@ var (
 	DEFAULT_ErrTimeoutMsg               = new(ErrTimeoutMsg)
 	DEFAULT_ErrWriteYourself            = new(ErrWriteYourself)
 	DEFAULT_ErrReplyLimitOnce           = new(ErrReplyLimitOnce)
+	DEFAULT_ErrClosedListen             = new(ErrClosedListen)
 )
 
 // ErrReplyLimitOnce 限制回复一次错误,多次回复时产生此错误
@@ -92,3 +93,11 @@ func (e *ErrTimeoutMsg) Error() string {
 }
 
 func (e *ErrTimeoutMsg) NodeError() {}
+
+type ErrClosedListen struct{}
+
+func (c ErrClosedListen) Error() string {
+	return "closed network connection"
+}
+
+func (c ErrClosedListen) NodeError() {}

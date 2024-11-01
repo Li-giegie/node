@@ -6,12 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/common"
 	"github.com/Li-giegie/node/example/client/cmd"
 	"github.com/Li-giegie/node/protocol"
 	"gopkg.in/yaml.v3"
 	"io"
 	"log"
+	"net"
 	"os"
 	"time"
 )
@@ -19,7 +19,7 @@ import (
 type Config struct {
 	RAddr string
 	*node.Identity
-	*HelloProtocol
+	HelloProtocol
 }
 
 type HelloProtocol struct {
@@ -40,15 +40,15 @@ func init() {
 	flag.Parse()
 	if *gen != "" {
 		data, err := yaml.Marshal(&Config{
-			RAddr: "0.0.0.0:8000",
+			RAddr: "0.0.0.0:8010",
 			Identity: &node.Identity{
-				Id:            8001,
-				AccessKey:     []byte("hello"),
-				AccessTimeout: time.Second * 6,
+				Id:          8001,
+				AuthKey:     []byte("hello"),
+				AuthTimeout: time.Second * 6,
 			},
-			HelloProtocol: &HelloProtocol{
-				Enable:       false,
-				EnableStdout: false,
+			HelloProtocol: HelloProtocol{
+				Enable:       true,
+				EnableStdout: true,
 				OutFile:      "",
 				Interval:     time.Second * 3,
 				Timeout:      time.Second * 15,
@@ -73,19 +73,57 @@ func init() {
 	}
 }
 
+type OnCustomMessageCallback func(ctx node.CustomContext) bool
+
 func main() {
-	handler := new(ClientHandler)
-	handler.stopChan = make(chan error)
+	conn, err := net.Dial("tcp", c.RAddr)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	client := node.NewClient(conn, &node.CliConf{
+		ReaderBufSize:   4096,
+		WriterBufSize:   4096,
+		WriterQueueSize: 1024,
+		MaxMsgLen:       0xffffff,
+		ClientIdentity: &node.ClientIdentity{
+			Id:            c.Id,
+			RemoteAuthKey: c.AuthKey,
+			Timeout:       c.AuthTimeout,
+		},
+	})
+	var OnCustomMessage []OnCustomMessageCallback
+	client.OnConnection = func(conn node.Conn) {
+		log.Println("OnConnection", conn.RemoteId())
+	}
+	client.OnMessage = func(ctx node.Context) {
+		ctx.Reply(ctx.Data())
+	}
+	client.OnCustomMessage = func(ctx node.CustomContext) {
+		for _, callback := range OnCustomMessage {
+			if next := callback(ctx); !next {
+				return
+			}
+		}
+		log.Println("OnCustomMessage", ctx.String())
+	}
+	stopC := make(chan struct{})
+	client.OnClose = func(id uint32, err error) {
+		stopC <- struct{}{}
+	}
+	if err = client.Start(); err != nil {
+		log.Fatalln(err)
+	}
 	//是否开启hello (心跳)协议
-	if c.HelloProtocol != nil && c.HelloProtocol.Enable {
-		var w io.Writer
-		if c.HelloProtocol.EnableStdout {
+	if c.HelloProtocol.Enable {
+		w := io.Discard
+		if c.EnableStdout {
 			w = os.Stdout
 		}
-		if c.HelloProtocol.OutFile != "" {
-			f, err := os.OpenFile(c.HelloProtocol.OutFile, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
+		if c.OutFile != "" {
+			f, err := os.OpenFile(c.OutFile, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
 			if err != nil {
-				log.Fatalln(err)
+				log.Println(err)
+				return
 			}
 			defer f.Close()
 			if c.EnableStdout {
@@ -94,26 +132,17 @@ func main() {
 				w = f
 			}
 		}
-		handler.HelloProtocol = protocol.NewHelloProtocol(c.HelloProtocol.Interval, c.HelloProtocol.Timeout, c.HelloProtocol.TimeoutClose, w)
+		h := protocol.NewHelloProtocol(c.Interval, c.Timeout, c.TimeoutClose, w)
+		OnCustomMessage = append(OnCustomMessage, h.OnCustomMessage)
+		go h.KeepAlive(client)
+		defer h.Stop()
 	}
-
-	conn, err := node.DialTCP(c.RAddr, c.Identity, handler)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	handler.Conn = conn
-	if c.HelloProtocol.Enable {
-		go handler.HelloProtocol.KeepAlive(conn)
-	}
-	log.Printf("client %d start success\n", c.Identity.Id)
-	defer conn.Close()
 	// 命令解析处理
 	go func() {
-		ctx2 := context.WithValue(context.Background(), "client", conn)
+		ctx2 := context.WithValue(context.Background(), "client", client)
 		s := bufio.NewScanner(os.Stdin)
 		fmt.Print(">>")
-		for s.Scan() && conn.State() == common.ConnStateTypeOnConnect {
+		for s.Scan() {
 			if len(s.Text()) > 0 {
 				_, err := cmd.Group.ExecuteCmdLineContext(ctx2, s.Text())
 				if err != nil {
@@ -123,37 +152,5 @@ func main() {
 			fmt.Print(">>")
 		}
 	}()
-	if err = <-handler.stopChan; err != nil {
-		fmt.Println(err)
-	}
-}
-
-type ClientHandler struct {
-	common.Conn
-	protocol.HelloProtocol
-	stopChan chan error
-}
-
-func (c *ClientHandler) Connection(conn common.Conn) {
-	log.Println("Connection", conn.RemoteId())
-}
-
-func (c *ClientHandler) Handle(ctx common.Context) {
-	log.Printf("ClientHandler Handle src [%d] %s\n", ctx.SrcId(), ctx.Data())
-	ctx.Reply([]byte(fmt.Sprintf("ClientHandler [%d] handle reply: %s", ctx.DestId(), ctx.Data())))
-}
-
-func (c *ClientHandler) ErrHandle(msg common.ErrContext, err error) {
-	log.Println("ClientHandler ErrHandle: ", msg.String(), err)
-}
-
-func (c *ClientHandler) CustomHandle(ctx common.CustomContext) {
-	if c.HelloProtocol != nil && !c.HelloProtocol.CustomHandle(ctx) {
-		return
-	}
-	log.Println("client CustomHandle: ", ctx.String())
-}
-
-func (c *ClientHandler) Disconnect(id uint32, err error) {
-	c.stopChan <- err
+	<-stopC
 }

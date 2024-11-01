@@ -2,57 +2,52 @@ package test
 
 import (
 	"context"
-	"fmt"
 	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/common"
 	"log"
+	"net"
 	"testing"
 	"time"
 )
 
-type CliHandler struct{}
-
-func (h CliHandler) Connection(conn common.Conn) {
-	log.Println("Handle", conn.RemoteId())
-}
-
-func (h CliHandler) Handle(ctx common.Context) {
-	log.Println("Handle", ctx.String())
-}
-
-func (h CliHandler) ErrHandle(ctx common.ErrContext, err error) {
-	log.Println("ErrHandle", err, ctx.String())
-}
-
-func (h CliHandler) CustomHandle(ctx common.CustomContext) {
-	log.Println("CustomHandle", ctx.String())
-}
-
-func (h CliHandler) Disconnect(id uint32, err error) {
-	fmt.Println("Disconnect", id, err)
-}
-
 func TestClient(t *testing.T) {
-	conn, err := node.DialTCP(
-		"0.0.0.0:8000",
-		&node.Identity{
-			Id:            8001,
-			AccessKey:     []byte("hello"),
-			AccessTimeout: time.Second * 6,
-		},
-		&CliHandler{},
-	)
+	conn, err := net.Dial("tcp", "0.0.0.0:8000")
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	defer conn.Close()
+	stopC := make(chan struct{})
+	c := node.NewClient(conn, &node.CliConf{
+		ReaderBufSize:   4096,
+		WriterBufSize:   4096,
+		WriterQueueSize: 1024,
+		MaxMsgLen:       0xffffff,
+		ClientIdentity: &node.ClientIdentity{
+			Id:            1234,
+			RemoteAuthKey: []byte("hello"),
+			Timeout:       time.Second * 6,
+		},
+	})
+	c.OnConnection = func(conn node.Conn) {
+		log.Println("OnConnection", conn.RemoteId())
+	}
+	c.OnMessage = func(ctx node.Context) {
+		log.Println("OnMessage", ctx.String())
+	}
+	c.OnClose = func(id uint32, err error) {
+		log.Println("OnClose", id, err)
+		stopC <- struct{}{}
+	}
+	if err = c.Start(); err != nil {
+		log.Fatalln(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
-	res, err := conn.Request(ctx, []byte("ping"))
+	res, err := c.Request(ctx, []byte("ping"))
 	if err != nil {
 		t.Error(err)
 		return
 	}
 	println(string(res))
+	c.Close()
+	<-stopC
 }

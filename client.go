@@ -2,38 +2,48 @@ package node
 
 import (
 	"errors"
-	"github.com/Li-giegie/node/common"
+	nodeNet "github.com/Li-giegie/node/net"
+	"io"
 	"net"
 	"sync"
 )
 
-type Client struct {
+type CliConf struct {
 	ReaderBufSize   int
 	WriterBufSize   int
 	WriterQueueSize int
 	MaxMsgLen       uint32
-	conn            net.Conn
-	*Identity
+	*ClientIdentity
+	OnConnection    func(conn Conn)            `yaml:"-" json:"-"`
+	OnMessage       func(ctx Context)          `yaml:"-" json:"-"`
+	OnCustomMessage func(ctx CustomContext)    `yaml:"-" json:"-"`
+	OnDropMessage   func(ctx Context)          `yaml:"-" json:"-"`
+	OnClose         func(id uint32, err error) `yaml:"-" json:"-"`
 }
 
-func NewClient(conn net.Conn, id *Identity) *Client {
+type Client struct {
+	*CliConf
+	conn     net.Conn
+	recvChan map[uint32]chan *nodeNet.Message
+	recvLock sync.Mutex
+	Conn
+}
+
+func NewClient(conn net.Conn, conf *CliConf) *Client {
 	c := new(Client)
+	c.recvChan = make(map[uint32]chan *nodeNet.Message)
 	c.conn = conn
-	c.Identity = id
-	c.ReaderBufSize = 4096
-	c.WriterBufSize = 4096
-	c.WriterQueueSize = 1024
-	c.MaxMsgLen = 0xffffff
+	c.CliConf = conf
 	return c
 }
 
-func (c *Client) InitConn(h Handler) (Conn, error) {
-	err := defaultBasicReq.Send(c.conn, c.Identity.Id, c.Identity.AccessKey)
+func (c *Client) authenticate() (*nodeNet.Connect, error) {
+	err := defaultBasicReq.Send(c.conn, c.ClientIdentity.Id, c.ClientIdentity.RemoteAuthKey)
 	if err != nil {
 		_ = c.conn
 		return nil, err
 	}
-	rid, permit, msg, err := defaultBasicResp.Receive(c.conn, c.Identity.AccessTimeout)
+	rid, permit, msg, err := defaultBasicResp.Receive(c.conn, c.ClientIdentity.Timeout)
 	if err != nil {
 		_ = c.conn.Close()
 		return nil, err
@@ -42,17 +52,57 @@ func (c *Client) InitConn(h Handler) (Conn, error) {
 		_ = c.conn.Close()
 		return nil, errors.New(msg)
 	}
-	conn := common.NewConn(c.Identity.Id, rid, c.conn, make(map[uint32]chan *common.Message), &sync.Mutex{}, nil, nil, h, new(uint32), c.ReaderBufSize, c.WriterBufSize, c.WriterQueueSize, c.MaxMsgLen)
-	go conn.Serve()
-	h.Connection(conn)
+	conn := nodeNet.NewConn(c.ClientIdentity.Id, rid, c.conn, c.recvChan, &c.recvLock, new(uint32), c.ReaderBufSize, c.WriterBufSize, c.WriterQueueSize, c.MaxMsgLen)
 	return conn, nil
 }
 
-// DialTCP 发起tcp连接并启动服务
-func DialTCP(addr string, auth *Identity, h Handler) (Conn, error) {
-	conn, err := net.Dial("tcp", addr)
+func (c *Client) Start() error {
+	conn, err := c.authenticate()
 	if err != nil {
-		return nil, err
+		if c.OnClose != nil {
+			c.OnClose(0, err)
+		}
+		return err
 	}
-	return NewClient(conn, auth).InitConn(h)
+	c.Conn = conn
+	if c.OnConnection != nil {
+		c.OnConnection(conn)
+	}
+	go func() {
+		hBuf := make([]byte, nodeNet.MsgHeaderLen)
+		for {
+			msg, err := conn.ReadMsg(hBuf)
+			if err != nil {
+				if conn.IsClosed || errors.Is(err, io.EOF) {
+					err = nil
+				}
+				_ = conn.Close()
+				if c.OnClose != nil {
+					c.OnClose(conn.RemoteId(), err)
+				}
+				return
+			}
+			if msg.DestId != c.Id {
+				if c.OnDropMessage != nil {
+					c.OnDropMessage(&connContext{Message: msg, Connect: conn})
+				}
+				continue
+			}
+			switch msg.Type {
+			case nodeNet.MsgType_Send:
+				c.OnMessage(&connContext{Message: msg, Connect: conn})
+			case nodeNet.MsgType_Reply, nodeNet.MsgType_ReplyErr, nodeNet.MsgType_ReplyErrConnNotExist, nodeNet.MsgType_ReplyErrLenLimit, nodeNet.MsgType_ReplyErrCheckSum:
+				c.recvLock.Lock()
+				ch, ok := c.recvChan[msg.Id]
+				if ok {
+					ch <- msg
+					delete(c.recvChan, msg.Id)
+				}
+				c.recvLock.Unlock()
+			default:
+				c.OnCustomMessage(&connContext{Message: msg, Connect: conn})
+			}
+		}
+	}()
+	return nil
 }

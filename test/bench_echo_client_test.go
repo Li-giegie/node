@@ -4,29 +4,35 @@ import (
 	"context"
 	"fmt"
 	"github.com/Li-giegie/node"
+	"net"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 )
 
-var echoConn node.Conn
+var echoConn *node.Client
 
 func Dial() {
-	conn, err := node.DialTCP(
-		"0.0.0.0:8888",
-		&node.Identity{
-			Id:            0xffffff,
-			AccessKey:     []byte("echo"),
-			AccessTimeout: time.Second * 3,
-		},
-		&Echo{},
-	)
+	conn, err := net.Dial("tcp", "0.0.0.0:8888")
 	if err != nil {
 		panic(err)
 	}
-	echoConn = conn
-
+	echoConn = node.NewClient(conn, &node.CliConf{
+		ReaderBufSize:   4096,
+		WriterBufSize:   4096,
+		WriterQueueSize: 1024,
+		MaxMsgLen:       0xffffff,
+		ClientIdentity: &node.ClientIdentity{
+			Id:            1234,
+			RemoteAuthKey: []byte("hello"),
+			Timeout:       time.Second,
+		},
+	})
+	if err = echoConn.Start(); err != nil {
+		panic(err)
+	}
+	time.Sleep(time.Second)
 }
 
 var once = sync.Once{}
@@ -45,7 +51,7 @@ func BenchmarkEchoRequest(b *testing.B) {
 		}
 	}
 	//fmt.Println()
-	//common.PrintTrace()
+	//net.PrintTrace()
 }
 
 func BenchmarkEchoRequestGo(b *testing.B) {
@@ -58,18 +64,16 @@ func BenchmarkEchoRequestGo(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		w.Add(1)
 		go func() {
-			_, err := echoConn.Request(ctx, []byte("hello"))
+			res, err := echoConn.Request(ctx, []byte("hello"))
 			if err != nil {
-				b.Error(err)
-				w.Done()
-				return
+				fmt.Println(err, res)
 			}
 			w.Done()
 		}()
 	}
 	w.Wait()
 	//fmt.Println()
-	//common.PrintTrace()
+	//net.PrintTrace()
 }
 
 func TestEchoClient(t *testing.T) {

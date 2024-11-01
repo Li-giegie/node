@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"context"
-	"github.com/Li-giegie/node/common"
+	"github.com/Li-giegie/node"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"log"
 	"strconv"
@@ -20,7 +20,7 @@ var request = &rabbit.Cmd{
 
 		ctx, cancle := context.WithTimeout(context.Background(), timeout)
 		defer cancle()
-		conn := c.Context().Value("client").(common.Conn)
+		conn := c.Context().Value("client").(*node.Client)
 		res, err := conn.Forward(ctx, uint32(id), []byte(strings.Join(args, " ")))
 		if err != nil {
 			return err

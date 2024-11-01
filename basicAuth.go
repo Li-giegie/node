@@ -3,15 +3,20 @@ package node
 import (
 	"errors"
 	jeans "github.com/Li-giegie/go-jeans"
-	"github.com/Li-giegie/node/utils"
 	"io"
 	"time"
 )
 
 type Identity struct {
+	Id          uint32
+	AuthKey     []byte
+	AuthTimeout time.Duration
+}
+
+type ClientIdentity struct {
 	Id            uint32
-	AccessKey     []byte
-	AccessTimeout time.Duration
+	RemoteAuthKey []byte
+	Timeout       time.Duration
 }
 
 var defaultBasicReq = new(basicAuthReq)
@@ -26,13 +31,13 @@ func (basicAuthReq) Send(w io.Writer, id uint32, accessKey []byte) error {
 		return errBytesLimit
 	}
 	data, _ := jeans.EncodeBase(id, accessKey)
-	p, _ := utils.Packet(data)
+	p, _ := Packet(data)
 	_, err := w.Write(p)
 	return err
 }
 
 func (basicAuthReq) Receive(r io.Reader, t time.Duration) (id uint32, accessKey []byte, err error) {
-	data, err := utils.Unpack(r, t)
+	data, err := Unpack(r, t)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -47,13 +52,13 @@ func (basicAuthResp) Send(w io.Writer, id uint32, permit bool, msg string) error
 		return errBytesLimit
 	}
 	data, _ := jeans.EncodeBase(id, permit, msg)
-	p, _ := utils.Packet(data)
+	p, _ := Packet(data)
 	_, err := w.Write(p)
 	return err
 }
 
 func (basicAuthResp) Receive(r io.Reader, t time.Duration) (id uint32, permit bool, msg string, err error) {
-	data, err := utils.Unpack(r, t)
+	data, err := Unpack(r, t)
 	if err != nil {
 		return 0, false, "", err
 	}

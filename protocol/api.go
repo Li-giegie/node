@@ -2,9 +2,9 @@ package protocol
 
 import (
 	"context"
-	"github.com/Li-giegie/node/common"
+	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/protocol/hello"
-	node_discovery "github.com/Li-giegie/node/protocol/node-discovery"
+	node_discovery "github.com/Li-giegie/node/protocol/nodediscovery"
 	"io"
 	"time"
 )
@@ -17,19 +17,19 @@ var (
 
 type NodeDiscoveryProtocol interface {
 	StartTimingQueryEnableProtoNode(ctx context.Context, timeout time.Duration) (err error)
-	Connection(conn common.Conn)
-	CustomHandle(ctx common.CustomContext) (next bool)
+	Connection(conn node.Conn)
+	CustomHandle(ctx node.CustomContext) (next bool)
 	Disconnect(id uint32, err error)
 }
 
-func NewNodeDiscoveryProtocol(n node_discovery.DiscoveryNode, out io.Writer) NodeDiscoveryProtocol {
-	return node_discovery.NewNodeDiscoveryProtocol(n, protoMsgType_NodeDiscovery, out)
+func NewNodeDiscoveryProtocol(id uint32, conns node_discovery.Conns, router node_discovery.Router, out io.Writer) NodeDiscoveryProtocol {
+	return node_discovery.NewNodeDiscoveryProtocol(id, conns, router, protoMsgType_NodeDiscovery, out)
 }
 
 type HelloProtocol interface {
-	KeepAlive(c common.Conn)
-	KeepAliveMultiple(conns common.Connections)
-	CustomHandle(ctx common.CustomContext) (next bool)
+	KeepAlive(c node.Conn)
+	KeepAliveMultiple(conns hello.Conns)
+	OnCustomMessage(ctx node.CustomContext) (next bool)
 	Stop()
 }
 

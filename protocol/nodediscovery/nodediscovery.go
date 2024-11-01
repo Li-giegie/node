@@ -1,30 +1,35 @@
-package node_discovery
+package nodediscovery
 
 import (
 	"context"
-	"github.com/Li-giegie/node/common"
+	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/net"
 	"io"
 	"log"
 	"sync"
 	"time"
 )
 
-type DiscoveryNode interface {
-	Id() uint32
-	GetConns() []common.Conn
-	GetConn(id uint32) (common.Conn, bool)
+type Conns interface {
+	GetAll() []node.Conn
+	Get(id uint32) (node.Conn, bool)
+}
+
+type Router interface {
 	AddRoute(dst, next, parentNode uint32, hop uint16)
 	DeleteRoute(dst, next, parentNode uint32, hop uint16) bool
 	DeleteNextRoute(next uint32) bool
 }
 
-func NewNodeDiscoveryProtocol(c DiscoveryNode, ProtocolMsgType uint8, out io.Writer) *NodeDiscoveryProtocol {
+func NewNodeDiscoveryProtocol(id uint32, conns Conns, router Router, ProtocolMsgType uint8, out io.Writer) *NodeDiscoveryProtocol {
 	var l *log.Logger
 	if out != nil {
 		l = log.New(out, "[DiscoveryNodeProtocol] ", log.Ldate|log.Ltime|log.Lmsgprefix)
 	}
 	p := &NodeDiscoveryProtocol{
-		DiscoveryNode:                   c,
+		id:                              id,
+		Conns:                           conns,
+		Router:                          router,
 		ProtocolMsgType:                 ProtocolMsgType,
 		QueryEnableProtocolMaxNum:       3,
 		QueryEnableProtocolIntervalStep: time.Millisecond * 500,
@@ -36,7 +41,9 @@ func NewNodeDiscoveryProtocol(c DiscoveryNode, ProtocolMsgType uint8, out io.Wri
 }
 
 type NodeDiscoveryProtocol struct {
-	DiscoveryNode
+	id uint32
+	Conns
+	Router
 	ProtocolMsgType                 uint8
 	QueryEnableProtocolMaxNum       int
 	QueryEnableProtocolIntervalStep time.Duration
@@ -69,11 +76,11 @@ func (n *NodeDiscoveryProtocol) StartTimingQueryEnableProtoNode(ctx context.Cont
 	}
 }
 
-func (n *NodeDiscoveryProtocol) Connection(conn common.Conn) {
+func (n *NodeDiscoveryProtocol) Connection(conn node.Conn) {
 	go func() {
 		dstId := conn.RemoteId()
 		protoMsg := NewProtoMsgWithOneNode(ProtoMsgTyp_SetNodes, true, dstId)
-		protoMsg.ParentNodeId = n.Id()
+		protoMsg.ParentNodeId = n.id
 		err := n.Broadcast(protoMsg, true, dstId, nil)
 		if err != nil {
 			if n.Logger != nil {
@@ -108,7 +115,7 @@ func (n *NodeDiscoveryProtocol) Connection(conn common.Conn) {
 	}()
 }
 
-func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.CustomContext) (next bool) {
+func (n *NodeDiscoveryProtocol) CustomHandle(ctx node.CustomContext) (next bool) {
 	if n.ProtocolMsgType != ctx.Type() {
 		return true
 	}
@@ -152,7 +159,7 @@ func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.CustomContext) (next boo
 		case ProtoMsgTyp_QueryNodes:
 			protoMsg.IsAdd = true
 			protoMsg.Type = ProtoMsgTyp_SetNodes
-			protoMsg.ParentNodeId = n.Id()
+			protoMsg.ParentNodeId = n.id
 			protoMsg.SetNodesWithLocalId(n.GetLocalConnIds(srcId))
 			if len(protoMsg.Nodes) > 0 {
 				if err = n.Reply(ctx, protoMsg); err != nil {
@@ -175,13 +182,13 @@ func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.CustomContext) (next boo
 				return
 			}
 			for i := 0; i < len(protoMsg.Nodes); i++ {
-				if protoMsg.Nodes[i].Id == n.Id() {
+				if protoMsg.Nodes[i].Id == n.id {
 					continue
 				}
 				if protoMsg.IsAdd {
-					n.AddRoute(protoMsg.Nodes[i].Id, srcId, protoMsg.ParentNodeId, protoMsg.Nodes[i].Hop)
+					n.Router.AddRoute(protoMsg.Nodes[i].Id, srcId, protoMsg.ParentNodeId, protoMsg.Nodes[i].Hop)
 				} else {
-					n.DeleteRoute(protoMsg.Nodes[i].Id, srcId, protoMsg.ParentNodeId, protoMsg.Nodes[i].Hop)
+					n.Router.DeleteRoute(protoMsg.Nodes[i].Id, srcId, protoMsg.ParentNodeId, protoMsg.Nodes[i].Hop)
 				}
 			}
 			protoMsg.AddNop(1)
@@ -202,8 +209,9 @@ func (n *NodeDiscoveryProtocol) CustomHandle(ctx common.CustomContext) (next boo
 
 func (n *NodeDiscoveryProtocol) AddNode(id uint32) bool {
 	nod, exist := n.Find(id)
-	if !exist || nod == nil || nod.Conn == nil || nod.Conn.State() != common.ConnStateTypeOnConnect {
-		conn, ok := n.GetConn(id)
+
+	if !exist || nod == nil || nod.Conn == nil {
+		conn, ok := n.Get(id)
 		if !ok {
 			return false
 		}
@@ -213,12 +221,12 @@ func (n *NodeDiscoveryProtocol) AddNode(id uint32) bool {
 	return true
 }
 
-func (n *NodeDiscoveryProtocol) NewMsgWithConn(conn common.Conn, encoder Encoder) (*common.Message, error) {
+func (n *NodeDiscoveryProtocol) NewMsgWithConn(conn node.Conn, encoder Encoder) (*net.Message, error) {
 	data, err := encoder.Encode()
 	if err != nil {
 		return nil, err
 	}
-	m := new(common.Message)
+	m := new(net.Message)
 	m.Type = n.ProtocolMsgType
 	m.SrcId = conn.LocalId()
 	m.DestId = conn.RemoteId()
@@ -244,7 +252,7 @@ func (n *NodeDiscoveryProtocol) Broadcast(en Encoder, enableFilter bool, filterI
 	if err != nil {
 		return err
 	}
-	m := new(common.Message)
+	m := new(net.Message)
 	m.Type = n.ProtocolMsgType
 	m.Data = data
 	n.l.Lock()
@@ -271,7 +279,7 @@ func (n *NodeDiscoveryProtocol) Broadcast(en Encoder, enableFilter bool, filterI
 }
 
 func (n *NodeDiscoveryProtocol) GetLocalConnIds(filter uint32) []uint32 {
-	conns := n.GetConns()
+	conns := n.Conns.GetAll()
 	l := len(conns)
 	result := make([]uint32, 0, l)
 	for i := 0; i < l; i++ {
@@ -282,7 +290,7 @@ func (n *NodeDiscoveryProtocol) GetLocalConnIds(filter uint32) []uint32 {
 	return result
 }
 
-func (n *NodeDiscoveryProtocol) Insert(conn common.Conn) {
+func (n *NodeDiscoveryProtocol) Insert(conn node.Conn) {
 	n.l.Lock()
 	n.cache[conn.RemoteId()] = &UniteNode{
 		UnixMill: time.Now().UnixMilli(),
@@ -308,12 +316,12 @@ func (n *NodeDiscoveryProtocol) Disconnect(id uint32, err error) {
 	node, ok := n.Find(id)
 	if ok {
 		_ = node.UnixMill
-		n.DeleteNextRoute(id)
+		n.Router.DeleteNextRoute(id)
 		n.Delete(id)
 	}
 
 	protoMsg := NewProtoMsgWithOneNode(ProtoMsgTyp_SetNodes, false, id)
-	protoMsg.ParentNodeId = n.Id()
+	protoMsg.ParentNodeId = n.id
 	if err = n.Broadcast(protoMsg, false, 0, nil); err != nil {
 		return
 	}
@@ -325,5 +333,5 @@ type Encoder interface {
 
 type UniteNode struct {
 	UnixMill int64
-	common.Conn
+	node.Conn
 }
