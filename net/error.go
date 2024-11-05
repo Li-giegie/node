@@ -7,9 +7,6 @@ type NodeError interface {
 	NodeError()
 }
 
-// ErrReply error参数最大传输字节，65535代表error为nil，65534被保留不可用
-const maxErrReplySize = 65533
-
 var (
 	DEFAULT_ErrMsgLenLimit              = new(ErrMsgLenLimit)
 	DEFAULT_ErrMsgChecksum              = new(ErrMsgChecksum)

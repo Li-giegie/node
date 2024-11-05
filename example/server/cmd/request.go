@@ -3,7 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/iface"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"log"
 	"strconv"
@@ -30,7 +30,7 @@ var request = &rabbit.Cmd{
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		srv := i.(*node.Server)
+		srv := i.(iface.Server)
 		res, err := srv.Request(ctx, uint32(id), []byte(strings.Join(args, " ")))
 		if err != nil {
 			return err

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/example/server/cmd"
+	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/protocol"
 	"gopkg.in/yaml.v3"
 	"io"
@@ -17,27 +18,21 @@ import (
 )
 
 type Conf struct {
-	Addr string
-	*node.SrvConf
-	NodeDiscoveryProtocol
+	Addr                        string
+	Id                          uint32
+	EnableNodeDiscoveryProtocol bool
 	HelloProtocol
-}
-
-type NodeDiscoveryProtocol struct {
-	Enable        bool
-	QueryInterval time.Duration
 }
 
 type HelloProtocol struct {
 	Enable       bool
 	EnableStdout bool
-	OutFile      string
 	Interval     time.Duration
 	Timeout      time.Duration
 	TimeoutClose time.Duration
 }
 
-var confFile = flag.String("conf", "./conf8000.yaml", "configure file")
+var confFile = flag.String("c", "./conf8000.yaml", "configure file")
 var genConfFile = flag.String("gen", "", "gen config file template")
 
 var c *Conf
@@ -46,25 +41,9 @@ func init() {
 	flag.Parse()
 	if *genConfFile != "" {
 		data, err := yaml.Marshal(&Conf{
-			Addr: "0.0.0.0:8010",
-			SrvConf: &node.SrvConf{
-				Identity: &node.Identity{
-					Id:          10,
-					AuthKey:     []byte("hello"),
-					AuthTimeout: time.Second * 6,
-				},
-				MaxMsgLen:          0xffffff,
-				WriterQueueSize:    1024,
-				ReaderBufSize:      4096,
-				WriterBufSize:      4096,
-				MaxConns:           0,
-				MaxListenSleepTime: time.Minute,
-				ListenStepTime:     time.Second,
-			},
-			NodeDiscoveryProtocol: NodeDiscoveryProtocol{
-				Enable:        true,
-				QueryInterval: time.Second * 30,
-			},
+			Id:                          10,
+			Addr:                        "0.0.0.0:8010",
+			EnableNodeDiscoveryProtocol: true,
 			HelloProtocol: HelloProtocol{
 				Enable:       true,
 				Interval:     time.Second * 5,
@@ -91,17 +70,19 @@ func init() {
 	}
 }
 
-type OnCustomMessageCallback func(ctx node.CustomContext) bool
-type OnConnectionCallback func(ctx node.Conn)
-type OnCloseCallback func(id uint32, err error)
-
 func main() {
+	// 开启侦听
 	l, err := net.Listen("tcp", c.Addr)
 	if err != nil {
 		log.Fatalln(err)
 	}
+	// 创建Server
 	s := node.NewServer(l, &node.SrvConf{
-		Identity:           c.Identity,
+		Identity: &node.Identity{
+			Id:          c.Id,
+			AuthKey:     []byte("hello"),
+			AuthTimeout: time.Second * 3,
+		},
 		MaxMsgLen:          0xffffff,
 		WriterQueueSize:    1024,
 		ReaderBufSize:      4096,
@@ -110,76 +91,40 @@ func main() {
 		MaxListenSleepTime: time.Minute,
 		ListenStepTime:     time.Second,
 	})
-	defer s.Close()
-	var OnCustomMessage []OnCustomMessageCallback
-	var OnConnection []OnConnectionCallback
-	var OnClose []OnCloseCallback
-	s.OnConnection = func(conn node.Conn) {
-		for _, callback := range OnConnection {
-			callback(conn)
-		}
-		log.Println("OnConnection", conn.RemoteId())
-	}
-	s.OnMessage = func(ctx node.Context) {
-		log.Println("OnMessage", ctx.String())
-		ctx.Reply(ctx.Data())
-	}
-	s.OnCustomMessage = func(ctx node.CustomContext) {
-		for _, callback := range OnCustomMessage {
-			if next := callback(ctx); !next {
-				return
-			}
-		}
-		log.Println("OnCustomMessage", ctx.String())
-	}
-	s.OnClose = func(id uint32, err error) {
-		for _, callback := range OnClose {
-			callback(id, err)
-		}
-		log.Println("OnClose", id, err)
-	}
+	s.AddOnMessage(func(conn iface.Context) {
+		fmt.Println(string(conn.Data()))
+		data := fmt.Sprintf("from %d echo %s", s.Id(), conn.Data())
+		conn.Reply([]byte(data))
+	})
 	if c.HelloProtocol.Enable {
-		var w io.Writer
+		output := io.Discard
 		if c.HelloProtocol.EnableStdout {
-			w = os.Stdout
+			output = os.Stdout
 		}
-		if c.HelloProtocol.OutFile != "" {
-			f, err := os.OpenFile(c.OutFile, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0666)
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
-			defer f.Close()
-			if c.HelloProtocol.EnableStdout {
-				w = io.MultiWriter(os.Stdout, f)
-			}
-		}
-		h := protocol.NewHelloProtocol(c.HelloProtocol.Interval, c.HelloProtocol.Timeout, c.HelloProtocol.TimeoutClose, w)
-		defer h.Stop()
-		go h.KeepAliveMultiple(s.ConnManager)
-		OnCustomMessage = append(OnCustomMessage, h.OnCustomMessage)
+		// 开启Hello 连接保活协议
+		protocol.StartMultipleNodeHelloProtocol(context.Background(), s, s, c.Interval, c.Timeout, c.TimeoutClose, output)
 	}
-
-	if c.NodeDiscoveryProtocol.Enable {
-		nd := protocol.NewNodeDiscoveryProtocol(s.Id(), s.ConnManager, s.Router, os.Stdout)
-		OnConnection = append(OnConnection, nd.Connection)
-		OnCustomMessage = append(OnCustomMessage, nd.CustomHandle)
-		OnClose = append(OnClose, nd.Disconnect)
+	if c.EnableNodeDiscoveryProtocol {
+		// 开启节点路由动态发现协议
+		protocol.StartDiscoveryProtocol(16, s, s)
 	}
 	// 解析命令
 	go func() {
 		time.Sleep(time.Second)
 		sc := bufio.NewScanner(os.Stdin)
+		ctx := context.WithValue(context.Background(), "server", s)
 		fmt.Print(">>")
 		for sc.Scan() {
-			if sc.Text() != "" {
-				executeCmd, err := cmd.Group.ExecuteCmdLineContext(context.WithValue(context.Background(), "server", s), sc.Text())
-				if err != nil {
-					if executeCmd == nil {
-						cmd.Group.Usage()
-					} else {
-						fmt.Println(err)
-					}
+			if len(sc.Bytes()) == 0 {
+				fmt.Print(">>")
+				continue
+			}
+			executeCmd, err := cmd.Group.ExecuteCmdLineContext(ctx, sc.Text())
+			if err != nil {
+				if executeCmd == nil {
+					cmd.Group.Usage()
+				} else {
+					fmt.Println(err)
 				}
 			}
 			fmt.Print(">>")
@@ -188,6 +133,5 @@ func main() {
 	log.Println("start success", c.Addr)
 	if err = s.Serve(); err != nil {
 		println(err)
-		return
 	}
 }

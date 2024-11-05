@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/iface"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"strconv"
 	"strings"
@@ -21,7 +21,7 @@ var write = &rabbit.Cmd{
 		if err != nil {
 			return err
 		}
-		srv := i.(*node.Server)
+		srv := i.(iface.Server)
 		_, err = srv.WriteTo(uint32(id), []byte(strings.Join(args, " ")))
 		if err != nil {
 			return err

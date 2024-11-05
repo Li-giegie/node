@@ -1,0 +1,9 @@
+addr: 0.0.0.0:8010
+id: 10
+enablenodediscoveryprotocol: true
+helloprotocol:
+    enable: true
+    enablestdout: false
+    interval: 5s
+    timeout: 10s
+    timeoutclose: 30s

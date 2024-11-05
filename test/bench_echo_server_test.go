@@ -2,6 +2,7 @@ package test
 
 import (
 	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/iface"
 	"log"
 	"net"
 	"testing"
@@ -28,19 +29,19 @@ func TestEchoServer(t *testing.T) {
 		MaxListenSleepTime: time.Minute,
 		ListenStepTime:     time.Second,
 	})
-	srv.OnConnection = func(conn node.Conn) {
-		log.Println("OnConnection", conn.RemoteId())
-	}
-	srv.OnMessage = func(ctx node.Context) {
-		//log.Println("OnMessage", ctx.String())
+	srv.AddOnConnection(func(conn iface.Conn) {
+		log.Println("OnConnection", conn.RemoteId(), conn.NodeType())
+	})
+	srv.AddOnMessage(func(ctx iface.Context) {
+		log.Println("OnMessage", ctx.String())
 		ctx.Reply(ctx.Data())
-	}
-	srv.OnCustomMessage = func(ctx node.CustomContext) {
+	})
+	srv.AddOnCustomMessage(func(ctx iface.Context) {
 		log.Println("OnCustomMessage", ctx.String())
-	}
-	srv.OnClose = func(id uint32, err error) {
-		log.Println("OnClose", id, err)
-	}
+	})
+	srv.AddOnClosed(func(conn iface.Conn, err error) {
+		log.Println(conn.RemoteId(), err, conn.NodeType())
+	})
 	if err != nil {
 		t.Error(err)
 		return

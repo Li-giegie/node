@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/iface"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"net"
 	"time"
@@ -18,8 +18,8 @@ var bind = &rabbit.Cmd{
 		if err != nil {
 			return err
 		}
-		s := c.Context().Value("server").(*node.Server)
-		_, err = s.BindBridge(conn, []byte(key), timeout)
+		s := c.Context().Value("server").(iface.Server)
+		_, err = s.Bridge(conn, []byte(key), timeout)
 		return err
 	},
 }

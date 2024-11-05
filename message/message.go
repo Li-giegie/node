@@ -1,8 +1,4 @@
-package net
-
-import (
-	"fmt"
-)
+package message
 
 // 标准消息类型
 const (
@@ -26,5 +22,6 @@ type Message struct {
 }
 
 func (m *Message) String() string {
-	return fmt.Sprintf("Message { type: %d, id: %v, srcId: %v, destId: %v, data: %s}", m.Type, m.Id, m.SrcId, m.DestId, m.Data)
+	//return fmt.Sprintf("Message { type: %d, id: %v, srcId: %v, destId: %v, data: %s}", m.typ, m.id, m.srcId, m.destId, m.data)
+	return ""
 }

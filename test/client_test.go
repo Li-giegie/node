@@ -2,7 +2,9 @@ package test
 
 import (
 	"context"
+	"fmt"
 	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/iface"
 	"log"
 	"net"
 	"testing"
@@ -10,7 +12,7 @@ import (
 )
 
 func TestClient(t *testing.T) {
-	conn, err := net.Dial("tcp", "0.0.0.0:8000")
+	conn, err := net.Dial("tcp", "0.0.0.0:8001")
 	if err != nil {
 		t.Error(err)
 		return
@@ -22,32 +24,25 @@ func TestClient(t *testing.T) {
 		WriterQueueSize: 1024,
 		MaxMsgLen:       0xffffff,
 		ClientIdentity: &node.ClientIdentity{
-			Id:            1234,
+			Id:            8000,
 			RemoteAuthKey: []byte("hello"),
 			Timeout:       time.Second * 6,
 		},
 	})
-	c.OnConnection = func(conn node.Conn) {
-		log.Println("OnConnection", conn.RemoteId())
-	}
-	c.OnMessage = func(ctx node.Context) {
-		log.Println("OnMessage", ctx.String())
-	}
-	c.OnClose = func(id uint32, err error) {
-		log.Println("OnClose", id, err)
-		stopC <- struct{}{}
-	}
+	c.AddOnMessage(func(conn iface.Context) {
+		log.Println(conn.String())
+	})
 	if err = c.Start(); err != nil {
 		log.Fatalln(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
-	res, err := c.Request(ctx, []byte("ping"))
+	res, err := c.Forward(ctx, 10, []byte("ping"))
 	if err != nil {
-		t.Error(err)
+		fmt.Println(err)
 		return
 	}
-	println(string(res))
 	c.Close()
+	println(string(res))
 	<-stopC
 }

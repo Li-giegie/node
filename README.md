@@ -44,75 +44,58 @@ go get -u github.com/Li-giegie/node@latest
 ### Server
 
 ```go
-func TestServer(t *testing.T) {
+func TestEchoServer(t *testing.T) {
 	l, err := net.Listen("tcp", "0.0.0.0:8000")
 	if err != nil {
 		t.Error(err)
 		return
 	}
 	srv := node.NewServer(l, &node.SrvConf{
-		// 节点的身份信息
 		Identity: &node.Identity{
-			// 唯一ID
 			Id:          1,
-			// 节点的秘钥，想与该节点建立连接需要提供相同的秘钥
 			AuthKey:     []byte("hello"),
-			// 认证过程超时
 			AuthTimeout: time.Second * 6,
 		},
-		// 最大消息长度
-		MaxMsgLen:          0xffffff,
-		// 写入队列大小 Request、Write....发送时进入队列
-		WriterQueueSize:    1024,
-		// 读缓冲区大小
-		ReaderBufSize:      4096,
-		// 写缓冲区大小
-		WriterBufSize:      4096,
-		// 最大连接数 > 0有效 
 		MaxConns:           0,
-		// 超过最大连接数时，进入休眠的最大时间，按照步长递增
+		MaxMsgLen:          0xffffff,
+		WriterQueueSize:    1024,
+		ReaderBufSize:      4096,
+		WriterBufSize:      4096,
 		MaxListenSleepTime: time.Minute,
-		// 超过限制连接数量，递增休眠步长，直到达到最大休眠时长后停止递增
 		ListenStepTime:     time.Second,
 	})
-	// 以下函数均为同步调用
-	// 建立连接回调
-	srv.OnConnection = func(conn node.Conn) {
-		log.Println("OnConnection", conn.RemoteId())
-	}
-	// 收到消息回调
-	srv.OnMessage = func(ctx node.Context) {
+	srv.AddOnConnection(func(conn iface.Conn) {
+		log.Println("OnConnection", conn.RemoteId(), conn.NodeType())
+	})
+	srv.AddOnMessage(func(ctx iface.Context) {
 		log.Println("OnMessage", ctx.String())
 		ctx.Reply(ctx.Data())
-	}
-	// 收到自定义消息回调
-	srv.OnCustomMessage = func(ctx node.CustomContext) {
+	})
+	srv.AddOnCustomMessage(func(ctx iface.Context) {
 		log.Println("OnCustomMessage", ctx.String())
-	}
-	// 断开连接回调
-	srv.OnClose = func(id uint32, err error) {
-		log.Println("OnClose", id, err)
-	}
-	defer srv.Close()
-	// 阻塞启动服务
-	if err = srv.Serve(); err != nil {
+	})
+	srv.AddOnClosed(func(conn iface.Conn, err error) {
+		log.Println(conn.RemoteId(), err, conn.NodeType())
+	})
+	if err != nil {
 		t.Error(err)
 		return
 	}
-}
-
+	defer srv.Close()
+	if err = srv.Serve(); err != nil {
+		log.Println(err)
+	}
 ```
 
 ### Client
 
 ```go
 func TestClient(t *testing.T) {
-	conn, err := net.Dial("tcp", "0.0.0.0:8000")
+	conn, err := net.Dial("tcp", "0.0.0.0:8001")
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	// 关闭管道
 	stopC := make(chan struct{})
 	c := node.NewClient(conn, &node.CliConf{
 		ReaderBufSize:   4096,
@@ -120,34 +103,26 @@ func TestClient(t *testing.T) {
 		WriterQueueSize: 1024,
 		MaxMsgLen:       0xffffff,
 		ClientIdentity: &node.ClientIdentity{
-			Id:            1234,
+			Id:            8000,
 			RemoteAuthKey: []byte("hello"),
 			Timeout:       time.Second * 6,
 		},
 	})
-	c.OnConnection = func(conn node.Conn) {
-		log.Println("OnConnection", conn.RemoteId())
-	}
-	c.OnMessage = func(ctx node.Context) {
-		log.Println("OnMessage", ctx.String())
-	}
-	c.OnClose = func(id uint32, err error) {
-		log.Println("OnClose", id, err)
-		stopC <- struct{}{}
-	}
+	c.AddOnMessage(func(conn iface.Context) {
+		log.Println(conn.String())
+	})
 	if err = c.Start(); err != nil {
 		log.Fatalln(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
-	// 发起一个请求
-	res, err := c.Request(ctx, []byte("ping"))
+	res, err := c.Forward(ctx, 10, []byte("ping"))
 	if err != nil {
-		t.Error(err)
+		fmt.Println(err)
 		return
 	}
-	println(string(res))
 	c.Close()
+	println(string(res))
 	<-stopC
 }
 ```

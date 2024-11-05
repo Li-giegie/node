@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/iface"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 )
 
@@ -40,7 +41,9 @@ func init() {
 			if i == nil {
 				return errors.New("server is null")
 			}
-			fmt.Println(string(i.(*node.Server).Router.RouteTableOutput()))
+			i.(iface.Server).RangeRoute(func(id uint64, dst uint32, via uint32, hop uint8) {
+				fmt.Printf("id %d dst %d via %d hop %d\n", id, dst, via, hop)
+			})
 			return nil
 		},
 	})

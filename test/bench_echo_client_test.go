@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/iface"
 	"net"
 	"strconv"
 	"sync"
@@ -11,7 +12,7 @@ import (
 	"time"
 )
 
-var echoConn *node.Client
+var echoConn iface.Client
 
 func Dial() {
 	conn, err := net.Dial("tcp", "0.0.0.0:8888")
