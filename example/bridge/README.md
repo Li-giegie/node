@@ -1,18 +1,20 @@
 ## 下文将演示图中多节点互联场景
 
-![联合场景图](../.README_images/multiple.png)
+![联合场景图](../../.README_images/multiple.png)
 
 ### 指定配置启动服务端节点
-节点开启：节点发现（转发节点消息）、hell心跳检测
+节点开启：节点动态发现协议、hell心跳检测协议
 
 可以自行编译二进制后指定配置文件启动
 
 启动节点：10、20、30、40
+
+node/example/bridge/server
 ```go
-go run ./server/main.go -conf ./conf/srv_conf_10.yaml
-go run ./server/main.go -conf ./conf/srv_conf_20.yaml
-go run ./server/main.go -conf ./conf/srv_conf_30.yaml
-go run ./server/main.go -conf ./conf/srv_conf_40.yaml
+go run ./ -c ./10.yaml
+go run ./ -c ./20.yaml
+go run ./ -c ./30.yaml
+go run ./ -c ./40.yaml
 ```
 #### 命令列表 
 - help
@@ -35,17 +37,16 @@ bind -addr 127.0.0.1:8020 -key hello
 20节点执行
 bind -addr 127.0.0.1:8010 -key hello
 ```
-绑定成功输出日志：>xxxx/xx/xx xx:xx:xx [DiscoveryNodeProtocol] Connection query enable protocol node id 10
 ### 指定配置启动客户端节点
 节点开启：hell心跳检测
 启动节点：1、2、21、31、41、42
 ```go
-go run ./client/main.go -conf ./conf/cli_conf_1.yaml
-go run ./client/main.go -conf ./conf/cli_conf_2.yaml
-go run ./client/main.go -conf ./conf/cli_conf_21.yaml
-go run ./client/main.go -conf ./conf/cli_conf_31.yaml
-go run ./client/main.go -conf ./conf/cli_conf_41.yaml
-go run ./client/main.go -conf ./conf/cli_conf_42.yaml
+go run ./ -c 1.yaml
+go run ./ -c 2.yaml
+go run ./ -c 21.yaml
+go run ./ -c 31.yaml
+go run ./ -c 41.yaml
+go run ./ -c 42.yaml
 ```
 
 #### 命令列表

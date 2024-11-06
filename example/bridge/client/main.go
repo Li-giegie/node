@@ -6,7 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/example/client/cmd"
+	"github.com/Li-giegie/node/example/bridge/client/cmd"
 	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/protocol"
 	"gopkg.in/yaml.v3"
@@ -73,7 +73,7 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	c := node.NewClient(conn, &node.CliConf{
+	c := node.NewClient(conn, node.CliConf{
 		ReaderBufSize:   4096,
 		WriterBufSize:   4096,
 		WriterQueueSize: 1024,

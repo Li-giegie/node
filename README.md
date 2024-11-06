@@ -21,7 +21,7 @@ type Message struct {
 ```
 <table >
   <tr>
-    <th rowspan="2" >Header 13Byte</th>
+    <th rowspan="2" >Header 19Byte</th>
     <td >Typ 1Byte</td>
     <td >Id 4Byte</td>
     <td >SrcId 4Byte</td>

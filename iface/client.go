@@ -1,12 +1,9 @@
 package iface
 
 type Client interface {
+	Id() uint32
+	// Start 开启服务
 	Start() error
-	Close() error
-	AddOnConnection(callback func(conn Conn))
-	AddOnMessage(callback func(conn Context))
-	AddOnCustomMessage(callback func(conn Context))
-	AddOnNoIdMessage(callback func(conn Context))
-	AddOnClosed(callback func(conn Conn, err error))
+	Handler
 	Conn
 }

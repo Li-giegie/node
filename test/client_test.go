@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/iface"
 	"log"
 	"net"
 	"testing"
@@ -18,7 +17,7 @@ func TestClient(t *testing.T) {
 		return
 	}
 	stopC := make(chan struct{})
-	c := node.NewClient(conn, &node.CliConf{
+	c := node.NewClient(conn, node.CliConf{
 		ReaderBufSize:   4096,
 		WriterBufSize:   4096,
 		WriterQueueSize: 1024,
@@ -28,9 +27,6 @@ func TestClient(t *testing.T) {
 			RemoteAuthKey: []byte("hello"),
 			Timeout:       time.Second * 6,
 		},
-	})
-	c.AddOnMessage(func(conn iface.Context) {
-		log.Println(conn.String())
 	})
 	if err = c.Start(); err != nil {
 		log.Fatalln(err)

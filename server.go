@@ -33,9 +33,9 @@ type SrvConf struct {
 }
 
 // NewServer 创建一个Server类型的节点
-func NewServer(l net.Listener, c *SrvConf) iface.Server {
+func NewServer(l net.Listener, c SrvConf) iface.Server {
 	srv := new(Server)
-	srv.SrvConf = c
+	srv.SrvConf = &c
 	srv.Router = nodeNet.NewRouteTable()
 	srv.ConnManager = nodeNet.NewConnManager()
 	srv.recvChan = make(map[uint32]chan *message.Message)
@@ -48,9 +48,10 @@ type Server struct {
 	recvLock         sync.Mutex
 	listen           net.Listener
 	counter          uint32
-	OnConnections    []func(conn iface.Conn)            // 连接建立认证通过回调
-	OnMessages       []func(ctx iface.Context)          // 收到消息回调,不可为nil
-	OnCustomMessages []func(ctx iface.Context)          // 收到自定义类型的消息回调
+	OnConnections    []func(conn iface.Conn)
+	OnMessages       []func(ctx iface.Context)
+	OnCustomMessages []func(ctx iface.Context)
+	OnNoRouteMessage []func(ctx iface.Context)
 	OnCloseds        []func(conn iface.Conn, err error) // 连接被关闭调用
 	iface.Router
 	iface.ConnManager
@@ -141,9 +142,7 @@ func (s *Server) startConn(c *nodeNet.Connect) {
 				}
 			}
 		}
-		msg.Type = message.MsgType_ReplyErrConnNotExist
-		msg.SrcId, msg.DestId = s.Identity.Id, msg.SrcId
-		_, _ = c.WriteMsg(msg)
+		s.handleOnNoRouteMessage(nodeNet.NewContext(c, msg, true))
 		continue
 	}
 }
@@ -178,6 +177,19 @@ func (s *Server) handleOnClosed(conn iface.Conn, err error) {
 	}
 }
 
+func (s *Server) handleOnNoRouteMessage(ctx iface.Context) {
+	if len(s.OnNoRouteMessage) == 0 {
+		_ = ctx.CustomReply(message.MsgType_ReplyErrConnNotExist, nil)
+		return
+	}
+	for _, callback := range s.OnNoRouteMessage {
+		callback(ctx)
+		if !ctx.Next() {
+			return
+		}
+	}
+}
+
 func (s *Server) AddOnConnection(callback func(conn iface.Conn)) {
 	s.OnConnections = append(s.OnConnections, callback)
 }
@@ -192,6 +204,10 @@ func (s *Server) AddOnCustomMessage(callback func(conn iface.Context)) {
 
 func (s *Server) AddOnClosed(callback func(conn iface.Conn, err error)) {
 	s.OnCloseds = append(s.OnCloseds, callback)
+}
+
+func (s *Server) AddOnNoRouteMessage(callback func(conn iface.Context)) {
+	s.OnNoRouteMessage = append(s.OnNoRouteMessage, callback)
 }
 
 // Bridge 桥接一个域,使用一个客户端连接到其他节点并绑定到当前节点形成一个大的域

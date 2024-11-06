@@ -136,7 +136,7 @@ func StartServer(addr string, id uint32, f func(s iface.Server)) error {
 	if err != nil {
 		return err
 	}
-	srv := node.NewServer(l, &node.SrvConf{
+	srv := node.NewServer(l, node.SrvConf{
 		Identity: &node.Identity{
 			Id:          id,
 			AuthKey:     []byte("hello"),

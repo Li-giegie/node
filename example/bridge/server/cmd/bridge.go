@@ -3,6 +3,7 @@ package cmd
 import (
 	"github.com/Li-giegie/node/iface"
 	rabbit "github.com/Li-giegie/rabbit-cli"
+	"log"
 	"net"
 	"time"
 )
@@ -19,7 +20,29 @@ var bind = &rabbit.Cmd{
 			return err
 		}
 		s := c.Context().Value("server").(iface.Server)
-		_, err = s.Bridge(conn, []byte(key), timeout)
+		rid, err := s.Bridge(conn, []byte(key), timeout)
+		s.AddOnClosed(func(conn iface.Conn, err error) {
+			if conn.RemoteId() != rid {
+				return
+			}
+			go func() {
+				log.Println("bridge closed", err)
+				for {
+					time.Sleep(time.Second * 3)
+					conn, err := net.Dial("tcp", addr)
+					if err != nil {
+						log.Println("dial err", err)
+						continue
+					}
+					rid, err = s.Bridge(conn, []byte(key), timeout)
+					if err != nil {
+						log.Println("bridge err", err)
+					}
+					log.Println("bridge success", rid)
+					return
+				}
+			}()
+		})
 		return err
 	},
 }

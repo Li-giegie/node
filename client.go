@@ -24,18 +24,18 @@ type Client struct {
 	recvChan map[uint32]chan *message.Message
 	recvLock sync.Mutex
 	iface.Conn
-	OnConnections    []func(conn iface.Conn)
-	OnMessages       []func(ctx iface.Context)
-	OnCustomMessages []func(ctx iface.Context)
-	OnNoIdMessages   []func(ctx iface.Context)
-	OnCloseds        []func(conn iface.Conn, err error)
+	OnConnections     []func(conn iface.Conn)
+	OnMessages        []func(ctx iface.Context)
+	OnCustomMessages  []func(ctx iface.Context)
+	OnNoRouteMessages []func(ctx iface.Context)
+	OnCloseds         []func(conn iface.Conn, err error)
 }
 
-func NewClient(conn net.Conn, conf *CliConf) iface.Client {
+func NewClient(conn net.Conn, conf CliConf) iface.Client {
 	c := new(Client)
 	c.recvChan = make(map[uint32]chan *message.Message)
 	c.conn = conn
-	c.CliConf = conf
+	c.CliConf = &conf
 	return c
 }
 
@@ -77,8 +77,8 @@ func (c *Client) Start() error {
 				c.handleOnClosed(conn, err)
 				return
 			}
-			if msg.DestId != c.Id {
-				c.handleOnNoIdMessages(nodeNet.NewContext(conn, msg, true))
+			if msg.DestId != c.ClientIdentity.Id {
+				c.handleOnNoRouteMessagesMessages(nodeNet.NewContext(conn, msg, true))
 				continue
 			}
 			switch msg.Type {
@@ -112,8 +112,8 @@ func (c *Client) AddOnCustomMessage(callback func(conn iface.Context)) {
 	c.OnCustomMessages = append(c.OnCustomMessages, callback)
 }
 
-func (c *Client) AddOnNoIdMessage(callback func(conn iface.Context)) {
-	c.OnNoIdMessages = append(c.OnNoIdMessages, callback)
+func (c *Client) AddOnNoRouteMessage(callback func(conn iface.Context)) {
+	c.OnNoRouteMessages = append(c.OnNoRouteMessages, callback)
 }
 
 func (c *Client) AddOnClosed(callback func(conn iface.Conn, err error)) {
@@ -144,8 +144,8 @@ func (c *Client) handleOnCustomMessages(ctx iface.Context) {
 	}
 }
 
-func (c *Client) handleOnNoIdMessages(ctx iface.Context) {
-	for _, callback := range c.OnNoIdMessages {
+func (c *Client) handleOnNoRouteMessagesMessages(ctx iface.Context) {
+	for _, callback := range c.OnNoRouteMessages {
 		callback(ctx)
 		if !ctx.Next() {
 			return
@@ -157,4 +157,8 @@ func (c *Client) handleOnClosed(conn iface.Conn, err error) {
 	for _, callback := range c.OnCloseds {
 		callback(conn, err)
 	}
+}
+
+func (c *Client) Id() uint32 {
+	return c.ClientIdentity.Id
 }

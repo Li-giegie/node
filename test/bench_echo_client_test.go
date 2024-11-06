@@ -15,11 +15,11 @@ import (
 var echoConn iface.Client
 
 func Dial() {
-	conn, err := net.Dial("tcp", "0.0.0.0:8888")
+	conn, err := net.Dial("tcp", "0.0.0.0:8000")
 	if err != nil {
 		panic(err)
 	}
-	echoConn = node.NewClient(conn, &node.CliConf{
+	echoConn = node.NewClient(conn, node.CliConf{
 		ReaderBufSize:   4096,
 		WriterBufSize:   4096,
 		WriterQueueSize: 1024,

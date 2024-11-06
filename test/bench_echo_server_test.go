@@ -15,7 +15,7 @@ func TestEchoServer(t *testing.T) {
 		t.Error(err)
 		return
 	}
-	srv := node.NewServer(l, &node.SrvConf{
+	srv := node.NewServer(l, node.SrvConf{
 		Identity: &node.Identity{
 			Id:          1,
 			AuthKey:     []byte("hello"),
@@ -33,7 +33,7 @@ func TestEchoServer(t *testing.T) {
 		log.Println("OnConnection", conn.RemoteId(), conn.NodeType())
 	})
 	srv.AddOnMessage(func(ctx iface.Context) {
-		log.Println("OnMessage", ctx.String())
+		//log.Println("OnMessage", ctx.String())
 		ctx.Reply(ctx.Data())
 	})
 	srv.AddOnCustomMessage(func(ctx iface.Context) {
@@ -42,10 +42,6 @@ func TestEchoServer(t *testing.T) {
 	srv.AddOnClosed(func(conn iface.Conn, err error) {
 		log.Println(conn.RemoteId(), err, conn.NodeType())
 	})
-	if err != nil {
-		t.Error(err)
-		return
-	}
 	defer srv.Close()
 	if err = srv.Serve(); err != nil {
 		log.Println(err)

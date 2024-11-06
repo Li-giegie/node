@@ -5,6 +5,7 @@ import (
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/message"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -26,7 +27,7 @@ type NodeDiscovery struct {
 }
 
 func (q *NodeDiscovery) CreateID() string {
-	return fmt.Sprintf("%d%d", q.Node.Id(), atomic.AddUint32(&q.counter, 1))
+	return fmt.Sprintf("%d:%d", q.Node.Id(), atomic.AddUint32(&q.counter, 1))
 }
 
 func (q *NodeDiscovery) Broadcast(m *ProtoMsg, filter ...uint32) {
@@ -165,6 +166,13 @@ func (q *NodeDiscovery) OnClose(conn iface.Conn, err error) {
 		Action:   ACTION_DELETE,
 		NodeList: []uint32{id},
 		Counter:  0,
+	})
+	q.existTab.Range(func(key, value any) bool {
+		k := key.(string)
+		if strings.Contains(k, k[:strings.Index(k, ":")]) {
+			q.existTab.Delete(k)
+		}
+		return true
 	})
 	// 删除路由前，保存经过该路由的所有节点信息，如果当前节点可以到的则广播路由
 	otherRoute := make([]uint32, 0)

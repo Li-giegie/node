@@ -6,7 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/example/server/cmd"
+	"github.com/Li-giegie/node/example/bridge/server/cmd"
 	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/protocol"
 	"gopkg.in/yaml.v3"
@@ -77,7 +77,7 @@ func main() {
 		log.Fatalln(err)
 	}
 	// 创建Server
-	s := node.NewServer(l, &node.SrvConf{
+	s := node.NewServer(l, node.SrvConf{
 		Identity: &node.Identity{
 			Id:          c.Id,
 			AuthKey:     []byte("hello"),
@@ -90,6 +90,9 @@ func main() {
 		MaxConns:           0,
 		MaxListenSleepTime: time.Minute,
 		ListenStepTime:     time.Second,
+	})
+	s.AddOnConnection(func(conn iface.Conn) {
+		log.Println("connection", conn.RemoteId(), conn.NodeType())
 	})
 	s.AddOnMessage(func(conn iface.Context) {
 		fmt.Println(string(conn.Data()))

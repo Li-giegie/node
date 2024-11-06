@@ -1,5 +1,7 @@
 package message
 
+import "fmt"
+
 // 标准消息类型
 const (
 	MsgType_Send uint8 = iota
@@ -22,6 +24,5 @@ type Message struct {
 }
 
 func (m *Message) String() string {
-	//return fmt.Sprintf("Message { type: %d, id: %v, srcId: %v, destId: %v, data: %s}", m.typ, m.id, m.srcId, m.destId, m.data)
-	return ""
+	return fmt.Sprintf("Message { type: %d, id: %v, srcId: %v, destId: %v, data: %s}", m.Type, m.Id, m.SrcId, m.DestId, m.Data)
 }
