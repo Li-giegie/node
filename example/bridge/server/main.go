@@ -14,6 +14,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -113,13 +114,14 @@ func main() {
 	}
 	// 解析命令
 	go func() {
+		envName := strconv.Itoa(int(c.Id))
 		time.Sleep(time.Second)
 		sc := bufio.NewScanner(os.Stdin)
-		ctx := context.WithValue(context.Background(), "server", s)
-		fmt.Print(">>")
+		ctx := context.WithValue(context.WithValue(context.Background(), "env_name", &envName), "server", s)
+		fmt.Print(envName + "@>>")
 		for sc.Scan() {
 			if len(sc.Bytes()) == 0 {
-				fmt.Print(">>")
+				fmt.Print(envName + "@>>")
 				continue
 			}
 			executeCmd, err := cmd.Group.ExecuteCmdLineContext(ctx, sc.Text())
@@ -130,7 +132,7 @@ func main() {
 					fmt.Println(err)
 				}
 			}
-			fmt.Print(">>")
+			fmt.Print(envName + "@>>")
 		}
 	}()
 	log.Println("start success", c.Addr)

@@ -48,7 +48,7 @@ var bind = &rabbit.Cmd{
 }
 
 func init() {
-	bind.Flags().String("key", "", "remote AccessKey")
+	bind.Flags().String("key", "hello", "remote AccessKey")
 	bind.Flags().String("addr", "", "remote addr")
 	bind.Flags().Duration("timeout", time.Second*3, "init timeout")
 	bind.AddSubMust(&rabbit.Cmd{

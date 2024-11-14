@@ -134,7 +134,7 @@ func (s *Server) startConn(c *nodeNet.Connect) {
 				continue
 			}
 		}
-		via, ok := s.GetRoute(msg.DestId)
+		via, _, ok := s.GetRoute(msg.DestId)
 		if ok {
 			if dstConn, exist := s.ConnManager.Get(via); exist {
 				if _, err = dstConn.WriteMsg(msg); err == nil {
@@ -244,7 +244,7 @@ func (s *Server) Request(ctx context.Context, dst uint32, data []byte) ([]byte, 
 	if exist {
 		return conn.Request(ctx, data)
 	}
-	via, exist := s.GetRoute(dst)
+	via, _, exist := s.GetRoute(dst)
 	if exist {
 		if conn, exist = s.GetConn(via); exist {
 			return conn.Forward(ctx, dst, data)
@@ -258,7 +258,7 @@ func (s *Server) WriteTo(dst uint32, data []byte) (int, error) {
 	if exist {
 		return conn.Write(data)
 	}
-	via, exist := s.GetRoute(dst)
+	via, _, exist := s.GetRoute(dst)
 	if exist {
 		if conn, exist = s.GetConn(via); exist {
 			return conn.WriteTo(dst, data)

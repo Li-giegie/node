@@ -65,11 +65,7 @@ func StartMultipleNodeHelloProtocol(ctx context.Context, conns hello.Conns, h if
 }
 
 func StartDiscoveryProtocol(maxHop uint8, h iface.Handler, n nodediscovery.Node) {
-	p := nodediscovery.NodeDiscovery{
-		ProtoMsgType: protoMsgType_NodeDiscovery,
-		Node:         n,
-		MaxHop:       maxHop,
-	}
+	p := nodediscovery.NewNodeDiscovery(protoMsgType_NodeDiscovery, n, maxHop, 10)
 	h.AddOnConnection(p.OnConnection)
 	h.AddOnCustomMessage(p.OnCustomMessage)
 	h.AddOnClosed(p.OnClose)

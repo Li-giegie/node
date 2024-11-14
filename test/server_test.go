@@ -18,7 +18,7 @@ func TestServer1(t *testing.T) {
 			for {
 				time.Sleep(time.Second)
 				fmt.Println("conns", srv.GetAllId())
-				srv.RangeRoute(func(id uint64, dst uint32, via uint32, hop uint8) {
+				srv.RangeRoute(func(id uint64, dst uint32, via uint32, hop uint8, d time.Duration) {
 					fmt.Printf("route id %d dst %d via %d hop %d\n", id, dst, via, hop)
 				})
 			}
@@ -41,7 +41,7 @@ func TestServer2(t *testing.T) {
 			for {
 				time.Sleep(time.Second)
 				fmt.Println("conns", srv.GetAllId())
-				srv.RangeRoute(func(id uint64, dst uint32, via uint32, hop uint8) {
+				srv.RangeRoute(func(id uint64, dst uint32, via uint32, hop uint8, d time.Duration) {
 					fmt.Printf("route id %d dst %d via %d hop %d\n", id, dst, via, hop)
 				})
 			}
@@ -59,14 +59,14 @@ func TestServer3(t *testing.T) {
 			fmt.Println("开始绑定")
 			conn, _ := net.Dial("tcp", "0.0.0.0:8001")
 			fmt.Println(srv.Bridge(conn, []byte("hello"), time.Second))
-			conn2, _ := net.Dial("tcp", "0.0.0.0:8002")
-			fmt.Println(srv.Bridge(conn2, []byte("hello"), time.Second))
+			//conn2, _ := net.Dial("tcp", "0.0.0.0:8002")
+			//fmt.Println(srv.Bridge(conn2, []byte("hello"), time.Second))
 		}()
 		go func() {
 			for {
 				time.Sleep(time.Second)
 				fmt.Println("conns", srv.GetAllId())
-				srv.RangeRoute(func(id uint64, dst uint32, via uint32, hop uint8) {
+				srv.RangeRoute(func(id uint64, dst uint32, via uint32, hop uint8, d time.Duration) {
 					fmt.Printf("route id %d dst %d via %d hop %d\n", id, dst, via, hop)
 				})
 			}
@@ -82,18 +82,18 @@ func TestServer4(t *testing.T) {
 		go func() {
 			time.Sleep(time.Second)
 			fmt.Println("开始绑定")
-			conn1, _ := net.Dial("tcp", "0.0.0.0:8001")
-			fmt.Println(srv.Bridge(conn1, []byte("hello"), time.Second*3))
+			//conn1, _ := net.Dial("tcp", "0.0.0.0:8001")
+			//fmt.Println(srv.Bridge(conn1, []byte("hello"), time.Second*3))
 			conn2, _ := net.Dial("tcp", "0.0.0.0:8002")
 			fmt.Println(srv.Bridge(conn2, []byte("hello"), time.Second*3))
-			conn3, _ := net.Dial("tcp", "0.0.0.0:8003")
-			fmt.Println(srv.Bridge(conn3, []byte("hello"), time.Second*3))
+			//conn3, _ := net.Dial("tcp", "0.0.0.0:8003")
+			//fmt.Println(srv.Bridge(conn3, []byte("hello"), time.Second*3))
 		}()
 		go func() {
 			for {
 				time.Sleep(time.Second)
 				fmt.Println("conns", srv.GetAllId())
-				srv.RangeRoute(func(id uint64, dst uint32, via uint32, hop uint8) {
+				srv.RangeRoute(func(id uint64, dst uint32, via uint32, hop uint8, d time.Duration) {
 					fmt.Printf("route id %d dst %d via %d hop %d\n", id, dst, via, hop)
 				})
 			}
@@ -109,18 +109,18 @@ func TestServer5(t *testing.T) {
 		go func() {
 			time.Sleep(time.Second)
 			fmt.Println("开始绑定")
-			conn1, _ := net.Dial("tcp", "0.0.0.0:8001")
-			fmt.Println(srv.Bridge(conn1, []byte("hello"), time.Second))
+			//conn1, _ := net.Dial("tcp", "0.0.0.0:8001")
+			//fmt.Println(srv.Bridge(conn1, []byte("hello"), time.Second))
 			conn3, _ := net.Dial("tcp", "0.0.0.0:8003")
 			fmt.Println(srv.Bridge(conn3, []byte("hello"), time.Second))
-			//conn4, _ := net.Dial("tcp", "0.0.0.0:8004")
-			//fmt.Println(srv.Bridge(conn4, []byte("hello"), time.Second))
+			conn4, _ := net.Dial("tcp", "0.0.0.0:8004")
+			fmt.Println(srv.Bridge(conn4, []byte("hello"), time.Second))
 		}()
 		go func() {
 			for {
 				time.Sleep(time.Second)
 				fmt.Println("conns", srv.GetAllId())
-				srv.RangeRoute(func(id uint64, dst uint32, via uint32, hop uint8) {
+				srv.RangeRoute(func(id uint64, dst uint32, via uint32, hop uint8, d time.Duration) {
 					fmt.Printf("route id %d dst %d via %d hop %d\n", id, dst, via, hop)
 				})
 			}

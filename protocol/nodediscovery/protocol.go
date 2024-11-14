@@ -1,13 +1,14 @@
+// package nodediscovery 动态节点路由发现
+
 package nodediscovery
 
 import (
-	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/message"
-	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type Node interface {
@@ -23,17 +24,40 @@ type NodeDiscovery struct {
 	Node         Node
 	MaxHop       uint8
 	counter      uint32
-	existTab     sync.Map
+	existTab     *existTab
 }
 
-func (q *NodeDiscovery) CreateID() string {
-	return fmt.Sprintf("%d:%d", q.Node.Id(), atomic.AddUint32(&q.counter, 1))
+func NewNodeDiscovery(ProtoMsgType uint8, node Node, maxHop, existTabMaxRecordNum uint8) *NodeDiscovery {
+	if existTabMaxRecordNum == 0 {
+		existTabMaxRecordNum = 10
+	}
+	return &NodeDiscovery{
+		ProtoMsgType: ProtoMsgType,
+		Node:         node,
+		MaxHop:       maxHop,
+		existTab: &existTab{
+			m:            make(map[uint32]*existContainer),
+			maxRecordNum: existTabMaxRecordNum,
+		},
+	}
 }
 
-func (q *NodeDiscovery) Broadcast(m *ProtoMsg, filter ...uint32) {
+func (q *NodeDiscovery) createProtoMsg(action uint8, nodeList []uint32, routes []*Route) *ProtoMsg {
+	return &ProtoMsg{
+		Id:       atomic.AddUint32(&q.counter, 1),
+		SrcId:    q.Node.Id(),
+		Action:   action,
+		NodeList: nodeList,
+		Routes:   routes,
+		Counter:  0,
+		UnixNano: time.Now().UnixNano(),
+	}
+}
+
+func (q *NodeDiscovery) broadcast(m *ProtoMsg, filter ...uint32) {
 	data := m.Encode()
 	conns := q.Node.GetAllConn()
-	q.existTab.Store(m.PId, struct{}{})
+	q.existTab.Add(m.SrcId, m.Id)
 	var ok bool
 	for _, conn := range conns {
 		if conn.NodeType() != uint8(node.NodeType_Bridge) {
@@ -49,38 +73,24 @@ func (q *NodeDiscovery) Broadcast(m *ProtoMsg, filter ...uint32) {
 		if !ok {
 			continue
 		}
-		_, _ = conn.WriteMsg(&message.Message{
-			Type:   q.ProtoMsgType,
-			SrcId:  conn.LocalId(),
-			DestId: conn.RemoteId(),
-			Data:   data,
-		})
+		q.send(conn, data)
 	}
+}
+
+func (q *NodeDiscovery) send(conn iface.Conn, data []byte) {
+	_, _ = conn.WriteMsg(&message.Message{
+		Type:   q.ProtoMsgType,
+		SrcId:  conn.LocalId(),
+		DestId: conn.RemoteId(),
+		Data:   data,
+	})
 }
 
 func (q *NodeDiscovery) OnConnection(conn iface.Conn) {
 	q.Node.RemoveRouteWithDst(conn.RemoteId())
+	q.broadcast(q.createProtoMsg(ACTION_PUSH, []uint32{conn.RemoteId()}, nil), conn.RemoteId())
 	if conn.NodeType() == uint8(node.NodeType_Bridge) {
-		q.Broadcast(&ProtoMsg{
-			PId:    q.CreateID(),
-			Action: ACTION_GET,
-		})
-		ids := q.Node.GetAllId()
-		rs := q.GetRoutes()
-		if len(ids) > 0 || len(rs) > 0 {
-			q.Broadcast(&ProtoMsg{
-				PId:      q.CreateID(),
-				Action:   ACTION_PUSH,
-				NodeList: ids,
-				Routes:   rs,
-			})
-		}
-	} else {
-		q.Broadcast(&ProtoMsg{
-			PId:      q.CreateID(),
-			Action:   ACTION_PUSH,
-			NodeList: []uint32{conn.RemoteId()},
-		}, conn.RemoteId())
+		q.send(conn, q.createProtoMsg(ACTION_PULL, nil, nil).Encode())
 	}
 }
 
@@ -94,47 +104,67 @@ func (q *NodeDiscovery) OnCustomMessage(ctx iface.Context) {
 	if err := m.Decode(ctx.Data()); err != nil {
 		return
 	}
-	if _, exist = q.existTab.Load(m.PId); exist {
+	if m.Counter >= 255 || q.MaxHop > 0 && m.Counter > q.MaxHop {
 		return
 	}
-	if q.MaxHop > 0 && m.Counter > q.MaxHop || m.Counter >= 255 {
-		ctx.Stop()
+	if exist = q.existTab.Exist(m.SrcId, m.Id); exist {
 		return
 	}
+	q.existTab.Add(m.SrcId, m.Id)
 	m.Counter++
 	switch m.Action {
-	case ACTION_GET:
-		m.Action = ACTION_PUSH
-		m.PId = q.CreateID()
-		m.NodeList = q.Node.GetAllId()
-		m.Routes = q.GetRoutes()
-		m.Counter = 0
-		_ = ctx.CustomReply(q.ProtoMsgType, m.Encode())
-		return
+	case ACTION_PULL:
+		tmpIds := q.Node.GetAllId()
+		routes := q.getRoutes()
+		if len(tmpIds) == 0 && len(routes) == 0 {
+			return
+		}
+		ids := make([]uint32, 0, len(tmpIds))
+		for i := 0; i < len(tmpIds); i++ {
+			if tmpIds[i] != ctx.SrcId() {
+				ids = append(ids, tmpIds[i])
+			}
+		}
+		if len(ids) > 0 {
+			_ = ctx.CustomReply(q.ProtoMsgType, q.createProtoMsg(ACTION_PUSH, ids, routes).Encode())
+		}
 	case ACTION_PUSH:
-		for _, dst := range m.NodeList {
-			if dst == q.Node.Id() {
-				continue
-			} else if _, exist = q.Node.GetConn(dst); exist {
-				continue
-			}
-			q.Node.AddRoute(dst, ctx.SrcId(), m.Counter)
-		}
+		rs := make([]*Route, 0, len(m.Routes))
 		for _, route := range m.Routes {
-			if route.Dst == q.Node.Id() {
-				continue
-			} else if _, exist = q.Node.GetConn(route.Dst); exist {
-				continue
+			route.Hop++
+			if q.addRoute(route.Dst, ctx.SrcId(), route.Hop, time.Duration(m.UnixNano)) {
+				rs = append(rs, &Route{
+					Dst: route.Dst,
+					Hop: route.Hop,
+				})
 			}
-			q.Node.AddRoute(route.Dst, ctx.SrcId(), route.Hop)
 		}
-	case ACTION_DELETE:
-		// 删除路由前，保存经过该路由的所有节点信息，如果当前节点可以到的则广播路由
-		viaDelRoute := make([]uint32, 0)
+		ids := make([]uint32, 0, len(m.NodeList))
 		for _, dst := range m.NodeList {
-			viaDelRoute = append(viaDelRoute, q.Node.GetRouteWithVia(dst)...)
-			q.Node.RemoveRouteWithDst(dst)
-			q.Node.RemoveRouteWithVia(dst)
+			if q.addRoute(dst, ctx.SrcId(), m.Counter, time.Duration(m.UnixNano)) {
+				ids = append(ids, dst)
+			}
+		}
+		m.NodeList = ids
+		m.Routes = rs
+		filterNodes := make([]uint32, 0, len(m.NodeList)+2)
+		filterNodes = append(filterNodes, m.NodeList...)
+		filterNodes = append(filterNodes, ctx.SrcId())
+		filterNodes = append(filterNodes, m.SrcId)
+		q.broadcast(&m, filterNodes...)
+	case ACTION_DELETE:
+		q.broadcast(&m, ctx.SrcId(), m.SrcId)
+		// 删除路由前，保存经过该路由的所有节点信息，如果当前节点可以到的则广播路由
+		var viaDelRoute []uint32
+		for _, dst := range m.NodeList {
+			tmpViaRoute := q.Node.GetRouteWithVia(dst)
+			if q.Node.RemoveRouteWithCallback(dst, func(info iface.RouteInfo) (isDel bool) {
+				return m.UnixNano > int64(info.Activation())
+			}) {
+				viaDelRoute = append(viaDelRoute, tmpViaRoute...)
+				q.Node.RemoveRouteWithVia(dst)
+				q.existTab.Delete(dst)
+			}
 		}
 		otherRoute := make([]uint32, 0)
 		for _, u := range viaDelRoute {
@@ -143,69 +173,129 @@ func (q *NodeDiscovery) OnCustomMessage(ctx iface.Context) {
 			}
 		}
 		if len(otherRoute) > 0 {
-			q.Broadcast(&ProtoMsg{
-				PId:      q.CreateID(),
-				Action:   ACTION_PUSH,
-				NodeList: otherRoute,
-			})
+			q.broadcast(q.createProtoMsg(ACTION_PUSH, otherRoute, nil))
 		}
-	default:
-		return
+	case ACTION_QUERY:
+		var ids, noIds []uint32
+		var rs []*Route
+		for _, u := range m.NodeList {
+			if _, exist = q.Node.GetConn(u); exist {
+				ids = append(ids, u)
+			} else {
+				noIds = append(noIds, u)
+			}
+		}
+		if len(ids) > 0 || len(rs) > 0 {
+			_ = ctx.CustomReply(q.ProtoMsgType, q.createProtoMsg(ACTION_PUSH, ids, rs).Encode())
+		}
+		if len(noIds) > 0 {
+			m.NodeList = noIds
+			q.broadcast(&m, ctx.SrcId(), m.SrcId)
+		}
 	}
-	q.Broadcast(&m, ctx.SrcId())
-	return
+}
+
+func (q *NodeDiscovery) addRoute(dst, via uint32, hop uint8, d time.Duration) bool {
+	if q.Node.Id() == dst {
+		return false
+	} else if _, exist := q.Node.GetConn(dst); exist {
+		return false
+	}
+	return q.Node.AddRoute(dst, via, hop, d)
 }
 
 func (q *NodeDiscovery) OnClose(conn iface.Conn, err error) {
 	id := conn.RemoteId()
-	viaDelRoute := q.Node.GetRouteWithVia(id)
+	viaIds := q.Node.GetRouteWithVia(id)
 	q.Node.RemoveRouteWithDst(id)
 	q.Node.RemoveRouteWithVia(id)
-	q.Broadcast(&ProtoMsg{
-		PId:      q.CreateID(),
-		Action:   ACTION_DELETE,
-		NodeList: []uint32{id},
-		Counter:  0,
-	})
-	q.existTab.Range(func(key, value any) bool {
-		k := key.(string)
-		if strings.Contains(k, k[:strings.Index(k, ":")]) {
-			q.existTab.Delete(k)
-		}
-		return true
-	})
-	// 删除路由前，保存经过该路由的所有节点信息，如果当前节点可以到的则广播路由
-	otherRoute := make([]uint32, 0)
-	connIds := q.Node.GetAllId()
-	var exist bool
-	for _, via := range viaDelRoute {
-		exist = false
-		for _, connId := range connIds {
-			if via == connId {
-				exist = true
-				break
-			}
-		}
-		if exist {
-			otherRoute = append(otherRoute, via)
-		}
-	}
-	if len(otherRoute) > 0 {
-		q.Broadcast(&ProtoMsg{
-			PId:      q.CreateID(),
-			Action:   ACTION_PUSH,
-			NodeList: otherRoute,
-		})
+	q.broadcast(q.createProtoMsg(ACTION_DELETE, append(viaIds, id), nil))
+	q.existTab.Delete(conn.RemoteId())
+	if len(viaIds) > 0 {
+		q.broadcast(q.createProtoMsg(ACTION_QUERY, viaIds, nil))
 	}
 }
 
-func (q *NodeDiscovery) GetRoutes() []*Route {
+func (q *NodeDiscovery) getRoutes() []*Route {
 	var rs []*Route
-	q.Node.RangeRoute(func(id uint64, dst uint32, via uint32, hop uint8) {
+	q.Node.RangeRoute(func(info iface.RouteInfo) {
 		rs = append(rs, &Route{
-			Dst: dst,
-			Hop: hop,
+			Dst: info.Dst(),
+			Hop: info.Hop(),
 		})
 	})
 	return rs
+}
+
+type existTab struct {
+	m            map[uint32]*existContainer
+	l            sync.RWMutex
+	maxRecordNum uint8
+}
+
+func (e *existTab) Add(nodeId, ProtoMsgId uint32) {
+	e.l.Lock()
+	ec, ok := e.m[nodeId]
+	if !ok {
+		ec = &existContainer{Size: e.maxRecordNum, Record: make([]uint32, e.maxRecordNum)}
+	}
+	ec.Add(ProtoMsgId)
+	e.m[nodeId] = ec
+	e.l.Unlock()
+}
+
+func (e *existTab) Delete(nodeId uint32) {
+	e.l.Lock()
+	delete(e.m, nodeId)
+	e.l.Unlock()
+}
+
+func (e *existTab) Exist(nodeId, ProtoMsgId uint32) bool {
+	e.l.RLock()
+	ec, ok := e.m[nodeId]
+	e.l.RUnlock()
+	if !ok {
+		return false
+	}
+	return ec.Exist(ProtoMsgId)
+}
+
+type existContainer struct {
+	Size   uint8
+	Record []uint32
+	Index  uint8
+}
+
+func (c *existContainer) Add(n uint32) {
+	if c.Index < c.Size {
+		c.Record[c.Index] = n
+		c.Index++
+		return
+	}
+	copy(c.Record, c.Record[1:])
+	c.Record[c.Size-1] = n
+}
+
+func (c *existContainer) Remove(n uint32) {
+	for i := uint8(0); i < c.Index; i++ {
+		if n == c.Record[i] {
+			copy(c.Record, c.Record[:i])
+			copy(c.Record, c.Record[i+1:])
+			c.Index--
+			break
+		}
+	}
+}
+
+func (c *existContainer) Exist(n uint32) bool {
+	for i := uint8(0); i < c.Index; i++ {
+		if c.Record[i] == n {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *existContainer) GetAll() []uint32 {
+	return c.Record[:c.Index]
 }
