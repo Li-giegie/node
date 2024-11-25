@@ -13,6 +13,10 @@ func (c *Context) Type() uint8 {
 	return c.Message.Type
 }
 
+func (c *Context) Hop() uint8 {
+	return c.Message.Hop
+}
+
 func (c *Context) Id() uint32 {
 	return c.Message.Id
 }
@@ -66,6 +70,7 @@ func (c *Context) CustomReply(typ uint8, data []byte) (err error) {
 		return DEFAULT_ErrReplyLimitOnce
 	}
 	c.once = true
+	c.Message.Hop = 0
 	c.Message.Type = typ
 	c.Message.SrcId, c.Message.DestId = c.Message.DestId, c.Message.SrcId
 	c.Message.Data = data

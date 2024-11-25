@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/Li-giegie/node/iface"
+	"github.com/Li-giegie/node/protocol/nodediscovery"
 	rabbit "github.com/Li-giegie/rabbit-cli"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -16,10 +16,8 @@ var request = &rabbit.Cmd{
 	Description: "发送消息，并希望在限定时间内得到一个回复",
 	Run:         nil,
 	RunE: func(c *rabbit.Cmd, args []string) error {
-		i := c.Context().Value("server")
-		if i == nil {
-			return fmt.Errorf("server is null")
-		}
+		srv := c.Context().Value("server").(iface.Server)
+		ndp := c.Context().Value("ndp").(nodediscovery.NodeDiscoveryProtocol)
 		id, err := strconv.Atoi(c.Flags().Lookup("id").Value.String())
 		if err != nil {
 			return err
@@ -30,12 +28,19 @@ var request = &rabbit.Cmd{
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		srv := i.(iface.Server)
-		res, err := srv.Request(ctx, uint32(id), []byte(strings.Join(args, " ")))
+		empty, ok := ndp.GetRoute(uint32(id))
+		if !ok {
+			return fmt.Errorf("%d node not exist", id)
+		}
+		conn, ok := srv.GetConn(empty.Via())
+		if !ok {
+			return fmt.Errorf("%d node not exist", id)
+		}
+		res, err := conn.Forward(ctx, uint32(id), []byte(strings.Join(args, " ")))
 		if err != nil {
 			return err
 		}
-		log.Println(string(res))
+		fmt.Println(string(res))
 		return nil
 	},
 }

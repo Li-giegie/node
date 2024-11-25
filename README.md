@@ -4,7 +4,6 @@
 node是一个Go（Golang）编写的轻量级TCP框架，node帮助您轻松、快速构建TCP服务器。
 
 特征：
-- [Message](#传输协议)协议实现通信
 - 支持请求响应模型
 - 支持多服务端节点桥接组网
 - 并发100w/s 请求响应
@@ -12,17 +11,19 @@ node是一个Go（Golang）编写的轻量级TCP框架，node帮助您轻松、�
 ## 传输协议
 ```go
 type Message struct {
-  Type   uint8
-  Id     uint32
-  SrcId  uint32
-  DestId uint32
-  Data   []byte
+	Type   uint8  //消息类型，不同的协议该值不同
+	Hop    uint8  //消息的跳数
+	Id     uint32 //消息唯一标识
+	SrcId  uint32 //源节点
+	DestId uint32 //目的节点
+	Data   []byte //消息内容
 }
 ```
 <table >
   <tr>
-    <th rowspan="2" >Header 19Byte</th>
-    <td >Typ 1Byte</td>
+    <th rowspan="2" >Header 20Byte</th>
+    <td >Type 1Byte</td>
+    <td >Hop 1Byte</td>
     <td >Id 4Byte</td>
     <td >SrcId 4Byte</td>
     <td >DestId 4Byte</td>
@@ -32,7 +33,7 @@ type Message struct {
     <td align="center" colspan="5">CheckSum 2Byte</td>
   </tr>
   <tr >
-    <td align="center" colspan="6">Data</td>
+    <td align="center" colspan="6">DataLength 4byte + Data</td>
   </tr>
 </table>
 
@@ -44,85 +45,53 @@ go get -u github.com/Li-giegie/node@latest
 ### Server
 
 ```go
-func TestEchoServer(t *testing.T) {
-	l, err := net.Listen("tcp", "0.0.0.0:8000")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	srv := node.NewServer(l, &node.SrvConf{
-		Identity: &node.Identity{
-			Id:          1,
-			AuthKey:     []byte("hello"),
-			AuthTimeout: time.Second * 6,
-		},
-		MaxConns:           0,
-		MaxMsgLen:          0xffffff,
-		WriterQueueSize:    1024,
-		ReaderBufSize:      4096,
-		WriterBufSize:      4096,
-		MaxListenSleepTime: time.Minute,
-		ListenStepTime:     time.Second,
-	})
+func TestServer(t *testing.T) {
+	srv := node.NewServer(&node.Identity{Id: 8000, Key: []byte("hello"), Timeout: time.Second * 6}, nil)
 	srv.AddOnConnection(func(conn iface.Conn) {
-		log.Println("OnConnection", conn.RemoteId(), conn.NodeType())
+		log.Println("OnConnection", conn.RemoteId())
 	})
 	srv.AddOnMessage(func(ctx iface.Context) {
 		log.Println("OnMessage", ctx.String())
 		ctx.Reply(ctx.Data())
 	})
-	srv.AddOnCustomMessage(func(ctx iface.Context) {
-		log.Println("OnCustomMessage", ctx.String())
-	})
-	srv.AddOnClosed(func(conn iface.Conn, err error) {
-		log.Println(conn.RemoteId(), err, conn.NodeType())
-	})
+	l, err := net.Listen("tcp", "0.0.0.0:8000")
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	defer srv.Close()
-	if err = srv.Serve(); err != nil {
-		log.Println(err)
+	if err = srv.Serve(l); err != nil {
+		t.Error(err)
 	}
+}
 ```
 
 ### Client
-
 ```go
 func TestClient(t *testing.T) {
-	conn, err := net.Dial("tcp", "0.0.0.0:8001")
+	netConn, err := net.Dial("tcp", "0.0.0.0:8000")
 	if err != nil {
 		t.Error(err)
 		return
 	}
 	stopC := make(chan struct{})
-	c := node.NewClient(conn, &node.CliConf{
-		ReaderBufSize:   4096,
-		WriterBufSize:   4096,
-		WriterQueueSize: 1024,
-		MaxMsgLen:       0xffffff,
-		ClientIdentity: &node.ClientIdentity{
-			Id:            8000,
-			RemoteAuthKey: []byte("hello"),
-			Timeout:       time.Second * 6,
-		},
+	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), Timeout: time.Second * 6}, nil)
+	c.AddOnMessage(func(ctx iface.Context) {
+		fmt.Println(ctx.String())
+		ctx.Reply(ctx.Data())
 	})
-	c.AddOnMessage(func(conn iface.Context) {
-		log.Println(conn.String())
+	c.AddOnClosed(func(conn iface.Conn, err error) {
+		stopC <- struct{}{}
 	})
-	if err = c.Start(); err != nil {
-		log.Fatalln(err)
+	conn, err := c.Start(netConn)
+	if err != nil {
+		t.Error(err)
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
-	res, err := c.Forward(ctx, 10, []byte("ping"))
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	c.Close()
-	println(string(res))
+	res, err := conn.Request(ctx, []byte("ping"))
+	fmt.Println(string(res), err)
+	_ = conn.Close()
 	<-stopC
 }
 ```
@@ -178,13 +147,6 @@ BenchmarkEchoRequestGo-12        1000000              1619 ns/op             393
 |       Node       Node     |       |       Node       Node     |
 +---------------------------+       +---------------------------+
 ```
-
-![单域](./.README_images/single.png)
-
-多域间节点互相通信如下
-
-![多域](./.README_images/multiple.png)
-
 [example示例](example)
 
 ## 协议
@@ -193,5 +155,3 @@ BenchmarkEchoRequestGo-12        1000000              1619 ns/op             393
 ## 作者邮箱
 [859768560@qq.com](https://mail.qq.com/cgi-bin/loginpage?s=logout)
 
-## 更新迭代
-* 增加功能

@@ -4,41 +4,36 @@ import (
 	"context"
 	"fmt"
 	"github.com/Li-giegie/node"
-	"log"
+	"github.com/Li-giegie/node/iface"
 	"net"
 	"testing"
 	"time"
 )
 
 func TestClient(t *testing.T) {
-	conn, err := net.Dial("tcp", "0.0.0.0:8001")
+	netConn, err := net.Dial("tcp", "0.0.0.0:8000")
 	if err != nil {
 		t.Error(err)
 		return
 	}
 	stopC := make(chan struct{})
-	c := node.NewClient(conn, node.CliConf{
-		ReaderBufSize:   4096,
-		WriterBufSize:   4096,
-		WriterQueueSize: 1024,
-		MaxMsgLen:       0xffffff,
-		ClientIdentity: &node.ClientIdentity{
-			Id:            8000,
-			RemoteAuthKey: []byte("hello"),
-			Timeout:       time.Second * 6,
-		},
+	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), Timeout: time.Second * 6}, nil)
+	c.AddOnMessage(func(ctx iface.Context) {
+		fmt.Println(ctx.String())
+		ctx.Reply(ctx.Data())
 	})
-	if err = c.Start(); err != nil {
-		log.Fatalln(err)
+	c.AddOnClosed(func(conn iface.Conn, err error) {
+		stopC <- struct{}{}
+	})
+	conn, err := c.Start(netConn)
+	if err != nil {
+		t.Error(err)
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
-	res, err := c.Forward(ctx, 10, []byte("ping"))
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	c.Close()
-	println(string(res))
+	res, err := conn.Request(ctx, []byte("ping"))
+	fmt.Println(string(res), err)
+	_ = conn.Close()
 	<-stopC
 }

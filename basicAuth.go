@@ -1,24 +1,17 @@
 package node
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
-	jeans "github.com/Li-giegie/go-jeans"
-	"hash/crc32"
 	"io"
 	"time"
 )
 
 type Identity struct {
-	Id          uint32
-	AuthKey     []byte
-	AuthTimeout time.Duration
-}
-
-type ClientIdentity struct {
-	Id            uint32
-	RemoteAuthKey []byte
-	Timeout       time.Duration
+	Id      uint32
+	Key     []byte
+	Timeout time.Duration
 }
 
 var defaultBasicReq = new(basicAuthReq)
@@ -35,49 +28,70 @@ type basicAuthReq struct{}
 
 var errBytesLimit = errors.New("number of bytes exceeds the limit size")
 
-func (basicAuthReq) Send(w io.Writer, id uint32, accessKey []byte, nt NodeType) error {
-	if len(accessKey) > 65520 {
-		return errBytesLimit
-	}
-	data, _ := jeans.EncodeBase(id, accessKey, uint8(nt))
-	p, _ := Packet(data)
-	_, err := w.Write(p)
+func (basicAuthReq) Send(w io.Writer, srcId, dstId uint32, accessKey []byte, nt NodeType) error {
+	data := make([]byte, 41)
+	binary.LittleEndian.PutUint32(data[0:4], srcId)
+	binary.LittleEndian.PutUint32(data[4:8], dstId)
+	copy(data[8:40], hash(accessKey))
+	data[40] = uint8(nt)
+	_, err := w.Write(data)
 	return err
 }
 
-func (basicAuthReq) Receive(r io.Reader, t time.Duration) (id uint32, accessKey []byte, nt NodeType, err error) {
-	data, err := Unpack(r, t)
+func (basicAuthReq) Receive(r io.Reader, t time.Duration) (srcId, dstId uint32, hashKey []byte, nt NodeType, err error) {
+	var buf = make([]byte, 41)
+	err = ReadFull(r, t, buf)
 	if err != nil {
-		return 0, nil, 0, err
+		return 0, 0, nil, 0, err
 	}
-	n := uint8(0)
-	err = jeans.DecodeBase(data, &id, &accessKey, &n)
-	nt = NodeType(n)
+	srcId = binary.LittleEndian.Uint32(buf[0:4])
+	dstId = binary.LittleEndian.Uint32(buf[4:8])
+	hashKey = buf[8:40]
+	nt = NodeType(buf[40])
 	return
 }
 
 type basicAuthResp struct{}
 
-func (basicAuthResp) Send(w io.Writer, id uint32, permit bool, msg string) error {
-	if len(msg) > 65520 {
+func (basicAuthResp) Send(w io.Writer, permit bool, msg string) error {
+	if len(msg) > 65530 {
 		return errBytesLimit
 	}
-	data, _ := jeans.EncodeBase(id, permit, msg)
-	p, _ := Packet(data)
+	p := make([]byte, 3+len(msg))
+	binary.LittleEndian.PutUint16(p, uint16(len(msg)))
+	if permit {
+		p[2] = 1
+	}
+	copy(p[3:], msg)
 	_, err := w.Write(p)
 	return err
 }
 
-func (basicAuthResp) Receive(r io.Reader, t time.Duration) (id uint32, permit bool, msg string, err error) {
-	data, err := Unpack(r, t)
+func (basicAuthResp) Receive(r io.Reader, t time.Duration) (permit bool, msg string, err error) {
+	buf := make([]byte, 3)
+	err = ReadFull(r, t, buf)
 	if err != nil {
-		return 0, false, "", err
+		return false, "", err
 	}
-	err = jeans.DecodeBase(data, &id, &permit, &msg)
+	pl := binary.LittleEndian.Uint16(buf)
+	if pl > 65530 {
+		return false, "", errBytesLimit
+	}
+	if buf[2] == 1 {
+		permit = true
+	}
+	if pl > 0 {
+		buf = make([]byte, pl)
+		err = ReadFull(r, t, buf)
+		if err != nil {
+			return false, "", err
+		}
+		msg = string(buf)
+	}
 	return
 }
 
-func ReadFull(timeout time.Duration, r io.Reader, buf []byte) (err error) {
+func ReadFull(r io.Reader, timeout time.Duration, buf []byte) (err error) {
 	errC := make(chan error)
 	go func() {
 		_, err = io.ReadFull(r, buf)
@@ -91,33 +105,8 @@ func ReadFull(timeout time.Duration, r io.Reader, buf []byte) (err error) {
 	}
 }
 
-// Packet len + len_checksum  + b
-func Packet(b []byte) ([]byte, error) {
-	l := len(b)
-	if l >= 0xfffffff0 {
-		return nil, errors.New("b exceeds the length limit")
-	}
-	buf := make([]byte, 8)
-	// 4byte len
-	binary.LittleEndian.PutUint32(buf, uint32(l))
-	// 4byte len_checksum
-	binary.LittleEndian.PutUint32(buf[4:], crc32.ChecksumIEEE(buf[:4]))
-	return append(buf, b...), nil
-}
-
-func Unpack(r io.Reader, t time.Duration) ([]byte, error) {
-	buf := make([]byte, 8)
-	err := ReadFull(t, r, buf)
-	if err != nil {
-		return nil, err
-	}
-	sum1 := binary.LittleEndian.Uint32(buf[4:])
-	sum2 := crc32.ChecksumIEEE(buf[:4])
-	if sum1 != sum2 {
-		return nil, errors.New("checksum invalid")
-	}
-	length := binary.LittleEndian.Uint32(buf)
-	buf = make([]byte, length)
-	err = ReadFull(t, r, buf)
-	return buf, err
+func hash(b []byte) []byte {
+	h := sha256.New()
+	h.Write(b)
+	return h.Sum(nil)
 }

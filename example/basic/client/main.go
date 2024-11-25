@@ -11,21 +11,7 @@ import (
 )
 
 func main() {
-	conn, err := net.Dial("tcp", "0.0.0.0:8000")
-	if err != nil {
-		log.Fatalln(err)
-	}
-	c := node.NewClient(conn, node.CliConf{
-		ReaderBufSize:   4096,
-		WriterBufSize:   4096,
-		WriterQueueSize: 1024,
-		MaxMsgLen:       0xffffff,
-		ClientIdentity: &node.ClientIdentity{
-			Id:            8001,
-			RemoteAuthKey: []byte("hello"),
-			Timeout:       time.Second * 3,
-		},
-	})
+	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), Timeout: time.Second * 6}, nil)
 	exitC := make(chan struct{}, 1)
 	// 通过认证后连接正式建立的回调,同步调用
 	c.AddOnConnection(func(conn iface.Conn) {
@@ -46,23 +32,24 @@ func main() {
 	})
 	// 连接关闭的回调,同步调用, 该回调通常用于协议
 	c.AddOnClosed(func(conn iface.Conn, err error) {
-		log.Println("OnClosed", conn.IsClosed(), err)
+		log.Println("OnClosed", err)
 		exitC <- struct{}{}
 	})
 	// 收到非本地节点的消息并且没有路由时触发，同步调用, 服务端节点如果该回调为空，则默认回复节点不存在错误 客户端节点不应该收到目的节点非本地节点的消息，该回调为空，没有默认行为，丢弃该消息
 	c.AddOnNoRouteMessage(func(ctx iface.Context) {
 		log.Println("OnNoIdMessage", ctx.String())
 	})
-	if err = c.Start(); err != nil {
-		log.Println(err)
+	netConn, err := net.Dial("tcp", "0.0.0.0:8000")
+	if err != nil {
+		log.Fatalln(err)
+	}
+	conn, err := c.Start(netConn)
+	if err != nil {
+		fmt.Println(err)
 		return
 	}
-	resp, err := c.Request(context.Background(), []byte("ping"))
-	if err != nil {
-		println(err)
-	} else {
-		println(string(resp))
-	}
-	c.Close()
+	res, err := conn.Request(context.Background(), []byte("hello"))
+	fmt.Println(string(res), err)
+	conn.Close()
 	<-exitC
 }

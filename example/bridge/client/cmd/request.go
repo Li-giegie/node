@@ -20,7 +20,7 @@ var request = &rabbit.Cmd{
 
 		ctx, cancle := context.WithTimeout(context.Background(), timeout)
 		defer cancle()
-		conn := c.Context().Value("client").(iface.Client)
+		conn := c.Context().Value("conn").(iface.Conn)
 		res, err := conn.Forward(ctx, uint32(id), []byte(strings.Join(args, " ")))
 		if err != nil {
 			return err

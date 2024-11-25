@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"github.com/Li-giegie/node/iface"
+	"github.com/Li-giegie/node/protocol/nodediscovery"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"strconv"
 	"strings"
@@ -13,20 +14,27 @@ var write = &rabbit.Cmd{
 	Description: "发送数据",
 	Run:         nil,
 	RunE: func(c *rabbit.Cmd, args []string) error {
-		i := c.Context().Value("server")
-		if i == nil {
-			return fmt.Errorf("server is null")
-		}
+		srv := c.Context().Value("server").(iface.Server)
+		ndp := c.Context().Value("ndp").(nodediscovery.NodeDiscoveryProtocol)
 		id, err := strconv.Atoi(c.Flags().Lookup("id").Value.String())
 		if err != nil {
 			return err
 		}
-		srv := i.(iface.Server)
-		_, err = srv.WriteTo(uint32(id), []byte(strings.Join(args, " ")))
-		if err != nil {
+		conn, ok := srv.GetConn(uint32(id))
+		if ok {
+			_, err = conn.Write([]byte(strings.Join(args, " ")))
 			return err
 		}
-		return nil
+		empty, ok := ndp.GetRoute(uint32(id))
+		if !ok {
+			return fmt.Errorf("%d node not exist", id)
+		}
+		conn, ok = srv.GetConn(empty.Via())
+		if !ok {
+			return fmt.Errorf("%d node not exist", id)
+		}
+		_, err = conn.WriteTo(uint32(id), []byte(strings.Join(args, " ")))
+		return err
 	},
 }
 

@@ -3,7 +3,6 @@ package cmd
 import (
 	"github.com/Li-giegie/node/iface"
 	rabbit "github.com/Li-giegie/rabbit-cli"
-	"log"
 	"net"
 	"time"
 )
@@ -12,42 +11,30 @@ var bind = &rabbit.Cmd{
 	Name:        "bind",
 	Description: "绑定一个服务端节点",
 	RunE: func(c *rabbit.Cmd, args []string) error {
-		key := c.Flags().Lookup("key").Value.String()
-		addr := c.Flags().Lookup("addr").Value.String()
-		timeout, _ := time.ParseDuration(c.Flags().Lookup("timeout").Value.String())
+		var errs [4]error
+		var id uint32
+		var key, addr string
+		var timeout time.Duration
+		id, errs[0] = c.Flags().GetUint32("id")
+		key, errs[1] = c.Flags().GetString("key")
+		addr, errs[2] = c.Flags().GetString("addr")
+		timeout, errs[3] = c.Flags().GetDuration("timeout")
+		for _, err := range errs {
+			if err != nil {
+				return err
+			}
+		}
+		srv := c.Context().Value("server").(iface.Server)
 		conn, err := net.Dial("tcp", addr)
 		if err != nil {
 			return err
 		}
-		s := c.Context().Value("server").(iface.Server)
-		rid, err := s.Bridge(conn, []byte(key), timeout)
-		s.AddOnClosed(func(conn iface.Conn, err error) {
-			if conn.RemoteId() != rid {
-				return
-			}
-			go func() {
-				log.Println("bridge closed", err)
-				for {
-					time.Sleep(time.Second * 3)
-					conn, err := net.Dial("tcp", addr)
-					if err != nil {
-						log.Println("dial err", err)
-						continue
-					}
-					rid, err = s.Bridge(conn, []byte(key), timeout)
-					if err != nil {
-						log.Println("bridge err", err)
-					}
-					log.Println("bridge success", rid)
-					return
-				}
-			}()
-		})
-		return err
+		return srv.Bridge(conn, id, []byte(key), timeout)
 	},
 }
 
 func init() {
+	bind.Flags().Uint("id", 0, "remoteId")
 	bind.Flags().String("key", "hello", "remote AccessKey")
 	bind.Flags().String("addr", "", "remote addr")
 	bind.Flags().Duration("timeout", time.Second*3, "init timeout")

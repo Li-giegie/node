@@ -1,5 +1,3 @@
-// package nodediscovery 动态节点路由发现
-
 package nodediscovery
 
 import (
@@ -11,291 +9,391 @@ import (
 	"time"
 )
 
-type Node interface {
-	Id() uint32
-	GetAllConn() []iface.Conn
-	GetAllId() []uint32
-	GetConn(id uint32) (iface.Conn, bool)
-	iface.Router
+func NewNodeDiscovery(protoType uint8, node Node, MaxRouteHop uint8, clearExistCacheTime time.Duration) NodeDiscoveryProtocol {
+	p := &NodeDiscovery{
+		node:                node,
+		protoType:           protoType,
+		MaxRouteHop:         MaxRouteHop,
+		Router:              NewRouter(),
+		nodeTab:             NewNodeTable(),
+		existCache:          NewClearMap(),
+		clearExistCacheTime: clearExistCacheTime,
+	}
+	node.AddOnConnection(p.OnConnection)
+	node.AddOnCustomMessage(p.OnCustomMessage)
+	node.AddOnClosed(p.OnClosed)
+	node.AddOnNoRouteMessage(p.OnNoRouteMessage)
+	unixNao := time.Now().UnixNano()
+	for _, conn := range node.GetAllConn() {
+		p.nodeTab.AddNode(node.Id(), conn.RemoteId(), unixNao)
+	}
+	return p
 }
 
 type NodeDiscovery struct {
-	ProtoMsgType uint8
-	Node         Node
-	MaxHop       uint8
-	counter      uint32
-	existTab     *existTab
+	protoType           uint8
+	idCounter           uint32
+	counter             uint32
+	MaxRouteHop         uint8
+	clearExistCacheTime time.Duration
+	node                Node
+	nodeTab             *NodeTable
+	existCache          *ClearMap
+	*Router
 }
 
-func NewNodeDiscovery(ProtoMsgType uint8, node Node, maxHop, existTabMaxRecordNum uint8) *NodeDiscovery {
-	if existTabMaxRecordNum == 0 {
-		existTabMaxRecordNum = 10
-	}
-	return &NodeDiscovery{
-		ProtoMsgType: ProtoMsgType,
-		Node:         node,
-		MaxHop:       maxHop,
-		existTab: &existTab{
-			m:            make(map[uint32]*existContainer),
-			maxRecordNum: existTabMaxRecordNum,
+func (p *NodeDiscovery) OnConnection(conn iface.Conn) {
+	unixNao := time.Now().UnixNano()
+	id := conn.RemoteId()
+	p.nodeTab.AddNode(p.node.Id(), id, unixNao)
+	p.broadcast(p.initProtoMsg(Action_AddNode, []*NodeInfo{
+		{
+			RootNodeId: p.node.Id(),
+			SubNodeInfo: []*SubInfo{
+				{
+					Id:      id,
+					UnixNao: unixNao,
+				},
+			},
 		},
+	}), 0, id)
+	// 如果是桥接类型节点则发送本地所有节点和本地路由
+	if conn.NodeType() == uint8(node.NodeType_Bridge) {
+		p.existCache.Remove(id)
+		p.WriteMsg(conn, 0, p.initProtoMsg(Action_AddNode, p.nodeTab.GetAllNodeInfo()).Encode())
 	}
 }
 
-func (q *NodeDiscovery) createProtoMsg(action uint8, nodeList []uint32, routes []*Route) *ProtoMsg {
-	return &ProtoMsg{
-		Id:       atomic.AddUint32(&q.counter, 1),
-		SrcId:    q.Node.Id(),
-		Action:   action,
-		NodeList: nodeList,
-		Routes:   routes,
-		Counter:  0,
-		UnixNano: time.Now().UnixNano(),
+func (p *NodeDiscovery) OnCustomMessage(ctx iface.Context) {
+	if ctx.Type() != p.protoType {
+		return
 	}
+
+	p.counter++
+	if p.counter%100 == 0 {
+		go p.existCache.Clean(p.clearExistCacheTime)
+	}
+	if ctx.Hop() == 255 || ctx.Hop() >= p.MaxRouteHop && p.MaxRouteHop > 0 {
+		return
+	}
+	var msg ProtoMsg
+	if err := msg.Decode(ctx.Data()); err != nil {
+		return
+	}
+	if exist := p.existCache.Add(uint64(msg.SrcId)<<32|uint64(msg.Id), time.Now().UnixNano()); exist {
+		return
+	}
+	switch msg.Action {
+	case Action_AddNode:
+		for _, info := range msg.NInfo {
+			for _, subInfo := range info.SubNodeInfo {
+				p.nodeTab.AddNode(info.RootNodeId, subInfo.Id, subInfo.UnixNao)
+			}
+		}
+	case Action_RemoveNode:
+		for _, info := range msg.NInfo {
+			for _, subInfo := range info.SubNodeInfo {
+				p.existCache.Remove(subInfo.Id)
+				p.nodeTab.RemoveNode(info.RootNodeId, subInfo.Id, subInfo.UnixNao)
+				p.Router.RemoveRouteWithDst(subInfo.Id)
+				p.Router.RemoveRouteWithVia(subInfo.Id)
+				p.Router.RemoveRouteWithPath(subInfo.Id)
+			}
+		}
+	default:
+		return
+	}
+	p.broadcast(&msg, ctx.Hop(), ctx.SrcId(), msg.SrcId)
 }
 
-func (q *NodeDiscovery) broadcast(m *ProtoMsg, filter ...uint32) {
+func (p *NodeDiscovery) OnClosed(conn iface.Conn, err error) {
+	id := conn.RemoteId()
+	unixNao := time.Now().UnixNano()
+	p.existCache.Remove(id)
+	p.nodeTab.RemoveNode(p.node.Id(), id, unixNao)
+	p.Router.RemoveRouteWithDst(id)
+	p.Router.RemoveRouteWithVia(id)
+	p.Router.RemoveRouteWithPath(id)
+	p.broadcast(p.initProtoMsg(Action_RemoveNode, []*NodeInfo{
+		{
+			RootNodeId: p.node.Id(),
+			SubNodeInfo: []*SubInfo{
+				{
+					Id:      id,
+					UnixNao: unixNao,
+				},
+			},
+		},
+	}), 0)
+}
+
+func (p *NodeDiscovery) OnNoRouteMessage(ctx iface.Context) {
+	if ctx.Hop() >= 255 || ctx.Hop() > p.MaxRouteHop && p.MaxRouteHop > 0 {
+		return
+	}
+	empty, exist := p.GetRoute(ctx.DestId())
+	if !exist {
+		_ = ctx.CustomReply(message.MsgType_ReplyErrConnNotExist, nil)
+		return
+	}
+	conn, exist := p.node.GetConn(empty.via)
+	if !exist {
+		_ = ctx.CustomReply(message.MsgType_ReplyErrConnNotExist, nil)
+		return
+	}
+	_, _ = conn.WriteMsg(&message.Message{
+		Type:   ctx.Type(),
+		Hop:    ctx.Hop(),
+		Id:     ctx.Id(),
+		SrcId:  ctx.SrcId(),
+		DestId: ctx.DestId(),
+		Data:   ctx.Data(),
+	})
+}
+
+func (p *NodeDiscovery) initProtoMsg(action uint8, info []*NodeInfo) *ProtoMsg {
+	m := ProtoMsg{
+		Id:     atomic.AddUint32(&p.idCounter, 1),
+		SrcId:  p.node.Id(),
+		Action: action,
+		NInfo:  info,
+	}
+	p.existCache.Add(uint64(p.node.Id())<<32|uint64(m.Id), time.Now().UnixNano())
+	return &m
+}
+
+func (p *NodeDiscovery) broadcast(m *ProtoMsg, hop uint8, filterId ...uint32) {
+	var has bool
 	data := m.Encode()
-	conns := q.Node.GetAllConn()
-	q.existTab.Add(m.SrcId, m.Id)
-	var ok bool
+	conns := p.node.GetAllConn()
 	for _, conn := range conns {
-		if conn.NodeType() != uint8(node.NodeType_Bridge) {
+		if conn.NodeType() == uint8(node.NodeType_Base) {
 			continue
 		}
-		ok = true
-		for _, u := range filter {
-			if u == conn.RemoteId() {
-				ok = false
+		has = false
+		for _, id := range filterId {
+			if id == conn.RemoteId() {
+				has = true
 				break
 			}
 		}
-		if !ok {
+		if has {
 			continue
 		}
-		q.send(conn, data)
+		p.WriteMsg(conn, hop, data)
 	}
 }
 
-func (q *NodeDiscovery) send(conn iface.Conn, data []byte) {
+func (p *NodeDiscovery) WriteMsg(conn iface.Conn, hop uint8, data []byte) {
 	_, _ = conn.WriteMsg(&message.Message{
-		Type:   q.ProtoMsgType,
+		Type:   p.protoType,
+		Hop:    hop,
 		SrcId:  conn.LocalId(),
 		DestId: conn.RemoteId(),
 		Data:   data,
 	})
 }
 
-func (q *NodeDiscovery) OnConnection(conn iface.Conn) {
-	q.Node.RemoveRouteWithDst(conn.RemoteId())
-	q.broadcast(q.createProtoMsg(ACTION_PUSH, []uint32{conn.RemoteId()}, nil), conn.RemoteId())
-	if conn.NodeType() == uint8(node.NodeType_Bridge) {
-		q.send(conn, q.createProtoMsg(ACTION_PULL, nil, nil).Encode())
+type bfsValue struct {
+	val     uint32
+	unixNao int64
+	paths   []uint32
+}
+
+func (p *NodeDiscovery) BFS(target uint32) ([]uint32, int64, bool) {
+	p.nodeTab.l.RLock()
+	defer p.nodeTab.l.RUnlock()
+	id := p.node.Id()
+	queue := []*bfsValue{{val: id, paths: []uint32{id}}}
+	exist := map[uint32]struct{}{id: {}}
+	for len(queue) > 0 {
+		current := queue[0]
+		if current.val == target {
+			return current.paths, current.unixNao, true
+		}
+		queue = queue[1:]
+		m2, ok := p.nodeTab.Cache[current.val]
+		if !ok {
+			continue
+		}
+		if unixNao, ok := m2[target]; ok {
+			return append(current.paths, target), unixNao, true
+		}
+		for u, unixNao := range p.nodeTab.Cache[current.val] {
+			if _, ok = exist[u]; !ok {
+				queue = append(queue, &bfsValue{val: u, unixNao: unixNao, paths: append(current.paths, u)})
+				exist[u] = struct{}{}
+			}
+		}
+	}
+	return nil, 0, false
+}
+
+func (p *NodeDiscovery) GetRoute(dst uint32) (*RouteEmpty, bool) {
+	if dst == p.node.Id() {
+		return nil, false
+	}
+	empty, ok := p.Router.GetRoute(dst)
+	if ok {
+		return empty, true
+	}
+	fullPath, unixNao, ok := p.BFS(dst)
+	if ok {
+		hop := len(fullPath) - 1
+		if hop <= 0 || hop > 255 || hop > int(p.MaxRouteHop) {
+			return nil, false
+		}
+		p.AddRouteWithFullPath(dst, fullPath[1], uint8(hop), unixNao, fullPath)
+		return &RouteEmpty{
+			dst:      dst,
+			via:      fullPath[1],
+			hop:      uint8(hop),
+			duration: time.Duration(unixNao),
+			fullPath: fullPath,
+		}, true
+	}
+	return nil, false
+}
+
+func (p *NodeDiscovery) RangeNode(callback func(root uint32, sub []*SubInfo)) {
+	for _, info := range p.nodeTab.GetAllNodeInfo() {
+		callback(info.RootNodeId, info.SubNodeInfo)
 	}
 }
 
-func (q *NodeDiscovery) OnCustomMessage(ctx iface.Context) {
-	if ctx.Type() != q.ProtoMsgType {
-		return
-	}
-	ctx.Stop()
-	var m ProtoMsg
-	var exist bool
-	if err := m.Decode(ctx.Data()); err != nil {
-		return
-	}
-	if m.Counter >= 255 || q.MaxHop > 0 && m.Counter > q.MaxHop {
-		return
-	}
-	if exist = q.existTab.Exist(m.SrcId, m.Id); exist {
-		return
-	}
-	q.existTab.Add(m.SrcId, m.Id)
-	m.Counter++
-	switch m.Action {
-	case ACTION_PULL:
-		tmpIds := q.Node.GetAllId()
-		routes := q.getRoutes()
-		if len(tmpIds) == 0 && len(routes) == 0 {
-			return
-		}
-		ids := make([]uint32, 0, len(tmpIds))
-		for i := 0; i < len(tmpIds); i++ {
-			if tmpIds[i] != ctx.SrcId() {
-				ids = append(ids, tmpIds[i])
-			}
-		}
-		if len(ids) > 0 {
-			_ = ctx.CustomReply(q.ProtoMsgType, q.createProtoMsg(ACTION_PUSH, ids, routes).Encode())
-		}
-	case ACTION_PUSH:
-		rs := make([]*Route, 0, len(m.Routes))
-		for _, route := range m.Routes {
-			route.Hop++
-			if q.addRoute(route.Dst, ctx.SrcId(), route.Hop, time.Duration(m.UnixNano)) {
-				rs = append(rs, &Route{
-					Dst: route.Dst,
-					Hop: route.Hop,
-				})
-			}
-		}
-		ids := make([]uint32, 0, len(m.NodeList))
-		for _, dst := range m.NodeList {
-			if q.addRoute(dst, ctx.SrcId(), m.Counter, time.Duration(m.UnixNano)) {
-				ids = append(ids, dst)
-			}
-		}
-		m.NodeList = ids
-		m.Routes = rs
-		filterNodes := make([]uint32, 0, len(m.NodeList)+2)
-		filterNodes = append(filterNodes, m.NodeList...)
-		filterNodes = append(filterNodes, ctx.SrcId())
-		filterNodes = append(filterNodes, m.SrcId)
-		q.broadcast(&m, filterNodes...)
-	case ACTION_DELETE:
-		q.broadcast(&m, ctx.SrcId(), m.SrcId)
-		// 删除路由前，保存经过该路由的所有节点信息，如果当前节点可以到的则广播路由
-		var viaDelRoute []uint32
-		for _, dst := range m.NodeList {
-			tmpViaRoute := q.Node.GetRouteWithVia(dst)
-			if q.Node.RemoveRouteWithCallback(dst, func(info iface.RouteInfo) (isDel bool) {
-				return m.UnixNano > int64(info.Activation())
-			}) {
-				viaDelRoute = append(viaDelRoute, tmpViaRoute...)
-				q.Node.RemoveRouteWithVia(dst)
-				q.existTab.Delete(dst)
-			}
-		}
-		otherRoute := make([]uint32, 0)
-		for _, u := range viaDelRoute {
-			if _, exist = q.Node.GetConn(u); exist {
-				otherRoute = append(otherRoute, u)
-			}
-		}
-		if len(otherRoute) > 0 {
-			q.broadcast(q.createProtoMsg(ACTION_PUSH, otherRoute, nil))
-		}
-	case ACTION_QUERY:
-		var ids, noIds []uint32
-		var rs []*Route
-		for _, u := range m.NodeList {
-			if _, exist = q.Node.GetConn(u); exist {
-				ids = append(ids, u)
-			} else {
-				noIds = append(noIds, u)
-			}
-		}
-		if len(ids) > 0 || len(rs) > 0 {
-			_ = ctx.CustomReply(q.ProtoMsgType, q.createProtoMsg(ACTION_PUSH, ids, rs).Encode())
-		}
-		if len(noIds) > 0 {
-			m.NodeList = noIds
-			q.broadcast(&m, ctx.SrcId(), m.SrcId)
-		}
+func NewNodeTable() *NodeTable {
+	return &NodeTable{
+		Cache: make(map[uint32]map[uint32]int64),
+		l:     sync.RWMutex{},
 	}
 }
 
-func (q *NodeDiscovery) addRoute(dst, via uint32, hop uint8, d time.Duration) bool {
-	if q.Node.Id() == dst {
-		return false
-	} else if _, exist := q.Node.GetConn(dst); exist {
-		return false
-	}
-	return q.Node.AddRoute(dst, via, hop, d)
+type NodeTable struct {
+	// root-node -> sub-node -> node-unixNao
+	Cache map[uint32]map[uint32]int64
+	l     sync.RWMutex
 }
 
-func (q *NodeDiscovery) OnClose(conn iface.Conn, err error) {
-	id := conn.RemoteId()
-	viaIds := q.Node.GetRouteWithVia(id)
-	q.Node.RemoveRouteWithDst(id)
-	q.Node.RemoveRouteWithVia(id)
-	q.broadcast(q.createProtoMsg(ACTION_DELETE, append(viaIds, id), nil))
-	q.existTab.Delete(conn.RemoteId())
-	if len(viaIds) > 0 {
-		q.broadcast(q.createProtoMsg(ACTION_QUERY, viaIds, nil))
+func (tab *NodeTable) AddNode(rootId uint32, subId uint32, subUnixNao int64) {
+	tab.l.Lock()
+	defer tab.l.Unlock()
+	subTab, ok := tab.Cache[rootId]
+	if !ok {
+		tab.Cache[rootId] = map[uint32]int64{subId: subUnixNao}
+		return
 	}
+	if u, ok := subTab[subId]; ok && u > subUnixNao {
+		return
+	}
+	subTab[subId] = subUnixNao
 }
 
-func (q *NodeDiscovery) getRoutes() []*Route {
-	var rs []*Route
-	q.Node.RangeRoute(func(info iface.RouteInfo) {
-		rs = append(rs, &Route{
-			Dst: info.Dst(),
-			Hop: info.Hop(),
+// RemoveNode 移除根节点中的节点
+func (tab *NodeTable) RemoveNode(rootId uint32, subId uint32, subUnixNao int64) {
+	tab.l.Lock()
+	defer tab.l.Unlock()
+	rootNode, ok := tab.Cache[rootId]
+	if !ok {
+		return
+	}
+	unixNao, ok := rootNode[subId]
+	if !ok || unixNao > subUnixNao {
+		return
+	}
+	delete(rootNode, subId)
+	if len(rootNode) == 0 {
+		delete(tab.Cache, rootId)
+	}
+	subTab, ok := tab.Cache[subId]
+	if !ok {
+		return
+	}
+	for subTabId, _ := range subTab {
+		subTab, ok = tab.Cache[subTabId]
+		if ok {
+			delete(subTab, subId)
+			if len(subTab) == 0 {
+				delete(tab.Cache, subTabId)
+			}
+		}
+	}
+	delete(tab.Cache, subId)
+}
+
+func (tab *NodeTable) GetAllNodeInfo() []*NodeInfo {
+	tab.l.RLock()
+	defer tab.l.RUnlock()
+	res := make([]*NodeInfo, 0, len(tab.Cache))
+	for rootId, info := range tab.Cache {
+		subInfo := make([]*SubInfo, 0, len(info))
+		for id, unixNao := range info {
+			subInfo = append(subInfo, &SubInfo{
+				Id:      id,
+				UnixNao: unixNao,
+			})
+		}
+		res = append(res, &NodeInfo{
+			RootNodeId:  rootId,
+			SubNodeInfo: subInfo,
 		})
-	})
-	return rs
-}
-
-type existTab struct {
-	m            map[uint32]*existContainer
-	l            sync.RWMutex
-	maxRecordNum uint8
-}
-
-func (e *existTab) Add(nodeId, ProtoMsgId uint32) {
-	e.l.Lock()
-	ec, ok := e.m[nodeId]
-	if !ok {
-		ec = &existContainer{Size: e.maxRecordNum, Record: make([]uint32, e.maxRecordNum)}
 	}
-	ec.Add(ProtoMsgId)
-	e.m[nodeId] = ec
-	e.l.Unlock()
+	return res
 }
 
-func (e *existTab) Delete(nodeId uint32) {
-	e.l.Lock()
-	delete(e.m, nodeId)
-	e.l.Unlock()
+type ClearMap struct {
+	// k -> unixNao
+	cache map[uint64]int64
+	sync.RWMutex
 }
 
-func (e *existTab) Exist(nodeId, ProtoMsgId uint32) bool {
-	e.l.RLock()
-	ec, ok := e.m[nodeId]
-	e.l.RUnlock()
-	if !ok {
-		return false
+func NewClearMap() *ClearMap {
+	return &ClearMap{
+		cache:   make(map[uint64]int64),
+		RWMutex: sync.RWMutex{},
 	}
-	return ec.Exist(ProtoMsgId)
 }
 
-type existContainer struct {
-	Size   uint8
-	Record []uint32
-	Index  uint8
-}
-
-func (c *existContainer) Add(n uint32) {
-	if c.Index < c.Size {
-		c.Record[c.Index] = n
-		c.Index++
-		return
+// Clean 清理value（unixNao）与当前时间差大于timeout的key
+func (m *ClearMap) Clean(timeout time.Duration) {
+	var timeoutKey []uint64
+	m.RLock()
+	for u, i := range m.cache {
+		if time.Duration(time.Now().UnixNano()-i) >= timeout {
+			timeoutKey = append(timeoutKey, u)
+		}
 	}
-	copy(c.Record, c.Record[1:])
-	c.Record[c.Size-1] = n
+	m.RUnlock()
+	if len(timeoutKey) > 0 {
+		m.Lock()
+		for _, u := range timeoutKey {
+			delete(m.cache, u)
+		}
+		m.Unlock()
+	}
 }
 
-func (c *existContainer) Remove(n uint32) {
-	for i := uint8(0); i < c.Index; i++ {
-		if n == c.Record[i] {
-			copy(c.Record, c.Record[:i])
-			copy(c.Record, c.Record[i+1:])
-			c.Index--
-			break
+func (m *ClearMap) Add(key uint64, unixNao int64) (isAdd bool) {
+	m.Lock()
+	defer m.Unlock()
+	if _, isAdd = m.cache[key]; !isAdd {
+		m.cache[key] = unixNao
+	}
+	return
+}
+
+func (m *ClearMap) Remove(k uint32) {
+	m.Lock()
+	defer m.Unlock()
+	for u, _ := range m.cache {
+		if k == uint32(u>>32) {
+			delete(m.cache, u)
 		}
 	}
 }
 
-func (c *existContainer) Exist(n uint32) bool {
-	for i := uint8(0); i < c.Index; i++ {
-		if c.Record[i] == n {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *existContainer) GetAll() []uint32 {
-	return c.Record[:c.Index]
+func (m *ClearMap) Get(k uint64) (int64, bool) {
+	m.RLock()
+	defer m.RUnlock()
+	m2, ok := m.cache[k]
+	return m2, ok
 }

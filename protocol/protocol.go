@@ -1,12 +1,10 @@
 package protocol
 
 import (
-	"context"
 	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/message"
 	"github.com/Li-giegie/node/protocol/hello"
 	"github.com/Li-giegie/node/protocol/nodediscovery"
-	"io"
 	"time"
 )
 
@@ -18,55 +16,16 @@ func GetMsgType() uint8 {
 }
 
 var (
-	protoMsgType_Hello_Send    = GetMsgType()
-	protoMsgType_Hello_Reply   = GetMsgType()
+	protoMsgType_Hello         = GetMsgType()
 	protoMsgType_NodeDiscovery = GetMsgType()
 )
 
-type HelloProtocol interface {
-	KeepAlive(c iface.Conn)
-	KeepAliveMultiple(conns hello.Conns)
-	Stop()
+// NewHelloProtocol 创建hello协议，h 参数为节点、interval 检查是否超时的间隔时间、timeout超时时间后发送心跳、timeoutClose超时多久后断开连接，该协议需要在节点启动前使用，否则可能无效
+func NewHelloProtocol(h iface.Handler, interval, timeout, timeoutClose time.Duration) hello.HelloProtocol {
+	return hello.NewHelloProtocol(protoMsgType_Hello, h, interval, timeout, timeoutClose)
 }
 
-func NewHelloProtocol(h iface.Handler, interval time.Duration, timeout time.Duration, timeoutClose time.Duration, output io.Writer) HelloProtocol {
-	p := hello.HelloProtocol{
-		HelloProtocolMsgType_Send:  protoMsgType_Hello_Send,
-		HelloProtocolMsgType_Reply: protoMsgType_Hello_Reply,
-		Timeout:                    timeout,
-		TimeoutClose:               timeoutClose,
-		Output:                     output,
-		Ticker:                     time.NewTicker(interval),
-	}
-	h.AddOnCustomMessage(p.OnCustomMessage)
-	return &p
-}
-
-func StartHelloProtocol(ctx context.Context, conn iface.Conn, h iface.Handler, interval time.Duration, timeout time.Duration, timeoutClose time.Duration, output io.Writer) {
-	p := NewHelloProtocol(h, interval, timeout, timeoutClose, output)
-	go p.KeepAlive(conn)
-	go func() {
-		if ctx != nil {
-			<-ctx.Done()
-			p.Stop()
-		}
-	}()
-}
-
-func StartMultipleNodeHelloProtocol(ctx context.Context, conns hello.Conns, h iface.Handler, interval time.Duration, timeout time.Duration, timeoutClose time.Duration, output io.Writer) {
-	p := NewHelloProtocol(h, interval, timeout, timeoutClose, output)
-	go p.KeepAliveMultiple(conns)
-	go func() {
-		if ctx != nil {
-			<-ctx.Done()
-			p.Stop()
-		}
-	}()
-}
-
-func StartDiscoveryProtocol(maxHop uint8, h iface.Handler, n nodediscovery.Node) {
-	p := nodediscovery.NewNodeDiscovery(protoMsgType_NodeDiscovery, n, maxHop, 10)
-	h.AddOnConnection(p.OnConnection)
-	h.AddOnCustomMessage(p.OnCustomMessage)
-	h.AddOnClosed(p.OnClose)
+// NewNodeDiscoveryProtocol n 节点 maxHop 最大跳数
+func NewNodeDiscoveryProtocol(n nodediscovery.Node) nodediscovery.NodeDiscoveryProtocol {
+	return nodediscovery.NewNodeDiscovery(protoMsgType_NodeDiscovery, n, 32, time.Second*15)
 }

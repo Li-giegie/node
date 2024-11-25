@@ -3,6 +3,7 @@ package iface
 type Context interface {
 	Id() uint32
 	Type() uint8
+	Hop() uint8
 	SrcId() uint32
 	DestId() uint32
 	Data() []byte
@@ -16,6 +17,6 @@ type Context interface {
 	CustomReply(typ uint8, data []byte) error
 	// Stop 停止执行之后的回调
 	Stop()
-	// Next 返回是否可以继续执行
+	// Next 返回是否可以继续执行后续的回调
 	Next() bool
 }

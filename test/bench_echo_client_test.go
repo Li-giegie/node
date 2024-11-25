@@ -12,27 +12,27 @@ import (
 	"time"
 )
 
-var echoConn iface.Client
+var echoConn iface.Conn
 
 func Dial() {
-	conn, err := net.Dial("tcp", "0.0.0.0:8000")
+	netConn, err := net.Dial("tcp", "0.0.0.0:8000")
 	if err != nil {
 		panic(err)
 	}
-	echoConn = node.NewClient(conn, node.CliConf{
-		ReaderBufSize:   4096,
-		WriterBufSize:   4096,
-		WriterQueueSize: 1024,
-		MaxMsgLen:       0xffffff,
-		ClientIdentity: &node.ClientIdentity{
-			Id:            1234,
-			RemoteAuthKey: []byte("hello"),
-			Timeout:       time.Second,
-		},
+	stopC := make(chan struct{})
+	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), Timeout: time.Second * 6}, nil)
+	c.AddOnMessage(func(ctx iface.Context) {
+		fmt.Println(ctx.String())
+		ctx.Reply(ctx.Data())
 	})
-	if err = echoConn.Start(); err != nil {
+	c.AddOnClosed(func(conn iface.Conn, err error) {
+		stopC <- struct{}{}
+	})
+	conn, err := c.Start(netConn)
+	if err != nil {
 		panic(err)
 	}
+	echoConn = conn
 	time.Sleep(time.Second)
 }
 

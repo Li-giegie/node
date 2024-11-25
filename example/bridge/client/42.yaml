@@ -1,8 +1,0 @@
-id: 42
-raddr: 0.0.0.0:8040
-helloprotocol:
-    enable: true
-    enablestdout: true
-    interval: 3s
-    timeout: 15s
-    timeoutclose: 30s

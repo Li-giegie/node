@@ -3,9 +3,10 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/iface"
+	"github.com/Li-giegie/node/protocol/nodediscovery"
 	rabbit "github.com/Li-giegie/rabbit-cli"
+	"time"
 )
 
 var list = &rabbit.Cmd{
@@ -21,12 +22,11 @@ func init() {
 		Name:        "conn",
 		Description: "输出连接数",
 		RunE: func(c *rabbit.Cmd, args []string) error {
-			i := c.Context().Value("server")
-			if i == nil {
+			srv := c.Context().Value("server").(iface.Server)
+			if srv == nil {
 				return errors.New("server is null")
 			}
-			srv := i.(*node.Server)
-			for i2, conn := range srv.ConnManager.GetAll() {
+			for i2, conn := range srv.GetAllConn() {
 				fmt.Println(i2, conn.RemoteId())
 			}
 			return nil
@@ -37,12 +37,13 @@ func init() {
 		Description: "",
 		Run:         nil,
 		RunE: func(c *rabbit.Cmd, args []string) error {
-			i := c.Context().Value("server")
-			if i == nil {
+			ndp := c.Context().Value("ndp").(nodediscovery.NodeDiscoveryProtocol)
+			if ndp == nil {
 				return errors.New("server is null")
 			}
-			i.(iface.Server).RangeRoute(func(info iface.RouteInfo) {
-				fmt.Println(info.String())
+			ndp.RangeRoute(func(empty *nodediscovery.RouteEmpty) bool {
+				fmt.Println("dst", empty.Dst(), "via", empty.Via(), "date-time", time.UnixMicro(empty.Duration().Microseconds()).Format("2006-01-02 15:04:05"), "hop", empty.Hop(), "full-path", empty.FullPath())
+				return true
 			})
 			return nil
 		},

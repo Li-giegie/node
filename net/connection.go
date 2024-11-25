@@ -19,8 +19,8 @@ func NewConn(localId, remoteId uint32, conn net.Conn, revChan map[uint32]chan *m
 	c.revLock = revLock
 	c.localId = localId
 	c.conn = conn
-	c.activate = time.Now().UnixMilli()
-	c.MaxMsgLen = maxMsgLen
+	c.activate = time.Duration(time.Now().UnixNano())
+	c.maxMsgLen = maxMsgLen
 	c.msgIdCounter = msgIdCounter
 	c.WriterQueue = NewWriteQueue(conn, writerQueueSize, wBufSize)
 	c.Reader = bufio.NewReaderSize(c.conn, rBufSize)
@@ -33,16 +33,15 @@ type Connect struct {
 	nodeType     uint8
 	localId      uint32
 	remoteId     uint32
-	activate     int64
-	MaxMsgLen    uint32
+	maxMsgLen    uint32
 	msgIdCounter *uint32
+	activate     time.Duration
 	revChan      map[uint32]chan *message.Message
 	revLock      *sync.Mutex
 	conn         net.Conn
-	isClosed     bool
+	headerBuf    []byte
 	*WriterQueue
 	*bufio.Reader
-	headerBuf []byte
 }
 
 func (c *Connect) ReadMsg() (*message.Message, error) {
@@ -50,6 +49,7 @@ func (c *Connect) ReadMsg() (*message.Message, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.activate = time.Duration(time.Now().UnixNano())
 	var checksum uint16
 	for i := 0; i < message.MsgHeaderLen-2; i++ {
 		checksum += uint16(c.headerBuf[i])
@@ -61,19 +61,18 @@ func (c *Connect) ReadMsg() (*message.Message, error) {
 		_, _ = c.WriteMsg(&m)
 		return nil, DEFAULT_ErrMsgChecksum
 	}
-	dataLen := binary.LittleEndian.Uint32(c.headerBuf[13:17])
-	if dataLen > c.MaxMsgLen && c.MaxMsgLen > 0 {
+	dataLen := binary.LittleEndian.Uint32(c.headerBuf[14:18])
+	if dataLen > c.maxMsgLen && c.maxMsgLen > 0 {
 		m.SrcId, m.DestId = c.localId, m.SrcId
 		m.Type = message.MsgType_ReplyErrLenLimit
 		_, _ = c.WriteMsg(&m)
 		return nil, DEFAULT_ErrMsgLenLimit
 	}
-	c.activate = time.Now().UnixMilli()
-
 	m.Type = c.headerBuf[0]
-	m.Id = binary.LittleEndian.Uint32(c.headerBuf[1:5])
-	m.SrcId = binary.LittleEndian.Uint32(c.headerBuf[5:9])
-	m.DestId = binary.LittleEndian.Uint32(c.headerBuf[9:13])
+	m.Hop = c.headerBuf[1]
+	m.Id = binary.LittleEndian.Uint32(c.headerBuf[2:6])
+	m.SrcId = binary.LittleEndian.Uint32(c.headerBuf[6:10])
+	m.DestId = binary.LittleEndian.Uint32(c.headerBuf[10:14])
 	if dataLen > 0 {
 		m.Data = make([]byte, dataLen)
 		_, err = io.ReadAtLeast(c.Reader, m.Data, int(dataLen))
@@ -86,21 +85,22 @@ func (c *Connect) WriteMsg(m *message.Message) (n int, err error) {
 		return 0, DEFAULT_ErrWriteYourself
 	}
 	msgLen := message.MsgHeaderLen + len(m.Data)
-	if msgLen > int(c.MaxMsgLen) && c.MaxMsgLen > 0 {
+	if msgLen > int(c.maxMsgLen) && c.maxMsgLen > 0 {
 		return 0, DEFAULT_ErrMsgLenLimit
 	}
 	data := make([]byte, msgLen)
 	data[0] = m.Type
-	binary.LittleEndian.PutUint32(data[1:5], m.Id)
-	binary.LittleEndian.PutUint32(data[5:9], m.SrcId)
-	binary.LittleEndian.PutUint32(data[9:13], m.DestId)
-	binary.LittleEndian.PutUint32(data[13:17], uint32(len(m.Data)))
+	data[1] = m.Hop
+	binary.LittleEndian.PutUint32(data[2:6], m.Id)
+	binary.LittleEndian.PutUint32(data[6:10], m.SrcId)
+	binary.LittleEndian.PutUint32(data[10:14], m.DestId)
+	binary.LittleEndian.PutUint32(data[14:18], uint32(len(m.Data)))
 	var checksum uint16
-	for i := 0; i < 17; i++ {
+	for i := 0; i < 18; i++ {
 		checksum += uint16(data[i])
 	}
-	binary.LittleEndian.PutUint16(data[17:], checksum)
-	copy(data[message.MsgHeaderLen:], m.Data)
+	binary.LittleEndian.PutUint16(data[18:], checksum)
+	copy(data[20:], m.Data)
 	return c.WriterQueue.Write(data)
 }
 
@@ -170,7 +170,7 @@ func (c *Connect) request(ctx context.Context, req *message.Message) ([]byte, er
 	}
 }
 
-func (c *Connect) Activate() int64 {
+func (c *Connect) Activate() time.Duration {
 	return c.activate
 }
 
@@ -187,21 +187,16 @@ func (c *Connect) RemoteId() uint32 {
 }
 
 func (c *Connect) InitMsg(data []byte) *message.Message {
-	req := new(message.Message)
-	req.Id = atomic.AddUint32(c.msgIdCounter, 1)
-	req.SrcId = c.localId
-	req.DestId = c.remoteId
-	req.Type = message.MsgType_Send
-	req.Data = data
-	return req
-}
-
-func (c *Connect) IsClosed() bool {
-	return c.isClosed
+	return &message.Message{
+		Type:   message.MsgType_Send,
+		Id:     atomic.AddUint32(c.msgIdCounter, 1),
+		SrcId:  c.localId,
+		DestId: c.remoteId,
+		Data:   data,
+	}
 }
 
 func (c *Connect) Close() error {
-	c.isClosed = true
 	c.WriterQueue.Freed()
 	return c.conn.Close()
 }

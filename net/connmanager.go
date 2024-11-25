@@ -53,16 +53,6 @@ func (s *ConnManager) GetAll() []iface.Conn {
 	return result
 }
 
-func (s *ConnManager) GetAllId() []uint32 {
-	s.l.RLock()
-	result := make([]uint32, 0, len(s.m))
-	for _, conn := range s.m {
-		result = append(result, conn.RemoteId())
-	}
-	s.l.RUnlock()
-	return result
-}
-
 func (s *ConnManager) Len() (n int) {
 	s.l.RLock()
 	n = len(s.m)

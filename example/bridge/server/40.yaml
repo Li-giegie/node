@@ -1,9 +1,0 @@
-addr: 0.0.0.0:8040
-id: 40
-enablenodediscoveryprotocol: true
-helloprotocol:
-    enable: true
-    enablestdout: false
-    interval: 5s
-    timeout: 10s
-    timeoutclose: 30s
