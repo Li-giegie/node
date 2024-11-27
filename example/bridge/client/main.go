@@ -28,7 +28,7 @@ func main() {
 	// hello 协议用于连接保活
 	hello := protocol.NewHelloProtocol(c, time.Second, time.Second*5, time.Second*30)
 	defer hello.Stop()
-	c.AddOnConnection(func(conn iface.Conn) {
+	c.AddOnConnect(func(conn iface.Conn) {
 		fmt.Println(conn.RemoteId())
 	})
 	c.AddOnMessage(func(ctx iface.Context) {
@@ -36,7 +36,7 @@ func main() {
 		data := fmt.Sprintf("from %d echo %s", c.Id(), ctx.Data())
 		ctx.Reply([]byte(data))
 	})
-	c.AddOnClosed(func(conn iface.Conn, err error) {
+	c.AddOnClose(func(conn iface.Conn, err error) {
 		exitC <- struct{}{}
 	})
 	netConn, err := net.Dial("tcp", *rAddr)

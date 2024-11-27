@@ -27,19 +27,15 @@ func NewServer(identity *Identity, c *Config) iface.Server {
 }
 
 type Server struct {
-	id                       uint32
-	authHashKey              []byte
-	authTimeout              time.Duration
-	recvChan                 map[uint32]chan *message.Message
-	recvLock                 sync.Mutex
-	counter                  uint32
-	onConnectionCallback     []func(conn iface.Conn)
-	onMessagesCallback       []func(ctx iface.Context)
-	onCustomMessagesCallback []func(ctx iface.Context)
-	onNoRouteMessageCallback []func(ctx iface.Context)
-	onClosedsCallback        []func(conn iface.Conn, err error) // 连接被关闭调用
-	closeChan                chan struct{}
-	connManage               iface.ConnManager
+	id          uint32
+	authHashKey []byte
+	authTimeout time.Duration
+	recvChan    map[uint32]chan *message.Message
+	recvLock    sync.Mutex
+	counter     uint32
+	closeChan   chan struct{}
+	connManage  iface.ConnManager
+	connectionEvent
 	*Config
 }
 
@@ -85,7 +81,7 @@ func (s *Server) handleAuthenticate(conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
-	if !BytesEqual(s.authHashKey, key) {
+	if !bytesEqual(s.authHashKey, key) {
 		_ = defaultBasicResp.Send(conn, false, "error: key invalid")
 		_ = conn.Close()
 		return
@@ -105,13 +101,13 @@ func (s *Server) handleAuthenticate(conn net.Conn) {
 }
 
 func (s *Server) startConn(c *nodeNet.Connect) {
-	s.handleOnConnections(c)
+	s.onConnect(c)
 	for {
 		msg, err := c.ReadMsg()
 		if err != nil {
 			_ = c.Close()
 			s.connManage.Remove(c.RemoteId())
-			s.handleOnClosed(c, err)
+			s.onClose(c, err)
 			return
 		}
 		msg.Hop++
@@ -119,7 +115,7 @@ func (s *Server) startConn(c *nodeNet.Connect) {
 		if msg.DestId == s.id {
 			switch msg.Type {
 			case message.MsgType_Send:
-				s.handleOnMessages(nodeNet.NewContext(c, msg, true))
+				s.onMessage(nodeNet.NewContext(c, msg, true))
 			case message.MsgType_Reply, message.MsgType_ReplyErr, message.MsgType_ReplyErrConnNotExist, message.MsgType_ReplyErrLenLimit, message.MsgType_ReplyErrCheckSum:
 				s.recvLock.Lock()
 				ch, ok := s.recvChan[msg.Id]
@@ -129,7 +125,7 @@ func (s *Server) startConn(c *nodeNet.Connect) {
 				}
 				s.recvLock.Unlock()
 			default:
-				s.handleOnCustomMessages(nodeNet.NewContext(c, msg, true))
+				s.onCustomMessage(nodeNet.NewContext(c, msg, true))
 			}
 			continue
 		}
@@ -139,72 +135,9 @@ func (s *Server) startConn(c *nodeNet.Connect) {
 				continue
 			}
 		}
-		s.handleOnNoRouteMessage(nodeNet.NewContext(c, msg, true))
+		s.onForwardMessage(nodeNet.NewContext(c, msg, true))
 		continue
 	}
-}
-
-func (s *Server) handleOnConnections(conn iface.Conn) {
-	for _, callback := range s.onConnectionCallback {
-		callback(conn)
-	}
-}
-
-func (s *Server) handleOnMessages(ctx iface.Context) {
-	for _, callback := range s.onMessagesCallback {
-		callback(ctx)
-		if !ctx.Next() {
-			return
-		}
-	}
-}
-
-func (s *Server) handleOnCustomMessages(ctx iface.Context) {
-	for _, callback := range s.onCustomMessagesCallback {
-		callback(ctx)
-		if !ctx.Next() {
-			return
-		}
-	}
-}
-
-func (s *Server) handleOnClosed(conn iface.Conn, err error) {
-	for _, callback := range s.onClosedsCallback {
-		callback(conn, err)
-	}
-}
-
-func (s *Server) handleOnNoRouteMessage(ctx iface.Context) {
-	if len(s.onNoRouteMessageCallback) == 0 {
-		_ = ctx.CustomReply(message.MsgType_ReplyErrConnNotExist, nil)
-		return
-	}
-	for _, callback := range s.onNoRouteMessageCallback {
-		callback(ctx)
-		if !ctx.Next() {
-			return
-		}
-	}
-}
-
-func (s *Server) AddOnConnection(callback func(conn iface.Conn)) {
-	s.onConnectionCallback = append(s.onConnectionCallback, callback)
-}
-
-func (s *Server) AddOnMessage(callback func(conn iface.Context)) {
-	s.onMessagesCallback = append(s.onMessagesCallback, callback)
-}
-
-func (s *Server) AddOnCustomMessage(callback func(conn iface.Context)) {
-	s.onCustomMessagesCallback = append(s.onCustomMessagesCallback, callback)
-}
-
-func (s *Server) AddOnClosed(callback func(conn iface.Conn, err error)) {
-	s.onClosedsCallback = append(s.onClosedsCallback, callback)
-}
-
-func (s *Server) AddOnNoRouteMessage(callback func(conn iface.Context)) {
-	s.onNoRouteMessageCallback = append(s.onNoRouteMessageCallback, callback)
 }
 
 func (s *Server) Bridge(conn net.Conn, remoteId uint32, remoteAuthKey []byte, timeout time.Duration) (err error) {
@@ -258,7 +191,7 @@ func (s *Server) Close() {
 	s.closeChan <- struct{}{}
 }
 
-func BytesEqual(a, b []byte) bool {
+func bytesEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
 	}

@@ -11,7 +11,7 @@ type Config struct {
 	ReaderBufSize int
 	// 写缓冲区大小
 	WriterBufSize int
-	// 最大连接数,客户端节点该字段无效
+	// 最大连接数 <= 0不限制,客户端节点该字段无效
 	MaxConns int
 	// 超过最大连接休眠时长，客户端节点该字段无效
 	MaxConnSleep time.Duration

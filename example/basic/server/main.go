@@ -13,7 +13,7 @@ func main() {
 	// 创建服务端
 	s := node.NewServer(&node.Identity{Id: 8000, Key: []byte("hello"), Timeout: time.Second * 6}, nil)
 	// 通过认证后连接正式建立的回调,同步调用
-	s.AddOnConnection(func(conn iface.Conn) {
+	s.AddOnConnect(func(conn iface.Conn) {
 		log.Println("OnConnection id", conn.RemoteId(), "type", conn.NodeType())
 	})
 	// 收到内置标准类型消息的回调,同步调用
@@ -30,7 +30,7 @@ func main() {
 		log.Println("OnCustomMessage", string(ctx.Data()))
 	})
 	// 连接关闭的后回调,同步调用, 该回调通常用于协议
-	s.AddOnClosed(func(conn iface.Conn, err error) {
+	s.AddOnClose(func(conn iface.Conn, err error) {
 		log.Println("OnClosed", conn.RemoteId(), err)
 	})
 	l, err := net.Listen("tcp", "0.0.0.0:8000")

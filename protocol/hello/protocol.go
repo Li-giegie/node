@@ -43,9 +43,13 @@ const (
 	Hello_ASK
 )
 
+// HelloProtocol
 type HelloProtocol interface {
+	// Stop 停止
 	Stop()
+	// ReStart 重启
 	ReStart()
+	// SetEventCallback 产生的事件回调，在这里可以记录日志
 	SetEventCallback(callback func(action Event_Action, val interface{}))
 }
 
@@ -59,8 +63,8 @@ func NewHelloProtocol(protoType uint8, h iface.Handler, interval, timeout, timeo
 		exitChan:     make(chan struct{}, 1),
 	}
 	h.AddOnCustomMessage(p.OnCustomMessage)
-	h.AddOnConnection(p.OnConnection)
-	h.AddOnClosed(p.OnClosed)
+	h.AddOnConnect(p.OnConnect)
+	h.AddOnClose(p.OnClose)
 	go p.Handle()
 	return &p
 }
@@ -76,7 +80,7 @@ type Hello struct {
 	exitChan      chan struct{}
 }
 
-func (h *Hello) OnConnection(conn iface.Conn) {
+func (h *Hello) OnConnect(conn iface.Conn) {
 	h.l.Lock()
 	h.nodeCache[conn.RemoteId()] = conn
 	h.l.Unlock()
@@ -104,7 +108,7 @@ func (h *Hello) OnCustomMessage(ctx iface.Context) {
 	}
 }
 
-func (h *Hello) OnClosed(conn iface.Conn, err error) {
+func (h *Hello) OnClose(conn iface.Conn, err error) {
 	h.l.Lock()
 	delete(h.nodeCache, conn.RemoteId())
 	h.l.Unlock()

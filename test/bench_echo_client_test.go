@@ -25,7 +25,7 @@ func Dial() {
 		fmt.Println(ctx.String())
 		ctx.Reply(ctx.Data())
 	})
-	c.AddOnClosed(func(conn iface.Conn, err error) {
+	c.AddOnClose(func(conn iface.Conn, err error) {
 		stopC <- struct{}{}
 	})
 	conn, err := c.Start(netConn)
@@ -44,14 +44,22 @@ func BenchmarkEchoRequest(b *testing.B) {
 		b.ResetTimer()
 	})
 	ctx := context.Background()
+	wg := sync.WaitGroup{}
 	for i := 0; i < b.N; i++ {
-		_, err := echoConn.Request(ctx, []byte("hello"))
-		if err != nil {
-			b.Error(err)
-			return
-		}
+		wg.Add(1)
+		go func() {
+			_, err := echoConn.Request(ctx, []byte("hello"))
+			if err != nil {
+				b.Error(err)
+				return
+			}
+			wg.Done()
+		}()
 	}
-	//fmt.Println()
+	wg.Wait()
+	//1000000              1572 ns/op             333 B/op         7 allocs/op
+	//93460             13591 ns/op             682 B/op         8 allocs/op
+	//fmt.Println("write Trace", nodeNet.WriteTrace)
 	//net.PrintTrace()
 }
 
@@ -95,5 +103,6 @@ func TestEchoClient(t *testing.T) {
 		}()
 	}
 	w.Wait()
+	//965926
 	fmt.Println(time.Since(t1))
 }

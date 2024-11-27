@@ -28,7 +28,7 @@ func main() {
 		Key:     []byte(*key),
 		Timeout: *timeout,
 	}, nil)
-	s.AddOnConnection(func(conn iface.Conn) {
+	s.AddOnConnect(func(conn iface.Conn) {
 		log.Println("connection", conn.RemoteId(), conn.NodeType())
 	})
 	s.AddOnMessage(func(ctx iface.Context) {

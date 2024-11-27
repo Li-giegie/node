@@ -7,41 +7,45 @@
 ### hello(心跳)协议
 #### 创建协议函数签名
 ```go
-// interval time.Duration      检查超时间隔时间
-// timeout time.Duration       超时时长,如果在单位时间没有读写将会发送心跳包
-// timeoutClose time.Duration  超时断开，超时多久无响应连接断开
-// output io.Writer            心跳包日志输出
-NewHelloProtocol(interval time.Duration, timeout time.Duration, timeoutClose time.Duration, output io.Writer) HelloProtocol
+// NewHelloProtocol 创建hello协议，h 参数为节点、interval 检查是否超时的间隔时间、timeout超时时间后发送心跳、timeoutClose超时多久后断开连接，该协议需要在节点启动前使用，否则可能无效
+NewHelloProtocol(h iface.Handler, interval, timeout, timeoutClose time.Duration) hello.HelloProtocol
 ```
 
 #### Hello协议实现方法
 ```go
-// KeepAlive 单节点保活，通常用在客户端节点
-// KeepAliveMultiple 多节点保活，通常用在服务端节点
-// CustomHandle 需要在连接生命周期同名函数中回调，返回值next决定当前协议是否被执行，如果执行返回false
-// Stop 停止协议
+// HelloProtocol
 type HelloProtocol interface {
-	KeepAlive(c common.Conn)
-	KeepAliveMultiple(conns common.Connections)
-	CustomHandle(ctx common.CustomContext) (next bool)
+	// Stop 停止
 	Stop()
+	// ReStart 重启
+	ReStart()
+	// SetEventCallback 产生的事件回调，在这里可以记录日志
+	SetEventCallback(callback func(action Event_Action, val interface{}))
 }
 ```
 
 ### NodeDiscoveryProtocol(节点动态路由发现)协议
 ### 创建协议函数签名
 ```go
-//n 接口服务端接口已经实现所有方法，但结构需要重新定义，out 输入日志
-NewNodeDiscoveryProtocol(n node_discovery.DiscoveryNode, out io.Writer) NodeDiscoveryProtocol
+// NewNodeDiscoveryProtocol n 节点 maxHop 最大跳数
+NewNodeDiscoveryProtocol(n nodediscovery.Node) nodediscovery.NodeDiscoveryProtocol 
 ```
 #### NodeDiscoveryProtocol协议实现方法
 ```go
-// StartTimingQueryEnableProtoNode [可选] 开启超时查询节点是否启用协议
-// 在回调生命周期调用其他方法
 type NodeDiscoveryProtocol interface {
-	StartTimingQueryEnableProtoNode(ctx context.Context, timeout time.Duration) (err error)
-	Connection(conn common.Conn)
-	CustomHandle(ctx common.Context) (next bool)
-	Disconnect(id uint16, err error)
+	// AddRoute 添加一条静态路由
+	AddRoute(dst, via uint32, hop uint8)
+	// RemoveRoute 删除一条静态路由
+	RemoveRoute(dst, via uint32)
+	// RemoveRouteWithDst 根据目的ID删除一条静态路由
+	RemoveRouteWithDst(dst uint32)
+	// RemoveRouteWithVia 根据下一跳删除一条静态路由
+	RemoveRouteWithVia(via uint32)
+	// GetRoute 获取路由信息
+	GetRoute(dst uint32) (*RouteEmpty, bool)
+	// RangeRoute 遍历互相有过通信的路由，对于没有通信过的节点，可能可达，但并没有计算路由，只有每次去往没去过的节点才会计算路由
+	RangeRoute(callback func(*RouteEmpty) bool)
+	// RangeNode 遍历所有节点
+	RangeNode(callback func(root uint32, sub []*SubInfo))
 }
 ```

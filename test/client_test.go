@@ -22,7 +22,7 @@ func TestClient(t *testing.T) {
 		fmt.Println(ctx.String())
 		ctx.Reply(ctx.Data())
 	})
-	c.AddOnClosed(func(conn iface.Conn, err error) {
+	c.AddOnClose(func(conn iface.Conn, err error) {
 		stopC <- struct{}{}
 	})
 	conn, err := c.Start(netConn)

@@ -11,7 +11,7 @@ import (
 
 func TestEchoServer(t *testing.T) {
 	srv := node.NewServer(&node.Identity{Id: 8000, Key: []byte("hello"), Timeout: time.Second * 6}, nil)
-	srv.AddOnConnection(func(conn iface.Conn) {
+	srv.AddOnConnect(func(conn iface.Conn) {
 		log.Println("OnConnection", conn.RemoteId(), conn.NodeType())
 	})
 	srv.AddOnMessage(func(ctx iface.Context) {
@@ -20,7 +20,7 @@ func TestEchoServer(t *testing.T) {
 	srv.AddOnCustomMessage(func(ctx iface.Context) {
 		log.Println("OnCustomMessage", ctx.String())
 	})
-	srv.AddOnClosed(func(conn iface.Conn, err error) {
+	srv.AddOnClose(func(conn iface.Conn, err error) {
 		log.Println(conn.RemoteId(), err, conn.NodeType())
 	})
 	l, err := net.Listen("tcp", "0.0.0.0:8000")

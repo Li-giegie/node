@@ -30,10 +30,10 @@ type Message struct {
     <td >DataLength 4Byte</td>
   </tr>
   <tr >
-    <td align="center" colspan="5">CheckSum 2Byte</td>
+    <td align="center" colspan="6">CheckSum 2Byte</td>
   </tr>
   <tr >
-    <td align="center" colspan="6">DataLength 4byte + Data</td>
+    <td align="center" colspan="7">Data</td>
   </tr>
 </table>
 

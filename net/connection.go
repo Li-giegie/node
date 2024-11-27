@@ -200,3 +200,11 @@ func (c *Connect) Close() error {
 	c.WriterQueue.Freed()
 	return c.conn.Close()
 }
+
+func (c *Connect) LocalAddr() net.Addr {
+	return c.conn.LocalAddr()
+}
+
+func (c *Connect) RemoteAddr() net.Addr {
+	return c.conn.RemoteAddr()
+}

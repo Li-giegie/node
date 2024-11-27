@@ -4,6 +4,7 @@ import (
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/message"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,10 +20,10 @@ func NewNodeDiscovery(protoType uint8, node Node, MaxRouteHop uint8, clearExistC
 		existCache:          NewClearMap(),
 		clearExistCacheTime: clearExistCacheTime,
 	}
-	node.AddOnConnection(p.OnConnection)
+	node.AddOnConnect(p.OnConnect)
 	node.AddOnCustomMessage(p.OnCustomMessage)
-	node.AddOnClosed(p.OnClosed)
-	node.AddOnNoRouteMessage(p.OnNoRouteMessage)
+	node.AddOnForwardMessage(p.OnForwardMessage)
+	node.AddOnClose(p.OnClose)
 	unixNao := time.Now().UnixNano()
 	for _, conn := range node.GetAllConn() {
 		p.nodeTab.AddNode(node.Id(), conn.RemoteId(), unixNao)
@@ -42,7 +43,7 @@ type NodeDiscovery struct {
 	*Router
 }
 
-func (p *NodeDiscovery) OnConnection(conn iface.Conn) {
+func (p *NodeDiscovery) OnConnect(conn iface.Conn) {
 	unixNao := time.Now().UnixNano()
 	id := conn.RemoteId()
 	p.nodeTab.AddNode(p.node.Id(), id, unixNao)
@@ -68,7 +69,6 @@ func (p *NodeDiscovery) OnCustomMessage(ctx iface.Context) {
 	if ctx.Type() != p.protoType {
 		return
 	}
-
 	p.counter++
 	if p.counter%100 == 0 {
 		go p.existCache.Clean(p.clearExistCacheTime)
@@ -106,7 +106,7 @@ func (p *NodeDiscovery) OnCustomMessage(ctx iface.Context) {
 	p.broadcast(&msg, ctx.Hop(), ctx.SrcId(), msg.SrcId)
 }
 
-func (p *NodeDiscovery) OnClosed(conn iface.Conn, err error) {
+func (p *NodeDiscovery) OnClose(conn iface.Conn, err error) {
 	id := conn.RemoteId()
 	unixNao := time.Now().UnixNano()
 	p.existCache.Remove(id)
@@ -127,8 +127,9 @@ func (p *NodeDiscovery) OnClosed(conn iface.Conn, err error) {
 	}), 0)
 }
 
-func (p *NodeDiscovery) OnNoRouteMessage(ctx iface.Context) {
-	if ctx.Hop() >= 255 || ctx.Hop() > p.MaxRouteHop && p.MaxRouteHop > 0 {
+func (p *NodeDiscovery) OnForwardMessage(ctx iface.Context) {
+	if ctx.Hop() >= 254 || ctx.Hop() > p.MaxRouteHop && p.MaxRouteHop > 0 {
+		log.Println("OnForwardMessage", ctx.Hop())
 		return
 	}
 	empty, exist := p.GetRoute(ctx.DestId())

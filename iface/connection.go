@@ -3,6 +3,7 @@ package iface
 import (
 	"context"
 	"github.com/Li-giegie/node/message"
+	"net"
 	"time"
 )
 
@@ -27,4 +28,6 @@ type Conn interface {
 	Activate() time.Duration
 	// NodeType 节点类型
 	NodeType() uint8
+	LocalAddr() net.Addr
+	RemoteAddr() net.Addr
 }
