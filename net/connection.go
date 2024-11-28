@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"github.com/Li-giegie/node/message"
 	"io"
+	"math"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -57,16 +58,18 @@ func (c *Connect) ReadMsg() (*message.Message, error) {
 	var m message.Message
 	if checksum != binary.LittleEndian.Uint16(c.headerBuf[message.MsgHeaderLen-2:]) {
 		m.SrcId, m.DestId = c.localId, m.SrcId
-		m.Type = message.MsgType_ReplyErrCheckSum
+		m.Type = message.MsgType_ReplyErr
+		m.Data = ErrChecksum
 		_, _ = c.WriteMsg(&m)
-		return nil, DEFAULT_ErrMsgChecksum
+		return nil, ErrChecksum
 	}
 	dataLen := binary.LittleEndian.Uint32(c.headerBuf[14:18])
 	if dataLen > c.maxMsgLen && c.maxMsgLen > 0 {
 		m.SrcId, m.DestId = c.localId, m.SrcId
-		m.Type = message.MsgType_ReplyErrLenLimit
+		m.Type = message.MsgType_ReplyErr
+		m.Data = ErrMaxMsgLen
 		_, _ = c.WriteMsg(&m)
-		return nil, DEFAULT_ErrMsgLenLimit
+		return nil, ErrMaxMsgLen
 	}
 	m.Type = c.headerBuf[0]
 	m.Hop = c.headerBuf[1]
@@ -82,11 +85,11 @@ func (c *Connect) ReadMsg() (*message.Message, error) {
 
 func (c *Connect) WriteMsg(m *message.Message) (n int, err error) {
 	if m.DestId == c.localId {
-		return 0, DEFAULT_ErrWriteYourself
+		return 0, ErrWriteMsgYourself
 	}
 	msgLen := message.MsgHeaderLen + len(m.Data)
 	if msgLen > int(c.maxMsgLen) && c.maxMsgLen > 0 {
-		return 0, DEFAULT_ErrMsgLenLimit
+		return 0, ErrMaxMsgLen
 	}
 	data := make([]byte, msgLen)
 	data[0] = m.Type
@@ -150,23 +153,15 @@ func (c *Connect) request(ctx context.Context, req *message.Message) ([]byte, er
 		return nil, ctx.Err()
 	case resp := <-ch:
 		close(ch)
-		switch resp.Type {
-		case message.MsgType_ReplyErrConnNotExist:
-			return nil, DEFAULT_ErrConnNotExist
-		case message.MsgType_ReplyErrLenLimit:
-			return nil, DEFAULT_ErrMsgLenLimit
-		case message.MsgType_ReplyErrCheckSum:
-			return nil, DEFAULT_ErrMsgChecksum
-		case message.MsgType_ReplyErr:
-			n := binary.LittleEndian.Uint16(resp.Data)
-			if n > maxErrReplySize {
-				return resp.Data[2:], nil
+		if resp.Type == message.MsgType_ReplyErr {
+			n := binary.LittleEndian.Uint32(resp.Data[:4])
+			if n == math.MaxUint32 {
+				return resp.Data[4:], nil
 			}
-			n += 2
-			return resp.Data[n:], &ErrReplyError{b: resp.Data[2:n]}
-		default:
-			return resp.Data, nil
+			n += 4
+			return resp.Data[n:], NodeError(resp.Data[4:n])
 		}
+		return resp.Data, nil
 	}
 }
 

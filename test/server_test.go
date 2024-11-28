@@ -1,6 +1,7 @@
 package test
 
 import (
+	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/iface"
 	"log"
@@ -16,7 +17,7 @@ func TestServer(t *testing.T) {
 	})
 	srv.AddOnMessage(func(ctx iface.Context) {
 		log.Println("OnMessage", ctx.String())
-		ctx.Reply(ctx.Data())
+		fmt.Println(ctx.Reply(ctx.Data()))
 	})
 	l, err := net.Listen("tcp", "0.0.0.0:8000")
 	if err != nil {

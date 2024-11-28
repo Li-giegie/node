@@ -103,7 +103,7 @@ func (h *Hello) OnCustomMessage(ctx iface.Context) {
 	case Hello_ACK:
 		h.callEvent(Event_Action_Receive_ACK, ctx.SrcId())
 	case Hello_ASK:
-		_ = ctx.CustomReply(h.protoType, []byte{Hello_ACK})
+		_ = ctx.ReplyCustom(h.protoType, []byte{Hello_ACK})
 		h.callEvent(Event_Action_Receive_ASK, ctx.DestId())
 	}
 }

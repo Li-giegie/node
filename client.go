@@ -79,7 +79,7 @@ func (c *Client) serve(conn *nodeNet.Connect) {
 		switch msg.Type {
 		case message.MsgType_Send:
 			c.onMessage(nodeNet.NewContext(conn, msg, true))
-		case message.MsgType_Reply, message.MsgType_ReplyErr, message.MsgType_ReplyErrConnNotExist, message.MsgType_ReplyErrLenLimit, message.MsgType_ReplyErrCheckSum:
+		case message.MsgType_Reply, message.MsgType_ReplyErr:
 			c.recvLock.Lock()
 			ch, ok := c.recvChan[msg.Id]
 			if ok {

@@ -2,7 +2,7 @@ package node
 
 import (
 	"github.com/Li-giegie/node/iface"
-	"github.com/Li-giegie/node/message"
+	nodeNet "github.com/Li-giegie/node/net"
 )
 
 type connectionEvent struct {
@@ -45,7 +45,7 @@ func (s *connectionEvent) onClose(conn iface.Conn, err error) {
 
 func (s *connectionEvent) onForwardMessage(ctx iface.Context) {
 	if len(s.onForwardMessages) == 0 {
-		_ = ctx.CustomReply(message.MsgType_ReplyErrConnNotExist, nil)
+		_ = ctx.ReplyError(nodeNet.ErrNodeNotExist, nil)
 		return
 	}
 	for _, callback := range s.onForwardMessages {

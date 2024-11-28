@@ -30,10 +30,13 @@ func TestClient(t *testing.T) {
 		t.Error(err)
 		return
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 	res, err := conn.Request(ctx, []byte("ping"))
-	fmt.Println(string(res), err)
+	fmt.Println("res", string(res))
+	fmt.Printf("err %#v %v\n", err, err)
+	fmt.Println(conn.Forward(context.Background(), 5, []byte("hello")))
 	_ = conn.Close()
 	<-stopC
 }

@@ -8,16 +8,16 @@ import (
 	"time"
 )
 
-var defaultMsgType = message.Null
+var defaultMsgType = message.MsgType_Undefined
 
-func GetMsgType() uint8 {
+func CreateProtocolMsgType() uint8 {
 	defaultMsgType++
 	return defaultMsgType
 }
 
 var (
-	protoMsgType_Hello         = GetMsgType()
-	protoMsgType_NodeDiscovery = GetMsgType()
+	protoMsgType_Hello         = CreateProtocolMsgType()
+	protoMsgType_NodeDiscovery = CreateProtocolMsgType()
 )
 
 // NewHelloProtocol 创建hello协议，h 参数为节点、interval 检查是否超时的间隔时间、timeout超时时间后发送心跳、timeoutClose超时多久后断开连接，该协议需要在节点启动前使用，否则可能无效

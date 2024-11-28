@@ -6,11 +6,9 @@ import "fmt"
 const (
 	MsgType_Send uint8 = iota
 	MsgType_Reply
-	MsgType_ReplyErrConnNotExist
-	MsgType_ReplyErrLenLimit
-	MsgType_ReplyErrCheckSum
 	MsgType_ReplyErr
-	Null
+
+	MsgType_Undefined
 )
 
 const MsgHeaderLen = 1 + 1 + 4 + 4 + 4 + 4 + 2

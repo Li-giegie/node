@@ -4,6 +4,7 @@ import (
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/message"
+	nodeNet "github.com/Li-giegie/node/net"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -134,12 +135,12 @@ func (p *NodeDiscovery) OnForwardMessage(ctx iface.Context) {
 	}
 	empty, exist := p.GetRoute(ctx.DestId())
 	if !exist {
-		_ = ctx.CustomReply(message.MsgType_ReplyErrConnNotExist, nil)
+		_ = ctx.ReplyError(nodeNet.ErrNodeNotExist, nil)
 		return
 	}
 	conn, exist := p.node.GetConn(empty.via)
 	if !exist {
-		_ = ctx.CustomReply(message.MsgType_ReplyErrConnNotExist, nil)
+		_ = ctx.ReplyError(nodeNet.ErrNodeNotExist, nil)
 		return
 	}
 	_, _ = conn.WriteMsg(&message.Message{
