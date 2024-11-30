@@ -2,6 +2,7 @@ package net
 
 import (
 	"encoding/binary"
+	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/message"
 )
 
@@ -9,7 +10,7 @@ type Context struct {
 	*message.Message
 	*Connect
 	once bool
-	next bool
+	Next bool
 }
 
 func (c *Context) Type() uint8 {
@@ -36,17 +37,17 @@ func (c *Context) Data() []byte {
 	return c.Message.Data
 }
 
-func NewContext(connect *Connect, message *message.Message, next bool) *Context {
+func NewContext(connect *Connect, message *message.Message) *Context {
 	return &Context{
 		Message: message,
 		Connect: connect,
-		next:    next,
+		Next:    true,
 	}
 }
 
 // Reply 响应内容，限制回复一次，不要尝试多次回复，多次回复返回 var ErrLimitReply = errors.New("limit reply to one time")
 func (c *Context) Reply(data []byte) (err error) {
-	return c.ReplyCustom(message.MsgType_Reply, data)
+	return c.reply(message.MsgType_Reply, data)
 }
 
 func (c *Context) ReplyError(err error, data []byte) error {
@@ -65,10 +66,14 @@ func (c *Context) ReplyError(err error, data []byte) error {
 	rdata := make([]byte, len(edata)+len(data))
 	copy(rdata, edata)
 	copy(rdata[len(edata):], data)
-	return c.ReplyCustom(message.MsgType_ReplyErr, rdata)
+	return c.reply(message.MsgType_ReplyErr, rdata)
 }
 
-func (c *Context) ReplyCustom(typ uint8, data []byte) (err error) {
+func (c *Context) Conn() iface.Conn {
+	return c.Connect
+}
+
+func (c *Context) reply(typ uint8, data []byte) (err error) {
 	if c.once {
 		return ErrOnce
 	}
@@ -77,16 +82,11 @@ func (c *Context) ReplyCustom(typ uint8, data []byte) (err error) {
 	c.Message.Type = typ
 	c.Message.SrcId, c.Message.DestId = c.Message.DestId, c.Message.SrcId
 	c.Message.Data = data
-	_, err = c.WriteMsg(c.Message)
+	_, err = c.WriteMessage(c.Message)
 	return err
 }
 
-// Next 获取是否进入下一个回调
-func (c *Context) Next() bool {
-	return c.next
-}
-
-// Stop 是否进入下一个回调
+// Stop 终止进入下一个回调
 func (c *Context) Stop() {
-	c.next = false
+	c.Next = false
 }

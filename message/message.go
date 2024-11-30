@@ -4,17 +4,16 @@ import "fmt"
 
 // 标准消息类型
 const (
-	MsgType_Send uint8 = iota
+	MsgType_Default uint8 = iota
 	MsgType_Reply
 	MsgType_ReplyErr
-
 	MsgType_Undefined
 )
 
 const MsgHeaderLen = 1 + 1 + 4 + 4 + 4 + 4 + 2
 
 type Message struct {
-	Type   uint8  //消息类型，不同的协议该值不同
+	Type   uint8  //消息类型，用于特定功能（协议）而不是不同场景，不可滥用，Data字段能解决所有场景
 	Hop    uint8  //消息的跳数
 	Id     uint32 //消息唯一标识
 	SrcId  uint32 //源节点

@@ -36,7 +36,7 @@ var request = &rabbit.Cmd{
 		if !ok {
 			return fmt.Errorf("%d node not exist", id)
 		}
-		res, err := conn.Forward(ctx, uint32(id), []byte(strings.Join(args, " ")))
+		res, err := conn.RequestTo(ctx, uint32(id), []byte(strings.Join(args, " ")))
 		if err != nil {
 			return err
 		}

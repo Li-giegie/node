@@ -5,6 +5,8 @@ import "encoding/json"
 const (
 	Action_AddNode uint8 = iota
 	Action_RemoveNode
+	Action_Query
+	Action_Reply
 )
 
 type NodeInfo struct {

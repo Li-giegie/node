@@ -17,7 +17,7 @@ type Client struct {
 	authTimeout time.Duration
 	recvChan    map[uint32]chan *message.Message
 	recvLock    sync.Mutex
-	connectionEvent
+	eventManager
 	*Config
 }
 
@@ -47,7 +47,7 @@ func (c *Client) Start(conn net.Conn) (iface.Conn, error) {
 }
 
 func (c *Client) authenticate(conn net.Conn) (*nodeNet.Connect, error) {
-	err := defaultBasicReq.Send(conn, c.id, c.remoteId, c.remoteKey, NodeType_Base)
+	err := defaultBasicReq.Send(conn, c.id, c.remoteId, c.remoteKey)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +55,7 @@ func (c *Client) authenticate(conn net.Conn) (*nodeNet.Connect, error) {
 	if err != nil {
 		return nil, err
 	}
-	node := nodeNet.NewConn(c.id, c.remoteId, conn, c.recvChan, &c.recvLock, new(uint32), c.ReaderBufSize, c.WriterBufSize, c.WriterQueueSize, c.MaxMsgLen, uint8(NodeType_Bridge))
+	node := nodeNet.NewConn(c.id, c.remoteId, conn, c.recvChan, &c.recvLock, new(uint32), c.ReaderBufSize, c.WriterBufSize, c.WriterQueueSize, c.MaxMsgLen)
 	if !permit {
 		return nil, errors.New(msg)
 	}
@@ -65,7 +65,7 @@ func (c *Client) authenticate(conn net.Conn) (*nodeNet.Connect, error) {
 func (c *Client) serve(conn *nodeNet.Connect) {
 	c.onConnect(conn)
 	for {
-		msg, err := conn.ReadMsg()
+		msg, err := conn.ReadMessage()
 		if err != nil {
 			_ = conn.Close()
 			c.onClose(conn, err)
@@ -73,12 +73,12 @@ func (c *Client) serve(conn *nodeNet.Connect) {
 		}
 		msg.Hop++
 		if msg.DestId != c.id {
-			c.onForwardMessage(nodeNet.NewContext(conn, msg, true))
+			c.onRouteMessage(nodeNet.NewContext(conn, msg))
 			continue
 		}
 		switch msg.Type {
-		case message.MsgType_Send:
-			c.onMessage(nodeNet.NewContext(conn, msg, true))
+		case message.MsgType_Default:
+			c.onMessage(nodeNet.NewContext(conn, msg))
 		case message.MsgType_Reply, message.MsgType_ReplyErr:
 			c.recvLock.Lock()
 			ch, ok := c.recvChan[msg.Id]
@@ -88,7 +88,7 @@ func (c *Client) serve(conn *nodeNet.Connect) {
 			}
 			c.recvLock.Unlock()
 		default:
-			c.onCustomMessage(nodeNet.NewContext(conn, msg, true))
+			c.onProtocolMessage(nodeNet.NewContext(conn, msg))
 		}
 	}
 }

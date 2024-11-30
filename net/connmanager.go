@@ -17,7 +17,7 @@ func NewConnManager() *ConnManager {
 	}
 }
 
-func (s *ConnManager) Add(id uint32, conn iface.Conn) bool {
+func (s *ConnManager) AddConn(id uint32, conn iface.Conn) bool {
 	s.l.Lock()
 	_, exist := s.m[id]
 	if !exist {
@@ -30,20 +30,20 @@ func (s *ConnManager) Add(id uint32, conn iface.Conn) bool {
 	return exist
 }
 
-func (s *ConnManager) Remove(id uint32) {
+func (s *ConnManager) RemoveConn(id uint32) {
 	s.l.Lock()
 	delete(s.m, id)
 	s.l.Unlock()
 }
 
-func (s *ConnManager) Get(id uint32) (iface.Conn, bool) {
+func (s *ConnManager) GetConn(id uint32) (iface.Conn, bool) {
 	s.l.RLock()
 	v, ok := s.m[id]
 	s.l.RUnlock()
 	return v, ok
 }
 
-func (s *ConnManager) GetAll() []iface.Conn {
+func (s *ConnManager) GetAllConn() []iface.Conn {
 	s.l.RLock()
 	result := make([]iface.Conn, 0, len(s.m))
 	for _, conn := range s.m {

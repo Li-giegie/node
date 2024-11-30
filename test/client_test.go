@@ -37,6 +37,7 @@ func TestClient(t *testing.T) {
 	fmt.Println("res", string(res))
 	fmt.Printf("err %#v %v\n", err, err)
 	fmt.Println(conn.Forward(context.Background(), 5, []byte("hello")))
+	fmt.Println(conn.RequestType(context.Background(), 2, []byte("hello")))
 	_ = conn.Close()
 	<-stopC
 }

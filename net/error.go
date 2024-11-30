@@ -14,4 +14,5 @@ var (
 	ErrNodeNotExist     = NodeError("node not exist")
 	ErrWriteMsgYourself = NodeError("can't send it to yourself")
 	ErrOnce             = NodeError("limit reply to one time")
+	ErrMsgTypeInvalid   = NodeError("message type invalid")
 )

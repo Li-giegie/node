@@ -9,6 +9,7 @@ import (
 	"github.com/Li-giegie/node/example/bridge/server/cmd"
 	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/protocol"
+	"github.com/Li-giegie/node/protocol/hello"
 	"log"
 	"net"
 	"os"
@@ -29,15 +30,23 @@ func main() {
 		Timeout: *timeout,
 	}, nil)
 	s.AddOnConnect(func(conn iface.Conn) {
-		log.Println("connection", conn.RemoteId(), conn.NodeType())
+		log.Println("connection", conn.RemoteId())
 	})
 	s.AddOnMessage(func(ctx iface.Context) {
 		fmt.Println(ctx.String())
 		data := fmt.Sprintf("from %d echo %s", s.Id(), ctx.Data())
 		ctx.Reply([]byte(data))
 	})
-	helloProtocol := protocol.NewHelloProtocol(s, time.Second*5, time.Second*15, time.Second*45)
-	defer helloProtocol.Stop()
+	// 开启hello协议
+	{
+		HP := protocol.NewHelloProtocol(s, time.Second*5, time.Second*15, time.Second*45)
+		// 收集hello协议的事件
+		HP.SetEventCallback(func(action hello.Event_Action, val interface{}) {
+			fmt.Println(action.String(), val)
+		})
+		defer HP.Stop()
+	}
+	// 开启节点发现协议
 	NDP := protocol.NewNodeDiscoveryProtocol(s)
 	l, err := net.Listen("tcp", *addr)
 	if err != nil {

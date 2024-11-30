@@ -50,7 +50,8 @@ func (w *WriterQueue) Write(b []byte) (n int, err error) {
 	return len(b), w.err
 }
 
-func (w *WriterQueue) Freed() {
+func (w *WriterQueue) Close() error {
 	defer func() { recover() }()
 	close(w.queue)
+	return w.err
 }

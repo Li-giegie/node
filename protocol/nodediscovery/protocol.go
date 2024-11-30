@@ -1,11 +1,10 @@
 package nodediscovery
 
 import (
-	"github.com/Li-giegie/node"
+	"context"
 	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/message"
 	nodeNet "github.com/Li-giegie/node/net"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,10 +19,11 @@ func NewNodeDiscovery(protoType uint8, node Node, MaxRouteHop uint8, clearExistC
 		nodeTab:             NewNodeTable(),
 		existCache:          NewClearMap(),
 		clearExistCacheTime: clearExistCacheTime,
+		protocolNode:        make(map[uint32]iface.Conn),
 	}
 	node.AddOnConnect(p.OnConnect)
-	node.AddOnCustomMessage(p.OnCustomMessage)
-	node.AddOnForwardMessage(p.OnForwardMessage)
+	node.AddOnProtocolMessage(p.protoType, p.OnCustomMessage)
+	node.AddOnRouteMessage(p.OnRouteMessage)
 	node.AddOnClose(p.OnClose)
 	unixNao := time.Now().UnixNano()
 	for _, conn := range node.GetAllConn() {
@@ -40,11 +40,17 @@ type NodeDiscovery struct {
 	clearExistCacheTime time.Duration
 	node                Node
 	nodeTab             *NodeTable
+	protocolNode        map[uint32]iface.Conn
+	protocolNodeLock    sync.RWMutex
 	existCache          *ClearMap
 	*Router
 }
 
 func (p *NodeDiscovery) OnConnect(conn iface.Conn) {
+	go p.onConnect(conn)
+}
+
+func (p *NodeDiscovery) onConnect(conn iface.Conn) {
 	unixNao := time.Now().UnixNano()
 	id := conn.RemoteId()
 	p.nodeTab.AddNode(p.node.Id(), id, unixNao)
@@ -60,16 +66,31 @@ func (p *NodeDiscovery) OnConnect(conn iface.Conn) {
 		},
 	}), 0, id)
 	// 如果是桥接类型节点则发送本地所有节点和本地路由
-	if conn.NodeType() == uint8(node.NodeType_Bridge) {
-		p.existCache.Remove(id)
-		p.WriteMsg(conn, 0, p.initProtoMsg(Action_AddNode, p.nodeTab.GetAllNodeInfo()).Encode())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+	// 确定是否开启协议
+	res, err := conn.RequestType(ctx, p.protoType, p.initProtoMsg(Action_Query, nil).Encode())
+	if err != nil {
+		return
 	}
+	var msg ProtoMsg
+	if err = msg.Decode(res); err != nil {
+		return
+	}
+	p.protocolNodeLock.Lock()
+	p.protocolNode[conn.RemoteId()] = conn
+	p.protocolNodeLock.Unlock()
+	p.existCache.Remove(id)
+	for _, info := range msg.NInfo {
+		for _, subInfo := range info.SubNodeInfo {
+			p.nodeTab.AddNode(info.RootNodeId, subInfo.Id, subInfo.UnixNao)
+		}
+	}
+	msg.Action = Action_AddNode
+	p.broadcast(&msg, 0, id)
 }
 
 func (p *NodeDiscovery) OnCustomMessage(ctx iface.Context) {
-	if ctx.Type() != p.protoType {
-		return
-	}
 	p.counter++
 	if p.counter%100 == 0 {
 		go p.existCache.Clean(p.clearExistCacheTime)
@@ -85,6 +106,12 @@ func (p *NodeDiscovery) OnCustomMessage(ctx iface.Context) {
 		return
 	}
 	switch msg.Action {
+	case Action_Query:
+		msg.Action = Action_Reply
+		msg.NInfo = p.nodeTab.GetAllNodeInfo()
+		msg.SrcId = ctx.DestId()
+		_ = ctx.Reply(msg.Encode())
+		return
 	case Action_AddNode:
 		for _, info := range msg.NInfo {
 			for _, subInfo := range info.SubNodeInfo {
@@ -115,6 +142,9 @@ func (p *NodeDiscovery) OnClose(conn iface.Conn, err error) {
 	p.Router.RemoveRouteWithDst(id)
 	p.Router.RemoveRouteWithVia(id)
 	p.Router.RemoveRouteWithPath(id)
+	p.protocolNodeLock.Lock()
+	delete(p.protocolNode, id)
+	p.protocolNodeLock.Unlock()
 	p.broadcast(p.initProtoMsg(Action_RemoveNode, []*NodeInfo{
 		{
 			RootNodeId: p.node.Id(),
@@ -128,9 +158,8 @@ func (p *NodeDiscovery) OnClose(conn iface.Conn, err error) {
 	}), 0)
 }
 
-func (p *NodeDiscovery) OnForwardMessage(ctx iface.Context) {
+func (p *NodeDiscovery) OnRouteMessage(ctx iface.Context) {
 	if ctx.Hop() >= 254 || ctx.Hop() > p.MaxRouteHop && p.MaxRouteHop > 0 {
-		log.Println("OnForwardMessage", ctx.Hop())
 		return
 	}
 	empty, exist := p.GetRoute(ctx.DestId())
@@ -143,7 +172,7 @@ func (p *NodeDiscovery) OnForwardMessage(ctx iface.Context) {
 		_ = ctx.ReplyError(nodeNet.ErrNodeNotExist, nil)
 		return
 	}
-	_, _ = conn.WriteMsg(&message.Message{
+	_, _ = conn.WriteMessage(&message.Message{
 		Type:   ctx.Type(),
 		Hop:    ctx.Hop(),
 		Id:     ctx.Id(),
@@ -167,11 +196,9 @@ func (p *NodeDiscovery) initProtoMsg(action uint8, info []*NodeInfo) *ProtoMsg {
 func (p *NodeDiscovery) broadcast(m *ProtoMsg, hop uint8, filterId ...uint32) {
 	var has bool
 	data := m.Encode()
-	conns := p.node.GetAllConn()
-	for _, conn := range conns {
-		if conn.NodeType() == uint8(node.NodeType_Base) {
-			continue
-		}
+	p.protocolNodeLock.RLock()
+	defer p.protocolNodeLock.RUnlock()
+	for _, conn := range p.protocolNode {
 		has = false
 		for _, id := range filterId {
 			if id == conn.RemoteId() {
@@ -187,7 +214,7 @@ func (p *NodeDiscovery) broadcast(m *ProtoMsg, hop uint8, filterId ...uint32) {
 }
 
 func (p *NodeDiscovery) WriteMsg(conn iface.Conn, hop uint8, data []byte) {
-	_, _ = conn.WriteMsg(&message.Message{
+	_, _ = conn.WriteMessage(&message.Message{
 		Type:   p.protoType,
 		Hop:    hop,
 		SrcId:  conn.LocalId(),

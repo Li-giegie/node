@@ -17,37 +17,28 @@ type Identity struct {
 var defaultBasicReq = new(basicAuthReq)
 var defaultBasicResp = new(basicAuthResp)
 
-type NodeType uint8
-
-const (
-	NodeType_Base NodeType = iota
-	NodeType_Bridge
-)
-
 type basicAuthReq struct{}
 
 var errBytesLimit = errors.New("number of bytes exceeds the limit size")
 
-func (basicAuthReq) Send(w io.Writer, srcId, dstId uint32, accessKey []byte, nt NodeType) error {
-	data := make([]byte, 41)
+func (basicAuthReq) Send(w io.Writer, srcId, dstId uint32, accessKey []byte) error {
+	data := make([]byte, 40)
 	binary.LittleEndian.PutUint32(data[0:4], srcId)
 	binary.LittleEndian.PutUint32(data[4:8], dstId)
-	copy(data[8:40], hash(accessKey))
-	data[40] = uint8(nt)
+	copy(data[8:], hash(accessKey))
 	_, err := w.Write(data)
 	return err
 }
 
-func (basicAuthReq) Receive(r io.Reader, t time.Duration) (srcId, dstId uint32, hashKey []byte, nt NodeType, err error) {
-	var buf = make([]byte, 41)
+func (basicAuthReq) Receive(r io.Reader, t time.Duration) (srcId, dstId uint32, hashKey []byte, err error) {
+	var buf = make([]byte, 40)
 	err = ReadFull(r, t, buf)
 	if err != nil {
-		return 0, 0, nil, 0, err
+		return 0, 0, nil, err
 	}
 	srcId = binary.LittleEndian.Uint32(buf[0:4])
 	dstId = binary.LittleEndian.Uint32(buf[4:8])
-	hashKey = buf[8:40]
-	nt = NodeType(buf[40])
+	hashKey = buf[8:]
 	return
 }
 

@@ -6,6 +6,7 @@ node是一个Go（Golang）编写的轻量级TCP框架，node帮助您轻松、�
 特征：
 - 支持请求响应模型
 - 支持多服务端节点桥接组网
+- 节点去中心化
 - 并发100w/s 请求响应
 
 ## 传输协议
@@ -43,16 +44,16 @@ go get -u github.com/Li-giegie/node@latest
 ```
 ## 快速开始
 ### Server
-
+[Server 完整的示例](example/basic/server/main.go)
 ```go
 func TestServer(t *testing.T) {
 	srv := node.NewServer(&node.Identity{Id: 8000, Key: []byte("hello"), Timeout: time.Second * 6}, nil)
-	srv.AddOnConnection(func(conn iface.Conn) {
+	srv.AddOnConnect(func(conn iface.Conn) {
 		log.Println("OnConnection", conn.RemoteId())
 	})
 	srv.AddOnMessage(func(ctx iface.Context) {
 		log.Println("OnMessage", ctx.String())
-		ctx.Reply(ctx.Data())
+		fmt.Println(ctx.Reply(ctx.Data()))
 	})
 	l, err := net.Listen("tcp", "0.0.0.0:8000")
 	if err != nil {
@@ -66,6 +67,7 @@ func TestServer(t *testing.T) {
 ```
 
 ### Client
+[Client 完整的示例](example/basic/client/main.go)
 ```go
 func TestClient(t *testing.T) {
 	netConn, err := net.Dial("tcp", "0.0.0.0:8000")
@@ -147,7 +149,6 @@ BenchmarkEchoRequestGo-12        1000000              1619 ns/op             393
 |       Node       Node     |       |       Node       Node     |
 +---------------------------+       +---------------------------+
 ```
-[example示例](example)
 
 ## 协议
 [关于协议的进一步使用 README](protocol/README.md)

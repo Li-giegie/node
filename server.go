@@ -16,7 +16,7 @@ func NewServer(identity *Identity, c *Config) iface.Server {
 	srv.id = identity.Id
 	srv.authHashKey = hash(identity.Key)
 	srv.authTimeout = identity.Timeout
-	srv.connManage = nodeNet.NewConnManager()
+	srv.ConnManager = nodeNet.NewConnManager()
 	srv.recvChan = make(map[uint32]chan *message.Message)
 	srv.closeChan = make(chan struct{}, 1)
 	srv.Config = c
@@ -34,8 +34,8 @@ type Server struct {
 	recvLock    sync.Mutex
 	counter     uint32
 	closeChan   chan struct{}
-	connManage  iface.ConnManager
-	connectionEvent
+	iface.ConnManager
+	eventManager
 	*Config
 }
 
@@ -43,7 +43,7 @@ func (s *Server) Serve(l net.Listener) error {
 	errChan := make(chan error, 1)
 	go func() {
 		for {
-			if s.MaxConns > 0 && s.connManage.Len() > s.MaxConns {
+			if s.MaxConns > 0 && s.ConnManager.Len() > s.MaxConns {
 				time.Sleep(s.MaxConnSleep)
 				continue
 			}
@@ -66,7 +66,7 @@ func (s *Server) Serve(l net.Listener) error {
 }
 
 func (s *Server) handleAuthenticate(conn net.Conn) {
-	src, dst, key, nt, err := defaultBasicReq.Receive(conn, s.authTimeout)
+	src, dst, key, err := defaultBasicReq.Receive(conn, s.authTimeout)
 	if err != nil {
 		_ = conn.Close()
 		return
@@ -86,15 +86,15 @@ func (s *Server) handleAuthenticate(conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
-	c := nodeNet.NewConn(s.id, src, conn, s.recvChan, &s.recvLock, &s.counter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen, uint8(nt))
-	if !s.connManage.Add(src, c) {
+	c := nodeNet.NewConn(s.id, src, conn, s.recvChan, &s.recvLock, &s.counter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
+	if !s.AddConn(src, c) {
 		_ = defaultBasicResp.Send(conn, false, "error: id already exists")
 		_ = conn.Close()
 		return
 	}
 	if err = defaultBasicResp.Send(conn, true, ""); err != nil {
 		_ = conn.Close()
-		s.connManage.Remove(c.RemoteId())
+		s.RemoveConn(c.RemoteId())
 		return
 	}
 	s.startConn(c)
@@ -103,10 +103,10 @@ func (s *Server) handleAuthenticate(conn net.Conn) {
 func (s *Server) startConn(c *nodeNet.Connect) {
 	s.onConnect(c)
 	for {
-		msg, err := c.ReadMsg()
+		msg, err := c.ReadMessage()
 		if err != nil {
 			_ = c.Close()
-			s.connManage.Remove(c.RemoteId())
+			s.RemoveConn(c.RemoteId())
 			s.onClose(c, err)
 			return
 		}
@@ -114,8 +114,8 @@ func (s *Server) startConn(c *nodeNet.Connect) {
 		// 当前节点消息
 		if msg.DestId == s.id {
 			switch msg.Type {
-			case message.MsgType_Send:
-				s.onMessage(nodeNet.NewContext(c, msg, true))
+			case message.MsgType_Default:
+				s.onMessage(nodeNet.NewContext(c, msg))
 			case message.MsgType_Reply, message.MsgType_ReplyErr:
 				s.recvLock.Lock()
 				ch, ok := s.recvChan[msg.Id]
@@ -125,17 +125,17 @@ func (s *Server) startConn(c *nodeNet.Connect) {
 				}
 				s.recvLock.Unlock()
 			default:
-				s.onCustomMessage(nodeNet.NewContext(c, msg, true))
+				s.onProtocolMessage(nodeNet.NewContext(c, msg))
 			}
 			continue
 		}
 		// 转发消息：优先转发到直连连接
-		if dstConn, exist := s.connManage.Get(msg.DestId); exist {
-			if _, err = dstConn.WriteMsg(msg); err == nil {
+		if dstConn, exist := s.GetConn(msg.DestId); exist {
+			if _, err = dstConn.WriteMessage(msg); err == nil {
 				continue
 			}
 		}
-		s.onForwardMessage(nodeNet.NewContext(c, msg, true))
+		s.onRouteMessage(nodeNet.NewContext(c, msg))
 		continue
 	}
 }
@@ -152,7 +152,7 @@ func (s *Server) Bridge(conn net.Conn, remoteId uint32, remoteAuthKey []byte, ti
 	if _, ok := s.GetConn(remoteId); ok {
 		return errors.New("error: remote id already exists")
 	}
-	if err = defaultBasicReq.Send(conn, s.id, remoteId, remoteAuthKey, NodeType_Bridge); err != nil {
+	if err = defaultBasicReq.Send(conn, s.id, remoteId, remoteAuthKey); err != nil {
 		return err
 	}
 	permit, msg, err := defaultBasicResp.Receive(conn, timeout)
@@ -162,22 +162,12 @@ func (s *Server) Bridge(conn net.Conn, remoteId uint32, remoteAuthKey []byte, ti
 	if !permit {
 		return errors.New(msg)
 	}
-	c := nodeNet.NewConn(s.id, remoteId, conn, s.recvChan, &s.recvLock, &s.counter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen, uint8(NodeType_Bridge))
-	if !s.connManage.Add(remoteId, c) {
+	c := nodeNet.NewConn(s.id, remoteId, conn, s.recvChan, &s.recvLock, &s.counter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
+	if !s.AddConn(remoteId, c) {
 		return errors.New("node already exists")
 	}
 	go s.startConn(c)
 	return nil
-}
-
-// GetConn 获取直连连接
-func (s *Server) GetConn(id uint32) (iface.Conn, bool) {
-	return s.connManage.Get(id)
-}
-
-// GetAllConn 获取全部直连连接
-func (s *Server) GetAllConn() []iface.Conn {
-	return s.connManage.GetAll()
 }
 
 func (s *Server) Id() uint32 {
@@ -185,7 +175,7 @@ func (s *Server) Id() uint32 {
 }
 
 func (s *Server) Close() {
-	for _, conn := range s.connManage.GetAll() {
+	for _, conn := range s.GetAllConn() {
 		_ = conn.Close()
 	}
 	s.closeChan <- struct{}{}

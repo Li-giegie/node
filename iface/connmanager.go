@@ -1,9 +1,9 @@
 package iface
 
 type ConnManager interface {
-	Add(id uint32, conn Conn) bool
-	Remove(id uint32)
-	Get(id uint32) (Conn, bool)
-	GetAll() []Conn
+	AddConn(id uint32, conn Conn) bool
+	RemoveConn(id uint32)
+	GetConn(id uint32) (Conn, bool)
+	GetAllConn() []Conn
 	Len() (n int)
 }
