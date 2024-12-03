@@ -24,7 +24,7 @@ var timeout = flag.Duration("timeout", time.Second*6, "remote auth timeout")
 func main() {
 	flag.Parse()
 	exitC := make(chan struct{}, 1)
-	c := node.NewClient(uint32(*lId), &node.Identity{Id: uint32(*rId), Key: []byte(*rKey), Timeout: *timeout}, nil)
+	c := node.NewClient(uint32(*lId), &node.Identity{Id: uint32(*rId), Key: []byte(*rKey), AuthTimeout: *timeout}, nil)
 	// hello 协议用于连接保活
 	hello := protocol.NewHelloProtocol(c, time.Second, time.Second*5, time.Second*30)
 	defer hello.Stop()

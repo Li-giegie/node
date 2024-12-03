@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), Timeout: time.Second * 6}, nil)
+	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6}, nil)
 	exitC := make(chan struct{}, 1)
 	// 通过认证后连接正式建立的回调,同步调用
 	c.AddOnConnect(func(conn iface.Conn) {

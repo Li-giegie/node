@@ -25,9 +25,9 @@ func main() {
 	flag.Parse()
 	// 创建Server
 	s := node.NewServer(&node.Identity{
-		Id:      uint32(*id),
-		Key:     []byte(*key),
-		Timeout: *timeout,
+		Id:          uint32(*id),
+		Key:         []byte(*key),
+		AuthTimeout: *timeout,
 	}, nil)
 	s.AddOnConnect(func(conn iface.Conn) {
 		log.Println("connection", conn.RemoteId())

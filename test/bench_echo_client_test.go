@@ -20,7 +20,7 @@ func Dial() {
 		panic(err)
 	}
 	stopC := make(chan struct{})
-	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), Timeout: time.Second * 6}, nil)
+	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6}, nil)
 	c.AddOnMessage(func(ctx iface.Context) {
 		fmt.Println(ctx.String())
 		ctx.Reply(ctx.Data())

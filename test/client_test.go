@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/iface"
+	"github.com/Li-giegie/node/message"
 	"net"
 	"testing"
 	"time"
@@ -17,12 +18,13 @@ func TestClient(t *testing.T) {
 		return
 	}
 	stopC := make(chan struct{})
-	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), Timeout: time.Second * 6}, nil)
+	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6}, nil)
 	c.AddOnMessage(func(ctx iface.Context) {
 		fmt.Println(ctx.String())
 		ctx.Reply(ctx.Data())
 	})
 	c.AddOnClose(func(conn iface.Conn, err error) {
+		fmt.Println("OnClose", err)
 		stopC <- struct{}{}
 	})
 	conn, err := c.Start(netConn)
@@ -34,10 +36,11 @@ func TestClient(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 	res, err := conn.Request(ctx, []byte("ping"))
-	fmt.Println("res", string(res))
-	fmt.Printf("err %#v %v\n", err, err)
-	fmt.Println(conn.Forward(context.Background(), 5, []byte("hello")))
-	fmt.Println(conn.RequestType(context.Background(), 2, []byte("hello")))
+	fmt.Printf("Request res %s ,err %v\n", res, err)
+	res, err = conn.RequestTo(context.Background(), 5, []byte("hello"))
+	fmt.Printf("RequestTo res %s ,err %v\n", res, err)
+	res, err = conn.RequestType(context.Background(), message.MsgType_Undefined, []byte("hello"))
+	fmt.Printf("RequestType res %s ,err %v\n", res, err)
 	_ = conn.Close()
 	<-stopC
 }

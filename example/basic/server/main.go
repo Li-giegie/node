@@ -11,7 +11,7 @@ import (
 
 func main() {
 	// 创建服务端
-	s := node.NewServer(&node.Identity{Id: 8000, Key: []byte("hello"), Timeout: time.Second * 6}, nil)
+	s := node.NewServer(&node.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6}, nil)
 	// 通过认证后连接正式建立的回调,同步调用
 	s.AddOnConnect(func(conn iface.Conn) {
 		log.Println("OnConnection id", conn.RemoteId())

@@ -9,9 +9,12 @@ import (
 )
 
 type Identity struct {
-	Id      uint32
-	Key     []byte
-	Timeout time.Duration
+	// Id 节点Id
+	Id uint32
+	// Key 认证的秘钥
+	Key []byte
+	// AuthTimeout 认证超时时间、超过时间没有认证成功断开连接
+	AuthTimeout time.Duration
 }
 
 var defaultBasicReq = new(basicAuthReq)

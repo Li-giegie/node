@@ -27,7 +27,7 @@ func NewClient(localId uint32, remote *Identity, conf *Config) iface.Client {
 	c.id = localId
 	c.remoteId = remote.Id
 	c.remoteKey = remote.Key
-	c.authTimeout = remote.Timeout
+	c.authTimeout = remote.AuthTimeout
 	c.recvChan = make(map[uint32]chan *message.Message)
 	c.Config = conf
 	if c.Config == nil {

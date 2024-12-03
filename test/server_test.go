@@ -11,7 +11,7 @@ import (
 )
 
 func TestServer(t *testing.T) {
-	srv := node.NewServer(&node.Identity{Id: 8000, Key: []byte("hello"), Timeout: time.Second * 6}, nil)
+	srv := node.NewServer(&node.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6}, nil)
 	srv.AddOnConnect(func(conn iface.Conn) {
 		log.Println("OnConnection", conn.RemoteId())
 	})

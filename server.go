@@ -15,7 +15,7 @@ func NewServer(identity *Identity, c *Config) iface.Server {
 	srv := new(Server)
 	srv.id = identity.Id
 	srv.authHashKey = hash(identity.Key)
-	srv.authTimeout = identity.Timeout
+	srv.authTimeout = identity.AuthTimeout
 	srv.ConnManager = nodeNet.NewConnManager()
 	srv.recvChan = make(map[uint32]chan *message.Message)
 	srv.closeChan = make(chan struct{}, 1)
@@ -27,13 +27,14 @@ func NewServer(identity *Identity, c *Config) iface.Server {
 }
 
 type Server struct {
-	id          uint32
-	authHashKey []byte
-	authTimeout time.Duration
-	recvChan    map[uint32]chan *message.Message
-	recvLock    sync.Mutex
-	counter     uint32
-	closeChan   chan struct{}
+	id               uint32
+	authHashKey      []byte
+	authTimeout      time.Duration
+	recvChan         map[uint32]chan *message.Message
+	recvLock         sync.Mutex
+	counter          uint32
+	closeChan        chan struct{}
+	onAcceptConnects []iface.OnAcceptConnectFunc
 	iface.ConnManager
 	eventManager
 	*Config
@@ -52,6 +53,10 @@ func (s *Server) Serve(l net.Listener) error {
 				errChan <- err
 				return
 			}
+			if s.onAcceptConnect(conn) {
+				_ = conn.Close()
+				continue
+			}
 			go s.handleAuthenticate(conn)
 		}
 	}()
@@ -63,6 +68,19 @@ func (s *Server) Serve(l net.Listener) error {
 		_ = l.Close()
 		return nil
 	}
+}
+
+func (s *Server) onAcceptConnect(conn net.Conn) (isClose bool) {
+	for _, callback := range s.onAcceptConnects {
+		if callback(conn) {
+			return true
+		}
+	}
+	return
+}
+
+func (s *Server) AddOnAcceptConnect(callback iface.OnAcceptConnectFunc) {
+	s.onAcceptConnects = append(s.onAcceptConnects, callback)
 }
 
 func (s *Server) handleAuthenticate(conn net.Conn) {

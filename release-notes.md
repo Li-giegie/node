@@ -13,6 +13,7 @@
 - [v4.0](#v40)
 - [v4.1](#v41)
 - [v4.2](#v42)
+- [v4.3](#v43)
 ___
 
 ## v1.0
@@ -157,3 +158,7 @@ ___
 ## v4.2
 ### REFACTOR
 - refactor：重构一些代码
+
+## v4.3
+### REFACTOR
+- refactor：重构一些代码、增加server节点AddOnAcceptConnect(OnAcceptConnectFunc)连接是否建立生命周期管理
