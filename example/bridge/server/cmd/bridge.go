@@ -14,11 +14,9 @@ var bind = &rabbit.Cmd{
 		var errs [4]error
 		var id uint32
 		var key, addr string
-		var timeout time.Duration
 		id, errs[0] = c.Flags().GetUint32("id")
 		key, errs[1] = c.Flags().GetString("key")
 		addr, errs[2] = c.Flags().GetString("addr")
-		timeout, errs[3] = c.Flags().GetDuration("timeout")
 		for _, err := range errs {
 			if err != nil {
 				return err
@@ -29,7 +27,7 @@ var bind = &rabbit.Cmd{
 		if err != nil {
 			return err
 		}
-		return srv.Bridge(conn, id, []byte(key), timeout)
+		return srv.Bridge(conn, id, []byte(key))
 	},
 }
 

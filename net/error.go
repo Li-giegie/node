@@ -9,10 +9,10 @@ func (n NodeError) Error() string {
 func (n NodeError) NodeError() {}
 
 var (
-	ErrChecksum         = NodeError("checksum invalid")
-	ErrMaxMsgLen        = NodeError("maximum message length limit is exceeded")
-	ErrNodeNotExist     = NodeError("node not exist")
+	ErrChecksumInvalid  = NodeError("checksum invalid")
 	ErrWriteMsgYourself = NodeError("can't send it to yourself")
-	ErrOnce             = NodeError("limit reply to one time")
-	ErrMsgTypeInvalid   = NodeError("message type invalid")
+	ErrMultipleResponse = NodeError("A request can only be responded to once")
+	ErrInvalidResponse  = NodeError("invalid response")
+	ErrLengthOverflow   = NodeError("length overflow")
+	ErrNodeNotExist     = NodeError("node not exist")
 )

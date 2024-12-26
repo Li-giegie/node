@@ -4,17 +4,20 @@ import (
 	"io"
 )
 
-func NewWriteQueue(writer io.Writer, queueSize, bufferSize int) *WriterQueue {
-	w := &WriterQueue{
-		Writer: writer,
-		queue:  make(chan []byte, queueSize),
+func NewWriteQueue(w io.WriteCloser, queueSize, bufferSize int) io.WriteCloser {
+	if queueSize <= 1 || bufferSize < 64 {
+		return w
 	}
-	go w.start(bufferSize)
-	return w
+	wq := &WriterQueue{
+		w:     w,
+		queue: make(chan []byte, queueSize),
+	}
+	go wq.start(bufferSize)
+	return wq
 }
 
 type WriterQueue struct {
-	io.Writer
+	w     io.WriteCloser
 	err   error
 	queue chan []byte
 }
@@ -28,12 +31,12 @@ func (w *WriterQueue) start(bufferSize int) {
 		}
 		if size+len(b) >= bufferSize || len(w.queue) == 0 {
 			if size > 0 {
-				if _, w.err = w.Writer.Write(buf[:size]); w.err != nil {
+				if _, w.err = w.w.Write(buf[:size]); w.err != nil {
 					return
 				}
 				size = 0
 			}
-			_, w.err = w.Writer.Write(b)
+			_, w.err = w.w.Write(b)
 		} else {
 			copy(buf[size:], b)
 			size += len(b)
@@ -53,5 +56,5 @@ func (w *WriterQueue) Write(b []byte) (n int, err error) {
 func (w *WriterQueue) Close() error {
 	defer func() { recover() }()
 	close(w.queue)
-	return w.err
+	return w.w.Close()
 }

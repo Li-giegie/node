@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Li-giegie/node/iface"
-	"github.com/Li-giegie/node/protocol/nodediscovery"
+	"github.com/Li-giegie/node/router"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"time"
 )
@@ -37,12 +37,14 @@ func init() {
 		Description: "",
 		Run:         nil,
 		RunE: func(c *rabbit.Cmd, args []string) error {
-			ndp := c.Context().Value("ndp").(nodediscovery.NodeDiscoveryProtocol)
-			if ndp == nil {
-				return errors.New("server is null")
-			}
-			ndp.RangeRoute(func(empty *nodediscovery.RouteEmpty) bool {
-				fmt.Println("dst", empty.Dst(), "via", empty.Via(), "date-time", time.UnixMicro(empty.Duration().Microseconds()).Format("2006-01-02 15:04:05"), "hop", empty.Hop(), "full-path", empty.FullPath())
+			srv := c.Context().Value("server").(iface.Server)
+			srv.GetRouter().RangeRoute(func(empty *router.RouteEmpty) bool {
+				fmt.Print("dst ", empty.Dst, " via ", empty.Via, " date-time ", time.UnixMicro(time.Duration(empty.UnixNano).Microseconds()).Format("2006-01-02 15:04:05"), " hop ", empty.Hop)
+				fmt.Print(" path ")
+				for _, path := range empty.Paths {
+					fmt.Print(path.Id, " ")
+				}
+				fmt.Println()
 				return true
 			})
 			return nil

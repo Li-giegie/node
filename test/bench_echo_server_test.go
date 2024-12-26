@@ -11,13 +11,13 @@ import (
 
 func TestEchoServer(t *testing.T) {
 	srv := node.NewServer(&node.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6}, nil)
-	srv.AddOnConnect(func(conn iface.Conn) {
+	srv.OnConnect(func(conn iface.Conn) {
 		log.Println("OnConnection", conn.RemoteId())
 	})
-	srv.AddOnMessage(func(ctx iface.Context) {
-		ctx.Reply(ctx.Data())
+	srv.OnMessage(func(ctx iface.Context) {
+		ctx.Response(200, ctx.Data())
 	})
-	srv.AddOnClose(func(conn iface.Conn, err error) {
+	srv.OnClose(func(conn iface.Conn, err error) {
 		log.Println(conn.RemoteId(), err)
 	})
 	l, err := net.Listen("tcp", "0.0.0.0:8000")

@@ -7,13 +7,12 @@ type Context interface {
 	SrcId() uint32
 	DestId() uint32
 	Data() []byte
+	// Conn 当前上下文的连接
 	Conn() Conn
 	// String 消息的字符串表达形式
 	String() string
-	// Reply 回复内容，每次请求限制回复一次，不要尝试多次回复，多次回复返回 OnceErr = errors.New("write only")
-	Reply(data []byte) error
-	// ReplyError 回复内容，每次请求限制回复一次，err 的长度限制 (err.Error()) 长度限制 math.MaxUint16-2 (65533)
-	ReplyError(err error, data []byte) error
-	// Stop 停止执行之后的回调
-	Stop()
+	// Response 响应请求，每个请求只能相应一次，如果发起端发送的是一个请求，不管使用什么type（protocol）响应类型必须是MsgType_Reply
+	Response(code int16, data []byte) error
+	// IsResponse 是否响应过
+	IsResponse() bool
 }

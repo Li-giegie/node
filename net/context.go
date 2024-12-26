@@ -1,92 +1,73 @@
 package net
 
 import (
-	"encoding/binary"
 	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/message"
 )
 
+func NewContext(connect *Conn, message *message.Message) *Context {
+	return &Context{
+		msg:  message,
+		conn: connect,
+	}
+}
+
 type Context struct {
-	*message.Message
-	*Connect
-	once bool
-	Next bool
+	msg        *message.Message
+	conn       *Conn
+	isResponse bool
 }
 
 func (c *Context) Type() uint8 {
-	return c.Message.Type
+	return c.msg.Type
 }
 
 func (c *Context) Hop() uint8 {
-	return c.Message.Hop
+	return c.msg.Hop
 }
 
 func (c *Context) Id() uint32 {
-	return c.Message.Id
+	return c.msg.Id
 }
 
 func (c *Context) SrcId() uint32 {
-	return c.Message.SrcId
+	return c.msg.SrcId
 }
 
 func (c *Context) DestId() uint32 {
-	return c.Message.DestId
+	return c.msg.DestId
 }
 
 func (c *Context) Data() []byte {
-	return c.Message.Data
+	return c.msg.Data
 }
 
-func NewContext(connect *Connect, message *message.Message) *Context {
-	return &Context{
-		Message: message,
-		Connect: connect,
-		Next:    true,
+func (c *Context) String() string {
+	return c.msg.String()
+}
+
+// Response 响应数据，type为 message.MsgType_Reply，限制回复一次，不要尝试多次回复，多次回复返回 var ErrLimitReply = errors.New("limit reply to one time")
+func (c *Context) Response(code int16, data []byte) error {
+	if c.isResponse {
+		return ErrMultipleResponse
 	}
-}
-
-// Reply 响应内容，限制回复一次，不要尝试多次回复，多次回复返回 var ErrLimitReply = errors.New("limit reply to one time")
-func (c *Context) Reply(data []byte) (err error) {
-	return c.reply(message.MsgType_Reply, data)
-}
-
-func (c *Context) ReplyError(err error, data []byte) error {
-	var edata []byte
-	if err == nil {
-		edata = []byte{255, 255, 255, 255}
-	} else if err != nil {
-		eBuf := []byte(err.Error())
-		if 4+len(eBuf)+len(data) >= int(c.maxMsgLen) {
-			return ErrMaxMsgLen
-		}
-		edata = make([]byte, 4+len(eBuf))
-		binary.LittleEndian.PutUint32(edata[:4], uint32(len(eBuf)))
-		copy(edata[4:], eBuf)
-	}
-	rdata := make([]byte, len(edata)+len(data))
-	copy(rdata, edata)
-	copy(rdata[len(edata):], data)
-	return c.reply(message.MsgType_ReplyErr, rdata)
+	c.isResponse = true
+	c.msg.Hop = 0
+	c.msg.Type = message.MsgType_Reply
+	c.msg.SrcId, c.msg.DestId = c.conn.localId, c.msg.SrcId
+	reData := make([]byte, 2+len(data))
+	reData[0] = byte(code)
+	reData[1] = byte(code >> 8)
+	copy(reData[2:], data)
+	c.msg.Data = reData
+	return c.conn.SendMessage(c.msg)
 }
 
 func (c *Context) Conn() iface.Conn {
-	return c.Connect
+	return c.conn
 }
 
-func (c *Context) reply(typ uint8, data []byte) (err error) {
-	if c.once {
-		return ErrOnce
-	}
-	c.once = true
-	c.Message.Hop = 0
-	c.Message.Type = typ
-	c.Message.SrcId, c.Message.DestId = c.Message.DestId, c.Message.SrcId
-	c.Message.Data = data
-	_, err = c.WriteMessage(c.Message)
-	return err
-}
-
-// Stop 终止进入下一个回调
-func (c *Context) Stop() {
-	c.Next = false
+// IsResponse 是否已经响应过
+func (c *Context) IsResponse() bool {
+	return c.isResponse
 }

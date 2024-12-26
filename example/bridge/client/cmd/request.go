@@ -21,11 +21,11 @@ var request = &rabbit.Cmd{
 		ctx, cancle := context.WithTimeout(context.Background(), timeout)
 		defer cancle()
 		conn := c.Context().Value("conn").(iface.Conn)
-		res, err := conn.RequestTo(ctx, uint32(id), []byte(strings.Join(args, " ")))
+		res, code, err := conn.RequestTo(ctx, uint32(id), []byte(strings.Join(args, " ")))
 		if err != nil {
 			return err
 		}
-		log.Println(string(res))
+		log.Println(code, string(res))
 		return nil
 	},
 }

@@ -1,4 +1,4 @@
-package node
+package net
 
 import (
 	"crypto/sha256"
@@ -8,32 +8,23 @@ import (
 	"time"
 )
 
-type Identity struct {
-	// Id 节点Id
-	Id uint32
-	// Key 认证的秘钥
-	Key []byte
-	// AuthTimeout 认证超时时间、超过时间没有认证成功断开连接
-	AuthTimeout time.Duration
-}
+var DefaultBasicReq = new(BasicAuthReq)
+var DefaultBasicResp = new(BasicAuthResp)
 
-var defaultBasicReq = new(basicAuthReq)
-var defaultBasicResp = new(basicAuthResp)
-
-type basicAuthReq struct{}
+type BasicAuthReq struct{}
 
 var errBytesLimit = errors.New("number of bytes exceeds the limit size")
 
-func (basicAuthReq) Send(w io.Writer, srcId, dstId uint32, accessKey []byte) error {
+func (BasicAuthReq) Send(w io.Writer, srcId, dstId uint32, accessKey []byte) error {
 	data := make([]byte, 40)
 	binary.LittleEndian.PutUint32(data[0:4], srcId)
 	binary.LittleEndian.PutUint32(data[4:8], dstId)
-	copy(data[8:], hash(accessKey))
+	copy(data[8:], BaseAuthHash(accessKey))
 	_, err := w.Write(data)
 	return err
 }
 
-func (basicAuthReq) Receive(r io.Reader, t time.Duration) (srcId, dstId uint32, hashKey []byte, err error) {
+func (BasicAuthReq) Receive(r io.Reader, t time.Duration) (srcId, dstId uint32, hashKey []byte, err error) {
 	var buf = make([]byte, 40)
 	err = ReadFull(r, t, buf)
 	if err != nil {
@@ -45,9 +36,9 @@ func (basicAuthReq) Receive(r io.Reader, t time.Duration) (srcId, dstId uint32, 
 	return
 }
 
-type basicAuthResp struct{}
+type BasicAuthResp struct{}
 
-func (basicAuthResp) Send(w io.Writer, permit bool, msg string) error {
+func (BasicAuthResp) Send(w io.Writer, permit bool, msg string) error {
 	if len(msg) > 65530 {
 		return errBytesLimit
 	}
@@ -61,7 +52,7 @@ func (basicAuthResp) Send(w io.Writer, permit bool, msg string) error {
 	return err
 }
 
-func (basicAuthResp) Receive(r io.Reader, t time.Duration) (permit bool, msg string, err error) {
+func (BasicAuthResp) Receive(r io.Reader, t time.Duration) (permit bool, msg string, err error) {
 	buf := make([]byte, 3)
 	err = ReadFull(r, t, buf)
 	if err != nil {
@@ -99,7 +90,7 @@ func ReadFull(r io.Reader, timeout time.Duration, buf []byte) (err error) {
 	}
 }
 
-func hash(b []byte) []byte {
+func BaseAuthHash(b []byte) []byte {
 	h := sha256.New()
 	h.Write(b)
 	return h.Sum(nil)

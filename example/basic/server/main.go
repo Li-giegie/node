@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/iface"
+	"github.com/Li-giegie/node/message"
 	"log"
 	"net"
 	"time"
@@ -11,34 +12,34 @@ import (
 
 func main() {
 	// 创建服务端
-	s := node.NewServer(&node.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6}, nil)
-	// 通过认证后连接正式建立的回调,同步调用
-	s.AddOnConnect(func(conn iface.Conn) {
-		log.Println("OnConnection id", conn.RemoteId())
+	s := node.NewServer(&node.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6})
+	// accept 一个连接时触发回调，allow 返回值为false时断开连接
+	s.OnAccept(func(conn net.Conn) (allow bool) {
+		log.Println("OnAccept", conn.RemoteAddr().String())
+		return true
 	})
-	// 收到内置标准类型消息的回调,同步调用
-	s.AddOnMessage(func(ctx iface.Context) {
+	// 通过认证后连接正式建立的回调,同步调用
+	s.OnConnect(func(conn iface.Conn) {
+		log.Println("OnConnection conn id:", conn.RemoteId())
+	})
+	// 收到消息的回调,同步调用
+	s.OnMessage(func(ctx iface.Context) {
 		log.Println("OnMessage", string(ctx.Data()))
+		if ctx.Type() != message.MsgType_Default {
+			ctx.Response(message.StateCode_MessageTypeInvalid, nil)
+			return
+		}
 		rdata := fmt.Sprintf("from %d data %s", s.Id(), ctx.Data())
 		// 回复消息
-		ctx.Reply([]byte(rdata))
-		// 回复错误
-		//ctx.ErrReply(nil,errors.New("invalid request"))
+		ctx.Response(200, []byte(rdata))
 	})
-	// 收到自定义协议消息类型的回调，协议适用于扩展功能，并不是用来区别场景的，所有场景都应该在AddOnMessage回调中实现,同步调用
-	//s.AddOnProtocolMessage(255,func(ctx iface.Context) {
-	//	log.Println("OnCustomMessage", string(ctx.Data()))
-	//})
-	// 连接关闭的后回调,同步调用, 该回调通常用于协议
-	s.AddOnClose(func(conn iface.Conn, err error) {
+	// 连接断开时回调
+	s.OnClose(func(conn iface.Conn, err error) {
 		log.Println("OnClosed", conn.RemoteId(), err)
 	})
-	l, err := net.Listen("tcp", "0.0.0.0:8000")
+	// 侦听并启动
+	err := s.ListenAndServe("0.0.0.0:8000")
 	if err != nil {
-		log.Fatalln(err)
-	}
-	log.Println("start success")
-	if err = s.Serve(l); err != nil {
 		log.Println(err)
 	}
 }

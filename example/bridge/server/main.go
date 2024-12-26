@@ -8,8 +8,9 @@ import (
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/example/bridge/server/cmd"
 	"github.com/Li-giegie/node/iface"
+	"github.com/Li-giegie/node/message"
 	"github.com/Li-giegie/node/protocol"
-	"github.com/Li-giegie/node/protocol/hello"
+	"github.com/Li-giegie/node/protocol/routerbfs"
 	"log"
 	"net"
 	"os"
@@ -28,41 +29,39 @@ func main() {
 		Id:          uint32(*id),
 		Key:         []byte(*key),
 		AuthTimeout: *timeout,
-	}, nil)
-	s.AddOnConnect(func(conn iface.Conn) {
-		log.Println("connection", conn.RemoteId())
 	})
-	s.AddOnMessage(func(ctx iface.Context) {
-		fmt.Println(ctx.String())
-		data := fmt.Sprintf("from %d echo %s", s.Id(), ctx.Data())
-		ctx.Reply([]byte(data))
+	h := node.NewHandler(s)
+	h.OnAccept(func(conn net.Conn) (allow bool) {
+		log.Println("OnAccept remote addr:", conn.RemoteAddr())
+		return true
 	})
-	// 开启hello协议
-	{
-		HP := protocol.NewHelloProtocol(s, time.Second*5, time.Second*15, time.Second*45)
-		// 收集hello协议的事件
-		HP.SetEventCallback(func(action hello.Event_Action, val interface{}) {
-			fmt.Println(action.String(), val)
-		})
-		defer HP.Stop()
-	}
-	// 开启节点发现协议
-	NDP := protocol.NewNodeDiscoveryProtocol(s)
-	l, err := net.Listen("tcp", *addr)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	ctx := context.WithValue(context.WithValue(context.Background(), "server", s), "ndp", NDP)
+	h.OnConnect(func(conn iface.Conn) {
+		log.Println("OnConnect remote id:", conn.RemoteId())
+	})
+	h.OnMessage(func(ctx iface.Context) {
+		log.Println("OnMessage", ctx.String())
+		ctx.Response(message.StateCode_Success, []byte(fmt.Sprintf("from %d response %s", s.Id(), ctx.Data())))
+	})
+	h.OnClose(func(conn iface.Conn, err error) {
+		log.Println("OnClose", conn.RemoteId(), err)
+	})
+	helloProtocol := protocol.NewHelloProtocol(time.Second*5, time.Second*15, time.Second*45)
+	h.Register(helloProtocol.ProtocolType(), helloProtocol)
+	defer helloProtocol.Stop()
+
+	//开启节点发现协议
+	bfsProtocol := protocol.NewRouterBFSProtocol(s)
+	h.Register(bfsProtocol.ProtocolType(), bfsProtocol)
 	// 解析命令
-	go handle(ctx)
-	log.Println("start success", *addr)
-	if err = s.Serve(l); err != nil {
-		fmt.Println(err)
+	go handle(s, nil)
+	log.Println("Listen on", *addr)
+	if err := s.ListenAndServe(*addr); err != nil {
+		log.Println(err)
 	}
 }
 
-func handle(ctx context.Context) {
+func handle(s iface.Server, p routerbfs.Protocol) {
+	ctx := context.WithValue(context.WithValue(context.Background(), "server", s), "bfs", p)
 	time.Sleep(time.Second)
 	envName := fmt.Sprintf("%d@>>", *id)
 	sc := bufio.NewScanner(os.Stdin)
