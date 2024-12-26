@@ -5,34 +5,25 @@ import (
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/iface"
-	"net"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 )
 
-var echoConn iface.Conn
+var echoConn iface.Client
 
 func Dial() {
-	netConn, err := net.Dial("tcp", "0.0.0.0:8000")
-	if err != nil {
-		panic(err)
-	}
-	stopC := make(chan struct{})
 	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6}, nil)
-	c.AddOnMessage(func(ctx iface.Context) {
+	c.OnMessage(func(ctx iface.Context) {
 		fmt.Println(ctx.String())
-		ctx.Reply(ctx.Data())
+		ctx.Response(200, ctx.Data())
 	})
-	c.AddOnClose(func(conn iface.Conn, err error) {
-		stopC <- struct{}{}
-	})
-	conn, err := c.Start(netConn)
+	err := c.Connect("0.0.0.0:8000")
 	if err != nil {
 		panic(err)
 	}
-	echoConn = conn
+	echoConn = c
 	time.Sleep(time.Second)
 }
 
@@ -48,7 +39,7 @@ func BenchmarkEchoRequest(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		wg.Add(1)
 		go func() {
-			_, err := echoConn.Request(ctx, []byte("hello"))
+			_, _, err := echoConn.Request(ctx, []byte("hello"))
 			if err != nil {
 				b.Error(err)
 				return
@@ -73,7 +64,7 @@ func BenchmarkEchoRequestGo(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		w.Add(1)
 		go func() {
-			res, err := echoConn.Request(ctx, []byte("hello"))
+			_, res, err := echoConn.Request(ctx, []byte("hello"))
 			if err != nil {
 				fmt.Println(err, res)
 			}
@@ -93,7 +84,7 @@ func TestEchoClient(t *testing.T) {
 	for i := 0; i < 1000000; i++ {
 		w.Add(1)
 		go func() {
-			res, err := echoConn.Request(ctx, []byte(strconv.Itoa(i)))
+			_, res, err := echoConn.Request(ctx, []byte(strconv.Itoa(i)))
 			if err != nil {
 				fmt.Println(err, res)
 				w.Done()

@@ -14,6 +14,7 @@
 - [v4.1](#v41)
 - [v4.2](#v42)
 - [v4.3](#v43)
+- [v4.4](#v44)
 ___
 
 ## v1.0
@@ -162,3 +163,7 @@ ___
 ## v4.3
 ### REFACTOR
 - refactor：重构一些代码、增加server节点AddOnAcceptConnect(OnAcceptConnectFunc)连接是否建立生命周期管理
+
+## v4.4
+### REFACTOR
+- refactor：重构路由协议、连接生命周期去掉OnRouteMessage，路由处理集成在Server对象上，增加Server一些请求、发送方法、重构一些代码

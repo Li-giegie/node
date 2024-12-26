@@ -2,8 +2,8 @@ package hello
 
 import (
 	"errors"
+	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/iface"
-	"github.com/Li-giegie/node/message"
 	"sync"
 	"time"
 )
@@ -43,17 +43,18 @@ const (
 	Hello_ASK
 )
 
-// HelloProtocol
-type HelloProtocol interface {
+type Protocol interface {
+	iface.ConnectionLifecycle
 	// Stop 停止
 	Stop()
 	// ReStart 重启
 	ReStart()
 	// SetEventCallback 产生的事件回调，在这里可以记录日志
 	SetEventCallback(callback func(action Event_Action, val interface{}))
+	ProtocolType() uint8
 }
 
-func NewHelloProtocol(protoType uint8, h iface.Handler, interval, timeout, timeoutClose time.Duration) HelloProtocol {
+func NewHelloProtocol(protoType uint8, interval, timeout, timeoutClose time.Duration) Protocol {
 	p := Hello{
 		protoType:    protoType,
 		nodeCache:    make(map[uint32]iface.Conn),
@@ -62,14 +63,12 @@ func NewHelloProtocol(protoType uint8, h iface.Handler, interval, timeout, timeo
 		timeoutClose: timeoutClose,
 		exitChan:     make(chan struct{}, 1),
 	}
-	h.AddOnProtocolMessage(p.protoType, p.OnProtocolMessage)
-	h.AddOnConnect(p.OnConnect)
-	h.AddOnClose(p.OnClose)
 	go p.Handle()
 	return &p
 }
 
 type Hello struct {
+	node.EmptyHandler
 	protoType     uint8
 	nodeCache     map[uint32]iface.Conn
 	l             sync.Mutex
@@ -88,8 +87,7 @@ func (h *Hello) OnConnect(conn iface.Conn) {
 
 var actionErr = errors.New("OnCustomMessage receive \"action\" invalid")
 
-func (h *Hello) OnProtocolMessage(ctx iface.Context) {
-	ctx.Stop()
+func (h *Hello) OnMessage(ctx iface.Context) {
 	var action uint8
 	if len(ctx.Data()) != 1 {
 		h.callEvent(Event_Action_Error, actionErr)
@@ -100,13 +98,7 @@ func (h *Hello) OnProtocolMessage(ctx iface.Context) {
 	case Hello_ACK:
 		h.callEvent(Event_Action_Receive_ACK, ctx.SrcId())
 	case Hello_ASK:
-		_, _ = ctx.Conn().WriteMessage(&message.Message{
-			Type:   ctx.Type(),
-			Id:     ctx.Id(),
-			SrcId:  ctx.DestId(),
-			DestId: ctx.SrcId(),
-			Data:   []byte{Hello_ACK},
-		})
+		_ = ctx.Conn().SendType(ctx.Type(), []byte{Hello_ACK})
 		h.callEvent(Event_Action_Receive_ASK, ctx.DestId())
 	}
 }
@@ -115,6 +107,10 @@ func (h *Hello) OnClose(conn iface.Conn, err error) {
 	h.l.Lock()
 	delete(h.nodeCache, conn.RemoteId())
 	h.l.Unlock()
+}
+
+func (h *Hello) ProtocolType() uint8 {
+	return h.protoType
 }
 
 func (h *Hello) Handle() {
@@ -134,12 +130,7 @@ func (h *Hello) Handle() {
 				_ = conn.Close()
 				h.callEvent(Event_Action_TimeoutClose, conn.RemoteId())
 			} else if diff > h.timeout {
-				_, _ = conn.WriteMessage(&message.Message{
-					Type:   h.protoType,
-					SrcId:  conn.LocalId(),
-					DestId: conn.RemoteId(),
-					Data:   data,
-				})
+				_ = conn.SendType(h.protoType, data)
 				h.callEvent(Event_Action_Send_ASK, conn.RemoteId())
 			}
 		}

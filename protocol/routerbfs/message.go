@@ -1,4 +1,4 @@
-package nodediscovery
+package routerbfs
 
 import "encoding/json"
 

@@ -6,41 +6,36 @@ import (
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/message"
-	"net"
+	"log"
 	"testing"
 	"time"
 )
 
 func TestClient(t *testing.T) {
-	netConn, err := net.Dial("tcp", "0.0.0.0:8000")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	stopC := make(chan struct{})
-	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6}, nil)
-	c.AddOnMessage(func(ctx iface.Context) {
-		fmt.Println(ctx.String())
-		ctx.Reply(ctx.Data())
+	stopC := make(chan struct{}, 1)
+	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6})
+	c.OnConnect(func(conn iface.Conn) {
+
 	})
-	c.AddOnClose(func(conn iface.Conn, err error) {
-		fmt.Println("OnClose", err)
+	c.OnMessage(func(ctx iface.Context) {
+
+	})
+	c.OnClose(func(conn iface.Conn, err error) {
 		stopC <- struct{}{}
 	})
-	conn, err := c.Start(netConn)
+	err := c.Connect("tcp://127.0.0.1:8000")
 	if err != nil {
-		t.Error(err)
-		return
+		log.Fatalln(err)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-	defer cancel()
-	res, err := conn.Request(ctx, []byte("ping"))
-	fmt.Printf("Request res %s ,err %v\n", res, err)
-	res, err = conn.RequestTo(context.Background(), 5, []byte("hello"))
-	fmt.Printf("RequestTo res %s ,err %v\n", res, err)
-	res, err = conn.RequestType(context.Background(), message.MsgType_Undefined, []byte("hello"))
-	fmt.Printf("RequestType res %s ,err %v\n", res, err)
-	_ = conn.Close()
+	res, code, err := c.Request(context.Background(), []byte("ping"))
+	fmt.Printf("1 Request res %s ,err %v code %d\n", res, err, code)
+	res, code, err = c.RequestTo(context.Background(), 5, []byte("hello"))
+	fmt.Printf("2 Request res %s ,err %v code %d\n", res, err, code)
+	res, code, err = c.RequestType(context.Background(), message.MsgType_Undefined, []byte("hello"))
+	fmt.Printf("3 Request res %s ,err %v code %d\n", res, err, code)
+	res, code, err = c.RequestType(context.Background(), message.MsgType_Undefined, make([]byte, 120))
+	fmt.Printf("4 Request res %s ,err %v code %d\n", res, err, code)
+	_ = c.Close()
+	fmt.Println("close")
 	<-stopC
 }

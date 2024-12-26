@@ -10,7 +10,6 @@ import (
 	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/protocol"
 	"log"
-	"net"
 	"os"
 	"time"
 )
@@ -24,33 +23,37 @@ var timeout = flag.Duration("timeout", time.Second*6, "remote auth timeout")
 func main() {
 	flag.Parse()
 	exitC := make(chan struct{}, 1)
-	c := node.NewClient(uint32(*lId), &node.Identity{Id: uint32(*rId), Key: []byte(*rKey), AuthTimeout: *timeout}, nil)
+	c := node.NewClient(uint32(*lId), &node.Identity{Id: uint32(*rId), Key: []byte(*rKey), AuthTimeout: *timeout})
+	handler := node.NewHandler(c)
 	// hello 协议用于连接保活
-	hello := protocol.NewHelloProtocol(c, time.Second, time.Second*5, time.Second*30)
-	defer hello.Stop()
-	c.AddOnConnect(func(conn iface.Conn) {
+	helloProtocol := protocol.NewHelloProtocol(time.Second, time.Second*5, time.Second*30)
+	// 开启hello协议的输出事件回调
+	//helloProtocol.SetEventCallback(func(action hello.Event_Action, val interface{}) {
+	//	fmt.Println(action.String(), val)
+	//})
+	defer helloProtocol.Stop()
+	// 注册hello协议
+	handler.Register(helloProtocol.ProtocolType(), helloProtocol)
+
+	handler.OnConnect(func(conn iface.Conn) {
 		fmt.Println(conn.RemoteId())
 	})
-	c.AddOnMessage(func(ctx iface.Context) {
+	handler.OnMessage(func(ctx iface.Context) {
 		fmt.Println(ctx.String())
 		data := fmt.Sprintf("from %d echo %s", c.Id(), ctx.Data())
-		ctx.Reply([]byte(data))
+		ctx.Response(200, []byte(data))
 	})
-	c.AddOnClose(func(conn iface.Conn, err error) {
+	handler.OnClose(func(conn iface.Conn, err error) {
 		exitC <- struct{}{}
 	})
-	netConn, err := net.Dial("tcp", *rAddr)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	conn, err := c.Start(netConn)
+	log.Println("Connect addr", *rAddr)
+	err := c.Connect(*rAddr)
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer conn.Close()
+	defer c.Close()
 	// 命令解析处理
-	go handle(conn)
+	go handle(c)
 	<-exitC
 }
 

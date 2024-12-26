@@ -1,6 +1,7 @@
 package node
 
 import (
+	"crypto/tls"
 	"errors"
 	"github.com/Li-giegie/node/iface"
 	"github.com/Li-giegie/node/message"
@@ -17,69 +18,106 @@ type Client struct {
 	authTimeout time.Duration
 	recvChan    map[uint32]chan *message.Message
 	recvLock    sync.Mutex
-	eventManager
+	*nodeNet.Conn
+	*nodeNet.ConnectionLifecycle
 	*Config
 }
 
 // NewClient 创建一个客户端，remote字段为对端信息,conf为nil使用默认配置
-func NewClient(localId uint32, remote *Identity, conf *Config) iface.Client {
+func NewClient(localId uint32, remote *Identity, conf ...*Config) iface.Client {
 	c := new(Client)
 	c.id = localId
 	c.remoteId = remote.Id
 	c.remoteKey = remote.Key
 	c.authTimeout = remote.AuthTimeout
+	c.ConnectionLifecycle = nodeNet.NewConnectionLifecycle()
 	c.recvChan = make(map[uint32]chan *message.Message)
-	c.Config = conf
-	if c.Config == nil {
-		c.Config = defaultConfig
+	if n := len(conf); n > 0 {
+		if n != 1 {
+			panic("config accepts only one parameter")
+		}
+		c.Config = conf[0]
+	} else {
+		c.Config = DefaultConfig
 	}
 	return c
 }
 
-func (c *Client) Start(conn net.Conn) (iface.Conn, error) {
-	node, err := c.authenticate(conn)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
+// Connect address 支持url格式例如 tcp://127.0.0.1:5555 = 127.0.0.1:5555，缺省协议默认tcp，config参数只能接受0个或者1个
+func (c *Client) Connect(address string, config ...*tls.Config) (err error) {
+	network, addr := parseAddr(address)
+	var conn net.Conn
+	if n := len(config); n > 0 {
+		if n != 1 {
+			panic("config accepts only one parameter")
+		}
+		conn, err = tls.Dial(network, addr, config[0])
+	} else {
+		conn, err = net.Dial(network, addr)
 	}
-	go c.serve(node)
-	return node, nil
+	if err != nil {
+		return err
+	}
+	if !c.CallOnAccept(conn) {
+		return errors.New("AcceptCallback denied the connection establishment")
+	}
+	err = c.authenticate(conn)
+	if err != nil {
+		return err
+	}
+	go c.serve()
+	return nil
 }
 
-func (c *Client) authenticate(conn net.Conn) (*nodeNet.Connect, error) {
-	err := defaultBasicReq.Send(conn, c.id, c.remoteId, c.remoteKey)
-	if err != nil {
-		return nil, err
+func (c *Client) Start(conn net.Conn) error {
+	if !c.CallOnAccept(conn) {
+		return errors.New("AcceptCallback denied the connection establishment")
 	}
-	permit, msg, err := defaultBasicResp.Receive(conn, c.authTimeout)
+	err := c.authenticate(conn)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	go c.serve()
+	return nil
+}
+
+func (c *Client) authenticate(conn net.Conn) (err error) {
+	defer func() {
+		if err != nil {
+			_ = conn.Close()
+		}
+	}()
+	err = nodeNet.DefaultBasicReq.Send(conn, c.id, c.remoteId, c.remoteKey)
+	if err != nil {
+		return err
+	}
+	permit, msg, err := nodeNet.DefaultBasicResp.Receive(conn, c.authTimeout)
+	if err != nil {
+		return err
 	}
 	node := nodeNet.NewConn(c.id, c.remoteId, conn, c.recvChan, &c.recvLock, new(uint32), c.ReaderBufSize, c.WriterBufSize, c.WriterQueueSize, c.MaxMsgLen)
 	if !permit {
-		return nil, errors.New(msg)
+		return errors.New(msg)
 	}
-	return node, nil
+	c.Conn = node
+	return nil
 }
 
-func (c *Client) serve(conn *nodeNet.Connect) {
-	c.onConnect(conn)
+func (c *Client) serve() {
+	c.CallOnConnect(c.Conn)
 	for {
-		msg, err := conn.ReadMessage()
+		msg, err := c.Conn.ReadMessage()
 		if err != nil {
-			_ = conn.Close()
-			c.onClose(conn, err)
+			_ = c.Conn.Close()
+			c.CallOnClose(c.Conn, err)
 			return
 		}
 		msg.Hop++
 		if msg.DestId != c.id {
-			c.onRouteMessage(nodeNet.NewContext(conn, msg))
+			//c.CallOnRouteMessage(nodeNet.NewContext(c.Conn, msg))
 			continue
 		}
-		switch msg.Type {
-		case message.MsgType_Default:
-			c.onMessage(nodeNet.NewContext(conn, msg))
-		case message.MsgType_Reply, message.MsgType_ReplyErr:
+		if msg.Type == message.MsgType_Reply {
 			c.recvLock.Lock()
 			ch, ok := c.recvChan[msg.Id]
 			if ok {
@@ -87,8 +125,8 @@ func (c *Client) serve(conn *nodeNet.Connect) {
 				delete(c.recvChan, msg.Id)
 			}
 			c.recvLock.Unlock()
-		default:
-			c.onProtocolMessage(nodeNet.NewContext(conn, msg))
+		} else {
+			c.CallOnMessage(nodeNet.NewContext(c.Conn, msg))
 		}
 	}
 }
