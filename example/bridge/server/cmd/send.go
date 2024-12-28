@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/Li-giegie/node/iface"
+	"github.com/Li-giegie/node/pkg/server"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"strings"
 )
@@ -11,7 +11,7 @@ var send = &rabbit.Cmd{
 	Description: "发送数据",
 	Run:         nil,
 	RunE: func(c *rabbit.Cmd, args []string) error {
-		srv := c.Context().Value("server").(iface.Server)
+		srv := c.Context().Value("server").(server.Server)
 		id, err := c.Flags().GetUint32("id")
 		if err != nil {
 			return err

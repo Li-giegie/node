@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/iface"
-	"github.com/Li-giegie/node/message"
+	"github.com/Li-giegie/node/pkg/common"
+	"github.com/Li-giegie/node/pkg/conn"
+	context2 "github.com/Li-giegie/node/pkg/ctx"
+	"github.com/Li-giegie/node/pkg/message"
 	"log"
 	"testing"
 	"time"
@@ -13,16 +15,17 @@ import (
 
 func TestClient(t *testing.T) {
 	stopC := make(chan struct{}, 1)
-	c := node.NewClient(8001, &node.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6})
-	c.OnConnect(func(conn iface.Conn) {
+	c := node.NewClient(8001, &common.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6})
+	c.OnConnect(func(conn conn.Conn) {
 
 	})
-	c.OnMessage(func(ctx iface.Context) {
+	c.OnMessage(func(ctx context2.Context) {
 
 	})
-	c.OnClose(func(conn iface.Conn, err error) {
+	c.OnClose(func(conn conn.Conn, err error) {
 		stopC <- struct{}{}
 	})
+	c.SetKeepalive(time.Second*1, time.Second*3, time.Second*5)
 	err := c.Connect("tcp://127.0.0.1:8000")
 	if err != nil {
 		log.Fatalln(err)
@@ -38,4 +41,8 @@ func TestClient(t *testing.T) {
 	_ = c.Close()
 	fmt.Println("close")
 	<-stopC
+
+	for {
+
+	}
 }

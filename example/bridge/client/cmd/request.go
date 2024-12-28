@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"context"
-	"github.com/Li-giegie/node/iface"
+	"github.com/Li-giegie/node/pkg/conn"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"log"
 	"strconv"
@@ -20,7 +20,7 @@ var request = &rabbit.Cmd{
 
 		ctx, cancle := context.WithTimeout(context.Background(), timeout)
 		defer cancle()
-		conn := c.Context().Value("conn").(iface.Conn)
+		conn := c.Context().Value("conn").(conn.Conn)
 		res, code, err := conn.RequestTo(ctx, uint32(id), []byte(strings.Join(args, " ")))
 		if err != nil {
 			return err

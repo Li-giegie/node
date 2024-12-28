@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/Li-giegie/node/iface"
+	"github.com/Li-giegie/node/pkg/server"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"net"
 	"time"
@@ -22,7 +22,7 @@ var bind = &rabbit.Cmd{
 				return err
 			}
 		}
-		srv := c.Context().Value("server").(iface.Server)
+		srv := c.Context().Value("server").(server.Server)
 		conn, err := net.Dial("tcp", addr)
 		if err != nil {
 			return err
@@ -32,9 +32,9 @@ var bind = &rabbit.Cmd{
 }
 
 func init() {
-	bind.Flags().Uint("id", 0, "remoteId")
+	bind.Flags().Uint("id", 20, "remoteId")
 	bind.Flags().String("key", "hello", "remote AccessKey")
-	bind.Flags().String("addr", "", "remote addr")
+	bind.Flags().String("addr", ":8020", "remote addr")
 	bind.Flags().Duration("timeout", time.Second*3, "init timeout")
 	bind.AddSubMust(&rabbit.Cmd{
 		Name:        "help",

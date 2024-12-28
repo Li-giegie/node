@@ -151,7 +151,7 @@ BenchmarkEchoRequestGo-12        1000000              1619 ns/op             393
 ```
 
 ## 协议
-[关于协议的进一步使用 README](protocol/README.md)
+[关于协议的进一步使用 README](docs/protocol)
 
 ## 作者邮箱
 [859768560@qq.com](https://mail.qq.com/cgi-bin/loginpage?s=logout)

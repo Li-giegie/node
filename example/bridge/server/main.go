@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/example/bridge/server/cmd"
-	"github.com/Li-giegie/node/iface"
-	"github.com/Li-giegie/node/message"
-	"github.com/Li-giegie/node/protocol"
-	"github.com/Li-giegie/node/protocol/routerbfs"
+	"github.com/Li-giegie/node/pkg/common"
+	"github.com/Li-giegie/node/pkg/conn"
+	context2 "github.com/Li-giegie/node/pkg/ctx"
+	"github.com/Li-giegie/node/pkg/message"
+	"github.com/Li-giegie/node/pkg/protocol"
+	"github.com/Li-giegie/node/pkg/server"
 	"log"
 	"net"
 	"os"
@@ -25,33 +27,28 @@ var timeout = flag.Duration("timeout", time.Second*6, "local server auth timeout
 func main() {
 	flag.Parse()
 	// 创建Server
-	s := node.NewServer(&node.Identity{
+	s := node.NewServer(&common.Identity{
 		Id:          uint32(*id),
 		Key:         []byte(*key),
 		AuthTimeout: *timeout,
 	})
-	h := node.NewHandler(s)
-	h.OnAccept(func(conn net.Conn) (allow bool) {
+	s.OnAccept(func(conn net.Conn) (allow bool) {
 		log.Println("OnAccept remote addr:", conn.RemoteAddr())
 		return true
 	})
-	h.OnConnect(func(conn iface.Conn) {
+	s.OnConnect(func(conn conn.Conn) {
 		log.Println("OnConnect remote id:", conn.RemoteId())
 	})
-	h.OnMessage(func(ctx iface.Context) {
+	s.OnMessage(func(ctx context2.Context) {
 		log.Println("OnMessage", ctx.String())
 		ctx.Response(message.StateCode_Success, []byte(fmt.Sprintf("from %d response %s", s.Id(), ctx.Data())))
 	})
-	h.OnClose(func(conn iface.Conn, err error) {
+	s.OnClose(func(conn conn.Conn, err error) {
 		log.Println("OnClose", conn.RemoteId(), err)
 	})
-	helloProtocol := protocol.NewHelloProtocol(time.Second*5, time.Second*15, time.Second*45)
-	h.Register(helloProtocol.ProtocolType(), helloProtocol)
-	defer helloProtocol.Stop()
-
 	//开启节点发现协议
 	bfsProtocol := protocol.NewRouterBFSProtocol(s)
-	h.Register(bfsProtocol.ProtocolType(), bfsProtocol)
+	s.Register(bfsProtocol.ProtocolType(), bfsProtocol)
 	// 解析命令
 	go handle(s, nil)
 	log.Println("Listen on", *addr)
@@ -60,7 +57,7 @@ func main() {
 	}
 }
 
-func handle(s iface.Server, p routerbfs.Protocol) {
+func handle(s server.Server, p protocol.Protocol) {
 	ctx := context.WithValue(context.WithValue(context.Background(), "server", s), "bfs", p)
 	time.Sleep(time.Second)
 	envName := fmt.Sprintf("%d@>>", *id)

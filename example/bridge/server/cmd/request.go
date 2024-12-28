@@ -3,7 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"github.com/Li-giegie/node/iface"
+	"github.com/Li-giegie/node/pkg/server"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"strings"
 	"time"
@@ -14,7 +14,7 @@ var request = &rabbit.Cmd{
 	Description: "发送消息，并希望在限定时间内得到一个回复",
 	Run:         nil,
 	RunE: func(c *rabbit.Cmd, args []string) error {
-		srv := c.Context().Value("server").(iface.Server)
+		srv := c.Context().Value("server").(server.Server)
 		id, err := c.Flags().GetUint32("id")
 		if err != nil {
 			return err

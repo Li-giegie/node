@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/Li-giegie/node/iface"
+	"github.com/Li-giegie/node/pkg/conn"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"strconv"
 	"strings"
@@ -13,7 +13,7 @@ var send = &rabbit.Cmd{
 	Run:         nil,
 	RunE: func(c *rabbit.Cmd, args []string) error {
 		id, _ := strconv.Atoi(c.Flags().Lookup("id").Value.String())
-		conn := c.Context().Value("conn").(iface.Conn)
+		conn := c.Context().Value("conn").(conn.Conn)
 		err := conn.SendTo(uint32(id), []byte(strings.Join(args, " ")))
 		if err != nil {
 			return err

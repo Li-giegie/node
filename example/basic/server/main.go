@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/iface"
-	"github.com/Li-giegie/node/message"
+	"github.com/Li-giegie/node/pkg/common"
+	"github.com/Li-giegie/node/pkg/conn"
+	"github.com/Li-giegie/node/pkg/ctx"
+	"github.com/Li-giegie/node/pkg/message"
 	"log"
 	"net"
 	"time"
@@ -12,18 +14,18 @@ import (
 
 func main() {
 	// 创建服务端
-	s := node.NewServer(&node.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6})
+	s := node.NewServer(&common.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6})
 	// accept 一个连接时触发回调，allow 返回值为false时断开连接
 	s.OnAccept(func(conn net.Conn) (allow bool) {
 		log.Println("OnAccept", conn.RemoteAddr().String())
 		return true
 	})
 	// 通过认证后连接正式建立的回调,同步调用
-	s.OnConnect(func(conn iface.Conn) {
+	s.OnConnect(func(conn conn.Conn) {
 		log.Println("OnConnection conn id:", conn.RemoteId())
 	})
 	// 收到消息的回调,同步调用
-	s.OnMessage(func(ctx iface.Context) {
+	s.OnMessage(func(ctx ctx.Context) {
 		log.Println("OnMessage", string(ctx.Data()))
 		if ctx.Type() != message.MsgType_Default {
 			ctx.Response(message.StateCode_MessageTypeInvalid, nil)
@@ -34,7 +36,7 @@ func main() {
 		ctx.Response(200, []byte(rdata))
 	})
 	// 连接断开时回调
-	s.OnClose(func(conn iface.Conn, err error) {
+	s.OnClose(func(conn conn.Conn, err error) {
 		log.Println("OnClosed", conn.RemoteId(), err)
 	})
 	// 侦听并启动
