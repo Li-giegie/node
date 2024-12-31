@@ -1,59 +1,58 @@
-package impl_server
+package implserver
 
 import (
 	"context"
 	"crypto/tls"
 	"github.com/Li-giegie/node/internal"
-	"github.com/Li-giegie/node/internal/connmanager/impl_connmanager"
-	"github.com/Li-giegie/node/internal/eventhandlerregistry/impl_eventhandlerregistry"
-	"github.com/Li-giegie/node/pkg/common"
-	"github.com/Li-giegie/node/pkg/conn/impl_conn"
-	"github.com/Li-giegie/node/pkg/ctx/impl_context"
-	"github.com/Li-giegie/node/pkg/errors/impl_errors"
+	"github.com/Li-giegie/node/internal/connmanager/implconnmanager"
+	"github.com/Li-giegie/node/internal/eventmanager/impleventmanager"
+	"github.com/Li-giegie/node/pkg/conn/implconn"
+	"github.com/Li-giegie/node/pkg/ctx/implcontext"
+	"github.com/Li-giegie/node/pkg/errors"
 	"github.com/Li-giegie/node/pkg/message"
 	"github.com/Li-giegie/node/pkg/router"
-	"github.com/Li-giegie/node/pkg/router/impl_router"
+	"github.com/Li-giegie/node/pkg/router/implrouter"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// NewServer 创建一个Server类型的节点,identity为节点标识必须设置，config为nil时使用默认配置
-func NewServer(identity *common.Identity, c ...*common.Config) *Server {
-	s := new(Server)
-	s.id = identity.Id
-	s.authTimeout = identity.AuthTimeout
-	s.recvChan = make(map[uint32]chan *message.Message)
-	s.stopCtx, s.cancel = context.WithCancel(context.Background())
-	s.authHashKey = internal.Hash(identity.Key)
-	s.ConnManager = impl_connmanager.NewConnManager()
-	s.EventHandlerRegistry = impl_eventhandlerregistry.NewEventHandlerRegistry()
-	s.Router = impl_router.NewRouter()
-	if n := len(c); n > 0 {
-		if n != 1 {
-			panic(impl_errors.MultipleConfigErr)
-		}
-		s.Config = c[0]
-	} else {
-		s.Config = common.DefaultConfig
-	}
-	return s
-}
-
 type Server struct {
-	id          uint32
-	authHashKey []byte
-	authTimeout time.Duration
-	recvChan    map[uint32]chan *message.Message
-	recvLock    sync.Mutex
-	counter     uint32
-	stopCtx     context.Context
-	cancel      context.CancelFunc
-	*impl_router.Router
-	*impl_eventhandlerregistry.EventHandlerRegistry
-	*impl_connmanager.ConnManager
-	*common.Config
+	// 节点Id
+	Id uint32
+	// 节点认证key
+	AuthKey []byte
+	// 认证超时
+	AuthTimeout time.Duration
+	// 大于0时启用，收发消息最大长度，最大值0xffffffff
+	MaxMsgLen uint32
+	// 大于1时启用，并发请求或发送时，发出的消息不会被立即发出，而是会进入队列，直至队列缓冲区满，或者最后一个goroutine时才会将消息发出，如果消息要以最快的方式发出，那么请不要进入队列
+	WriterQueueSize int
+	// 读缓存区大小
+	ReaderBufSize int
+	// 大于64时启用，从队列读取后进入缓冲区，缓冲区大小
+	WriterBufSize int
+	// 大于0启用，最大连接数
+	MaxConnections int
+	// 超过最大连接休眠时长，MaxConns>0时有效
+	SleepOnMaxConnections time.Duration
+	// 连接保活检查时间间隔 > 0启用
+	KeepaliveInterval time.Duration
+	// 连接保活超时时间 > 0启用
+	KeepaliveTimeout time.Duration
+	// 连接保活最大超时次数
+	KeepaliveTimeoutClose time.Duration
+	MaxHop                uint8
+	HashKey               []byte
+	idCounter             uint32
+	RecvChan              map[uint32]chan *message.Message
+	RecvLock              sync.Mutex
+	stopCtx               context.Context
+	cancel                context.CancelFunc
+	*implrouter.Router
+	*impleventmanager.EventManager
+	*implconnmanager.ConnManager
 }
 
 func (s *Server) ListenAndServe(address string, conf ...*tls.Config) (err error) {
@@ -61,7 +60,7 @@ func (s *Server) ListenAndServe(address string, conf ...*tls.Config) (err error)
 	network, addr := internal.ParseAddr(address)
 	if n := len(conf); n > 0 {
 		if n != 1 {
-			return impl_errors.MultipleConfigErr
+			return errors.MultipleConfigErr
 		}
 		listen, err = tls.Listen(network, addr, conf[0])
 	} else {
@@ -74,15 +73,14 @@ func (s *Server) ListenAndServe(address string, conf ...*tls.Config) (err error)
 }
 
 func (s *Server) Serve(l net.Listener) error {
-	if s.Config.MaxConnSleep == 0 && s.Config.MaxConns > 0 {
-		return impl_errors.ConfigMaxConnSleepErr
-	}
-	s.startHeartbeatCheck()
+	defer l.Close()
+	s.stopCtx, s.cancel = context.WithCancel(context.Background())
 	errChan := make(chan error, 1)
+	s.startHeartbeatCheck()
 	go func() {
 		for {
-			if s.MaxConns > 0 && s.ConnManager.LenConn() > s.MaxConns {
-				time.Sleep(s.MaxConnSleep)
+			if s.MaxConnections > 0 && s.LenConn() > s.MaxConnections {
+				time.Sleep(s.SleepOnMaxConnections)
 				continue
 			}
 			conn, err := l.Accept()
@@ -101,36 +99,34 @@ func (s *Server) Serve(l net.Listener) error {
 	}()
 	select {
 	case err := <-errChan:
-		_ = l.Close()
 		return err
 	case <-s.stopCtx.Done():
-		_ = l.Close()
 		return nil
 	}
 }
 
 func (s *Server) handleAuthenticate(conn net.Conn) {
-	src, dst, key, err := internal.DefaultBasicReq.Receive(conn, s.authTimeout)
+	src, dst, key, err := internal.DefaultBasicReq.Receive(conn, s.AuthTimeout)
 	if err != nil {
 		_ = conn.Close()
 		return
 	}
-	if src == s.id {
+	if src == s.Id {
 		_ = internal.DefaultBasicResp.Send(conn, false, "error: local id invalid")
 		_ = conn.Close()
 		return
 	}
-	if dst != s.id {
+	if dst != s.Id {
 		_ = internal.DefaultBasicResp.Send(conn, false, "error: remote id invalid")
 		_ = conn.Close()
 		return
 	}
-	if !internal.BytesEqual(s.authHashKey, key) {
+	if !internal.BytesEqual(s.HashKey, key) {
 		_ = internal.DefaultBasicResp.Send(conn, false, "error: key invalid")
 		_ = conn.Close()
 		return
 	}
-	c := impl_conn.NewConn(s.id, src, conn, s.recvChan, &s.recvLock, &s.counter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
+	c := implconn.NewConn(s.Id, src, conn, s.RecvChan, &s.RecvLock, &s.idCounter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
 	if !s.AddConn(src, c) {
 		_ = internal.DefaultBasicResp.Send(conn, false, "error: id already exists")
 		_ = conn.Close()
@@ -141,10 +137,10 @@ func (s *Server) handleAuthenticate(conn net.Conn) {
 		s.RemoveConn(c.RemoteId())
 		return
 	}
-	s.startConn(c)
+	s.handleConn(c)
 }
 
-func (s *Server) startConn(c *impl_conn.Conn) {
+func (s *Server) handleConn(c *implconn.Conn) {
 	s.CallOnConnect(c)
 	for {
 		msg, err := c.ReadMessage()
@@ -154,8 +150,11 @@ func (s *Server) startConn(c *impl_conn.Conn) {
 			s.CallOnClose(c, err)
 			return
 		}
+		if msg.Hop >= 254 || msg.Hop >= s.MaxHop && s.MaxHop > 0 {
+			continue
+		}
 		msg.Hop++
-		if msg.DestId != s.id {
+		if msg.DestId != s.Id {
 			// 本地存在
 			if dstConn, exist := s.GetConn(msg.DestId); exist {
 				_ = dstConn.SendMessage(msg)
@@ -170,7 +169,7 @@ func (s *Server) startConn(c *impl_conn.Conn) {
 				// 路由表更新不及时
 				s.RemoveRoute(route.Dst, route.UnixNano)
 			}
-			_ = impl_context.NewContext(c, msg).Response(message.StateCode_NodeNotExist, nil)
+			_ = implcontext.NewContext(c, msg).Response(message.StateCode_NodeNotExist, nil)
 			continue
 		}
 		switch msg.Type {
@@ -178,15 +177,15 @@ func (s *Server) startConn(c *impl_conn.Conn) {
 			_ = c.SendType(message.MsgType_KeepaliveACK, nil)
 		case message.MsgType_KeepaliveACK:
 		case message.MsgType_Reply:
-			s.recvLock.Lock()
-			ch, ok := s.recvChan[msg.Id]
+			s.RecvLock.Lock()
+			ch, ok := s.RecvChan[msg.Id]
 			if ok {
 				ch <- msg
-				delete(s.recvChan, msg.Id)
+				delete(s.RecvChan, msg.Id)
 			}
-			s.recvLock.Unlock()
+			s.RecvLock.Unlock()
 		default:
-			s.CallOnMessage(impl_context.NewContext(c, msg))
+			s.CallOnMessage(implcontext.NewContext(c, msg))
 		}
 	}
 }
@@ -198,8 +197,8 @@ func (s *Server) RequestTo(ctx context.Context, dst uint32, data []byte) ([]byte
 func (s *Server) RequestTypeTo(ctx context.Context, typ uint8, dst uint32, data []byte) ([]byte, int16, error) {
 	return s.RequestMessage(ctx, &message.Message{
 		Type:   typ,
-		Id:     atomic.AddUint32(&s.counter, 1),
-		SrcId:  s.id,
+		Id:     atomic.AddUint32(&s.idCounter, 1),
+		SrcId:  s.Id,
 		DestId: dst,
 		Data:   data,
 	})
@@ -210,7 +209,7 @@ func (s *Server) RequestMessage(ctx context.Context, msg *message.Message) ([]by
 	if ok {
 		return conn.RequestMessage(ctx, msg)
 	}
-	route, ok := s.Router.GetRoute(msg.DestId)
+	route, ok := s.GetRoute(msg.DestId)
 	if ok {
 		if conn, ok = s.GetConn(route.Via); ok {
 			return conn.RequestMessage(ctx, msg)
@@ -226,8 +225,8 @@ func (s *Server) SendTo(dst uint32, data []byte) error {
 func (s *Server) SendTypeTo(typ uint8, dst uint32, data []byte) error {
 	return s.SendMessage(&message.Message{
 		Type:   typ,
-		Id:     atomic.AddUint32(&s.counter, 1),
-		SrcId:  s.id,
+		Id:     atomic.AddUint32(&s.idCounter, 1),
+		SrcId:  s.Id,
 		DestId: dst,
 		Data:   data,
 	})
@@ -238,13 +237,13 @@ func (s *Server) SendMessage(msg *message.Message) error {
 	if ok {
 		return conn.SendMessage(msg)
 	}
-	route, ok := s.Router.GetRoute(msg.DestId)
+	route, ok := s.GetRoute(msg.DestId)
 	if ok {
 		if conn, ok = s.GetConn(route.Via); ok {
 			return conn.SendMessage(msg)
 		}
 	}
-	return impl_errors.ErrNodeNotExist
+	return errors.ErrNodeNotExist
 }
 
 func (s *Server) Bridge(conn net.Conn, remoteId uint32, remoteAuthKey []byte) (err error) {
@@ -253,57 +252,46 @@ func (s *Server) Bridge(conn net.Conn, remoteId uint32, remoteAuthKey []byte) (e
 			_ = conn.Close()
 		}
 	}()
-	if remoteId == s.id {
-		return impl_errors.BridgeRemoteIdExistErr
+	if remoteId == s.Id {
+		return errors.BridgeRemoteIdExistErr
 	}
 	if _, ok := s.GetConn(remoteId); ok {
-		return impl_errors.BridgeRemoteIdExistErr
+		return errors.BridgeRemoteIdExistErr
 	}
-	if err = internal.DefaultBasicReq.Send(conn, s.id, remoteId, remoteAuthKey); err != nil {
+	if err = internal.DefaultBasicReq.Send(conn, s.Id, remoteId, remoteAuthKey); err != nil {
 		return err
 	}
-	permit, msg, err := internal.DefaultBasicResp.Receive(conn, s.authTimeout)
+	permit, msg, err := internal.DefaultBasicResp.Receive(conn, s.AuthTimeout)
 	if err != nil {
 		return err
 	}
 	if !permit {
-		return impl_errors.NodeError(msg)
+		return errors.Error(msg)
 	}
-	c := impl_conn.NewConn(s.id, remoteId, conn, s.recvChan, &s.recvLock, &s.counter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
+	c := implconn.NewConn(s.Id, remoteId, conn, s.RecvChan, &s.RecvLock, &s.idCounter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
 	if !s.AddConn(remoteId, c) {
-		return impl_errors.BridgeRemoteIdExistErr
+		return errors.BridgeRemoteIdExistErr
 	}
-	go s.startConn(c)
+	go s.handleConn(c)
 	return nil
 }
 
-func (s *Server) GetRouter() router.Router {
-	return s.Router
-}
-
-func (s *Server) Id() uint32 {
-	return s.id
+func (s *Server) NodeId() uint32 {
+	return s.Id
 }
 
 func (s *Server) Close() {
+	if s.cancel == nil {
+		return
+	}
 	for _, conn := range s.GetAllConn() {
 		_ = conn.Close()
 	}
 	s.cancel()
 }
 
-func (s *Server) SetKeepalive(interval, timeout, timeoutClose time.Duration) {
-	s.KeepaliveInterval = interval
-	s.KeepaliveTimeout = timeout
-	s.KeepaliveTimeoutClose = timeoutClose
-	if !s.Keepalive {
-		s.Keepalive = true
-		s.startHeartbeatCheck()
-	}
-}
-
 func (s *Server) startHeartbeatCheck() {
-	if !s.Keepalive {
+	if s.KeepaliveInterval <= 0 || s.KeepaliveTimeout <= 0 {
 		return
 	}
 	go func() {
@@ -329,4 +317,8 @@ func (s *Server) startHeartbeatCheck() {
 		}
 	}()
 	return
+}
+
+func (s *Server) GetRouter() router.Router {
+	return s.Router
 }

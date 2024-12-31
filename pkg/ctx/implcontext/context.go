@@ -1,13 +1,13 @@
-package impl_context
+package implcontext
 
 import (
 	"github.com/Li-giegie/node/pkg/conn"
-	"github.com/Li-giegie/node/pkg/conn/impl_conn"
-	"github.com/Li-giegie/node/pkg/errors/impl_errors"
+	"github.com/Li-giegie/node/pkg/conn/implconn"
+	"github.com/Li-giegie/node/pkg/errors"
 	"github.com/Li-giegie/node/pkg/message"
 )
 
-func NewContext(connect *impl_conn.Conn, message *message.Message) *Context {
+func NewContext(connect *implconn.Conn, message *message.Message) *Context {
 	return &Context{
 		msg:  message,
 		conn: connect,
@@ -16,7 +16,7 @@ func NewContext(connect *impl_conn.Conn, message *message.Message) *Context {
 
 type Context struct {
 	msg        *message.Message
-	conn       *impl_conn.Conn
+	conn       *implconn.Conn
 	isResponse bool
 }
 
@@ -51,7 +51,7 @@ func (c *Context) String() string {
 // Response 响应数据，type为 message.MsgType_Reply，限制回复一次，不要尝试多次回复，多次回复返回 var ErrLimitReply = errors.New("limit reply to one time")
 func (c *Context) Response(code int16, data []byte) error {
 	if c.isResponse {
-		return impl_errors.ErrMultipleResponse
+		return errors.ErrMultipleResponse
 	}
 	c.isResponse = true
 	c.msg.Hop = 0

@@ -1,4 +1,4 @@
-package eventhandlerregistry
+package eventmanager
 
 import "github.com/Li-giegie/node/pkg/handler"
 

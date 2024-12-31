@@ -18,15 +18,15 @@ import (
 // hop 字段为消息的跳数，主要用在路由协议中，初始值为0，每经过一个节点都会加1，如果不是转发，初始值都应该是0,
 type Conn interface {
 	// Request 发起请求到直连的服务端
-	Request(ctx context.Context, data []byte) (response []byte, stateCode int16, err error)
+	Request(ctx context.Context, data []byte) (resp []byte, stateCode int16, err error)
 	// RequestTo 发起请求到目的节点，当目的节点不是直连节点时使用此方法
-	RequestTo(ctx context.Context, dst uint32, data []byte) (response []byte, stateCode int16, err error)
+	RequestTo(ctx context.Context, dst uint32, data []byte) (resp []byte, stateCode int16, err error)
 	// RequestType 发起请求到服务端，并指定type，type字段通常用于协议
-	RequestType(ctx context.Context, typ uint8, data []byte) (response []byte, stateCode int16, err error)
+	RequestType(ctx context.Context, typ uint8, data []byte) (resp []byte, stateCode int16, err error)
 	// RequestTypeTo 发起请求到目的节点，并指定type，type字段通常用于协议,当目的节点不是直连节点时使用此方法
-	RequestTypeTo(ctx context.Context, typ uint8, dst uint32, data []byte) (response []byte, stateCode int16, err error)
+	RequestTypeTo(ctx context.Context, typ uint8, dst uint32, data []byte) (resp []byte, stateCode int16, err error)
 	// RequestMessage 发起请求，并自主构建完整的消息，注意：msg请使用CreateMessage创建一个完整的msg或者使用CreateMessageId创建，保证Id字段唯一性
-	RequestMessage(ctx context.Context, msg *message.Message) (response []byte, stateCode int16, err error)
+	RequestMessage(ctx context.Context, msg *message.Message) (resp []byte, stateCode int16, err error)
 	// Send 发送数据到服务端
 	Send(data []byte) error
 	// SendTo 发送数据到目的节点，当目的节点不是直连节点时使用此方法

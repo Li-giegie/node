@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/example/bridge/client/cmd"
-	"github.com/Li-giegie/node/pkg/common"
+	"github.com/Li-giegie/node/pkg/client"
 	"github.com/Li-giegie/node/pkg/conn"
 	context2 "github.com/Li-giegie/node/pkg/ctx"
 	"log"
@@ -24,13 +24,16 @@ var timeout = flag.Duration("timeout", time.Second*6, "remote auth timeout")
 func main() {
 	flag.Parse()
 	exitC := make(chan struct{}, 1)
-	c := node.NewClient(uint32(*lId), &common.Identity{Id: uint32(*rId), Key: []byte(*rKey), AuthTimeout: *timeout})
+	c := node.NewClientOption(uint32(*lId), uint32(*rId),
+		client.WithRemoteKey([]byte(*rKey)),
+		client.WithAuthTimeout(*timeout),
+	)
 	c.OnConnect(func(conn conn.Conn) {
 		fmt.Println(conn.RemoteId())
 	})
 	c.OnMessage(func(ctx context2.Context) {
 		fmt.Println(ctx.String())
-		data := fmt.Sprintf("from %d echo %s", c.Id(), ctx.Data())
+		data := fmt.Sprintf("from %d echo %s", c.NodeId(), ctx.Data())
 		ctx.Response(200, []byte(data))
 	})
 	c.OnClose(func(conn conn.Conn, err error) {

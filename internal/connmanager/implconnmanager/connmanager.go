@@ -1,4 +1,4 @@
-package impl_connmanager
+package implconnmanager
 
 import (
 	"github.com/Li-giegie/node/pkg/conn"

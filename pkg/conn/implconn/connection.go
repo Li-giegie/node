@@ -1,11 +1,11 @@
-package impl_conn
+package implconn
 
 import (
 	"bufio"
 	"context"
 	"encoding/binary"
 	"github.com/Li-giegie/node/internal/writequeue/impl_writequeue"
-	"github.com/Li-giegie/node/pkg/errors/impl_errors"
+	"github.com/Li-giegie/node/pkg/errors"
 	"github.com/Li-giegie/node/pkg/message"
 	"io"
 	"net"
@@ -21,7 +21,7 @@ func NewConn(localId, remoteId uint32, conn net.Conn, revChan map[uint32]chan *m
 	c.revLock = revLock
 	c.localId = localId
 	c.conn = conn
-	c.activate = time.Duration(time.Now().UnixNano())
+	c.unixNano = time.Now().UnixNano()
 	c.maxMsgLen = maxMsgLen
 	c.msgIdSeq = msgIdSeq
 	c.w = impl_writequeue.NewWriteQueue(conn, writerQueueSize, wBufSize)
@@ -39,7 +39,7 @@ type Conn struct {
 	remoteId  uint32
 	maxMsgLen uint32
 	msgIdSeq  *uint32
-	activate  time.Duration
+	unixNano  int64
 	revChan   map[uint32]chan *message.Message
 	revLock   *sync.Mutex
 	conn      net.Conn
@@ -53,7 +53,7 @@ func (c *Conn) ReadMessage() (*message.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.activate = time.Duration(time.Now().UnixNano())
+	c.unixNano = time.Now().UnixNano()
 	var checksum uint16
 	for i := 0; i < message.MsgHeaderLen-2; i++ {
 		checksum += uint16(c.headerBuf[i])
@@ -69,7 +69,7 @@ func (c *Conn) ReadMessage() (*message.Message, error) {
 		m.Type = message.MsgType_Reply
 		m.Data = []byte{byte(message.StateCode_CheckSumInvalid), byte(message.StateCode_CheckSumInvalid >> 8)}
 		_ = c.SendMessage(&m)
-		return nil, impl_errors.ErrChecksumInvalid
+		return nil, errors.ErrChecksumInvalid
 	}
 	dataLen := binary.LittleEndian.Uint32(c.headerBuf[14:18])
 	if dataLen > c.maxMsgLen && c.maxMsgLen > 0 {
@@ -77,7 +77,7 @@ func (c *Conn) ReadMessage() (*message.Message, error) {
 		m.Type = message.MsgType_Reply
 		m.Data = []byte{byte(message.StateCode_LengthOverflow), byte(message.StateCode_LengthOverflow >> 8)}
 		_ = c.SendMessage(&m)
-		return nil, impl_errors.ErrLengthOverflow
+		return nil, errors.ErrLengthOverflow
 	}
 	if dataLen > 0 {
 		m.Data = make([]byte, dataLen)
@@ -88,11 +88,11 @@ func (c *Conn) ReadMessage() (*message.Message, error) {
 
 func (c *Conn) SendMessage(m *message.Message) error {
 	if m.DestId == c.localId {
-		return impl_errors.ErrWriteMsgYourself
+		return errors.ErrWriteMsgYourself
 	}
 	msgLen := message.MsgHeaderLen + len(m.Data)
 	if msgLen > int(c.maxMsgLen) && c.maxMsgLen > 0 {
-		return impl_errors.ErrLengthOverflow
+		return errors.ErrLengthOverflow
 	}
 	data := make([]byte, msgLen)
 	data[0] = m.Type
@@ -201,8 +201,7 @@ func (c *Conn) RequestMessage(ctx context.Context, msg *message.Message) ([]byte
 	c.revLock.Lock()
 	c.revChan[id] = ch
 	c.revLock.Unlock()
-	err := c.SendMessage(msg)
-	if err != nil {
+	if err := c.SendMessage(msg); err != nil {
 		c.revLock.Lock()
 		delete(c.revChan, id)
 		c.revLock.Unlock()
@@ -218,26 +217,18 @@ func (c *Conn) RequestMessage(ctx context.Context, msg *message.Message) ([]byte
 			delete(c.revChan, id)
 		}
 		c.revLock.Unlock()
-		return nil, message.StateCode_RequestTimeout, ctx.Err()
+		return nil, message.StateCode_RequestTimeout, errors.Error(ctx.Err().Error())
 	case resp := <-ch:
 		close(ch)
 		if len(resp.Data) < 2 {
-			return nil, message.StateCode_ResponseInvalid, impl_errors.ErrInvalidResponse
+			return nil, message.StateCode_ResponseInvalid, errors.ErrInvalidResponse
 		}
-		code := int16(resp.Data[0]) | int16(resp.Data[1])<<8
-		switch code {
-		case message.StateCode_CheckSumInvalid:
-			return resp.Data[2:], code, impl_errors.ErrChecksumInvalid
-		case message.StateCode_LengthOverflow:
-			return resp.Data[2:], code, impl_errors.ErrLengthOverflow
-		default:
-			return resp.Data[2:], code, nil
-		}
+		return resp.Data[2:], int16(resp.Data[0]) | int16(resp.Data[1])<<8, nil
 	}
 }
 
 func (c *Conn) Activate() time.Duration {
-	return c.activate
+	return time.Duration(c.unixNano)
 }
 
 func (c *Conn) LocalId() uint32 {

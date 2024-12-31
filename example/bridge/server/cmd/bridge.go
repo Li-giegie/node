@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"github.com/Li-giegie/node/pkg/server"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"net"
@@ -19,6 +20,7 @@ var bind = &rabbit.Cmd{
 		addr, errs[2] = c.Flags().GetString("addr")
 		for _, err := range errs {
 			if err != nil {
+				fmt.Println("err", err)
 				return err
 			}
 		}

@@ -3,18 +3,16 @@ package main
 import (
 	"fmt"
 	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/pkg/common"
 	"github.com/Li-giegie/node/pkg/conn"
 	"github.com/Li-giegie/node/pkg/ctx"
 	"github.com/Li-giegie/node/pkg/message"
 	"log"
 	"net"
-	"time"
 )
 
 func main() {
-	// 创建服务端
-	s := node.NewServer(&common.Identity{Id: 8000, Key: []byte("hello"), AuthTimeout: time.Second * 6})
+	// 创建一个节点Id为8000的节点
+	s := node.NewServerOption(8000)
 	// accept 一个连接时触发回调，allow 返回值为false时断开连接
 	s.OnAccept(func(conn net.Conn) (allow bool) {
 		log.Println("OnAccept", conn.RemoteAddr().String())
@@ -31,7 +29,7 @@ func main() {
 			ctx.Response(message.StateCode_MessageTypeInvalid, nil)
 			return
 		}
-		rdata := fmt.Sprintf("from %d data %s", s.Id(), ctx.Data())
+		rdata := fmt.Sprintf("from %d data %s", s.NodeId(), ctx.Data())
 		// 回复消息
 		ctx.Response(200, []byte(rdata))
 	})

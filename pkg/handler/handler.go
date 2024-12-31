@@ -12,7 +12,7 @@ type Handler interface {
 	// OnConnect 连接通过基础认证正式建立后的回调
 	OnConnect(conn conn.Conn)
 	// OnMessage 收到消息后的回调
-	OnMessage(ctx ctx.Context)
+	OnMessage(c ctx.Context)
 	// OnClose 连接关闭后的回调
 	OnClose(conn conn.Conn, err error)
 }
