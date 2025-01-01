@@ -3,11 +3,10 @@ package routerbfs
 import (
 	"context"
 	"github.com/Li-giegie/node/pkg/conn"
-	"github.com/Li-giegie/node/pkg/ctx"
 	"github.com/Li-giegie/node/pkg/handler"
 	"github.com/Li-giegie/node/pkg/message"
+	"github.com/Li-giegie/node/pkg/responsewriter"
 	"github.com/Li-giegie/node/pkg/router"
-	"github.com/Li-giegie/node/pkg/router/implrouter"
 	"sync/atomic"
 	"time"
 )
@@ -34,7 +33,7 @@ func NewRouterBFS(protoType uint8, node Node, MaxRouteHop uint8, requestTimeout,
 }
 
 type RouterBFS struct {
-	handler.EmptyHandler
+	handler.Empty
 	requestTimeout time.Duration
 	protoType      uint8
 	idCounter      uint32
@@ -99,13 +98,13 @@ func (p *RouterBFS) onConnect(conn conn.Conn) {
 	p.broadcast(&proto, 0, subId)
 }
 
-func (p *RouterBFS) OnMessage(ctx ctx.Context) {
-	if ctx.Hop() == 255 || ctx.Hop() >= p.maxRouteHop && p.maxRouteHop > 0 {
+func (p *RouterBFS) OnMessage(r responsewriter.ResponseWriter, msg *message.Message) {
+	if msg.Hop >= 254 || msg.Hop >= p.maxRouteHop && p.maxRouteHop > 0 {
 		return
 	}
 	var proto ProtoMsg
 	// 从ctx.Data中解码协议消息
-	if err := proto.Decode(ctx.Data()); err != nil {
+	if err := proto.Decode(msg.Data); err != nil {
 		return
 	}
 	// 每条消息只会被处理一次，消息Id如果处理过存在，不再处理
@@ -117,8 +116,8 @@ func (p *RouterBFS) OnMessage(ctx ctx.Context) {
 		proto.Action = Action_Reply
 		proto.SrcId = p.node.NodeId()
 		proto.NInfo = p.fullNode.GetAllNodeInfo()
-		proto.SrcId = ctx.DestId()
-		_ = ctx.Response(200, proto.Encode())
+		proto.SrcId = msg.DestId
+		_ = r.Response(200, proto.Encode())
 		return
 	case Action_AddNode:
 		p.addNodes(proto.NInfo)
@@ -127,7 +126,7 @@ func (p *RouterBFS) OnMessage(ctx ctx.Context) {
 	default:
 		return
 	}
-	p.broadcast(&proto, ctx.Hop(), ctx.SrcId(), proto.SrcId)
+	p.broadcast(&proto, msg.Hop, msg.SrcId, proto.SrcId)
 }
 
 func (p *RouterBFS) OnClose(conn conn.Conn, err error) {
@@ -176,7 +175,7 @@ func (p *RouterBFS) addRoute(infos []*NodeInfo) {
 				if _, ok = p.node.GetConn(subInfo.Id); ok {
 					continue
 				}
-				route.AddRoute(subInfo.Id, info.RootNodeId, 2, subInfo.UnixNao, []*implrouter.RoutePath{
+				route.AddRoute(subInfo.Id, info.RootNodeId, 2, subInfo.UnixNao, []*router.RoutePath{
 					{Id: curId, UnixNano: p.unixNano},
 					{Id: info.RootNodeId, UnixNano: unixNano},
 					{Id: subInfo.Id, UnixNano: subInfo.UnixNao},
@@ -197,9 +196,9 @@ func (p *RouterBFS) addRoute(infos []*NodeInfo) {
 			if _, ok := p.node.GetConn(subInfo.Id); ok {
 				continue
 			}
-			subPaths := make([]*implrouter.RoutePath, lastIndex+1)
+			subPaths := make([]*router.RoutePath, lastIndex+1)
 			copyRoutePath(subPaths, paths)
-			subPaths[lastIndex] = &implrouter.RoutePath{Id: subInfo.Id, UnixNano: subInfo.UnixNao}
+			subPaths[lastIndex] = &router.RoutePath{Id: subInfo.Id, UnixNano: subInfo.UnixNao}
 			route.AddRoute(subInfo.Id, paths[1].Id, uint8(lastIndex), subInfo.UnixNao, subPaths)
 		}
 	}
@@ -246,9 +245,9 @@ func (p *RouterBFS) removeRoute(infos []*NodeInfo) {
 	}
 }
 
-func copyRoutePath(dst []*implrouter.RoutePath, src []*implrouter.RoutePath) {
+func copyRoutePath(dst []*router.RoutePath, src []*router.RoutePath) {
 	for i, path := range src {
-		dst[i] = &implrouter.RoutePath{
+		dst[i] = &router.RoutePath{
 			Id:       path.Id,
 			UnixNano: path.UnixNano,
 		}
@@ -285,16 +284,16 @@ func (p *RouterBFS) broadcast(m *ProtoMsg, hop uint8, filterIds ...uint32) {
 }
 
 type bfsResult struct {
-	node  *implrouter.RoutePath
-	paths []*implrouter.RoutePath
+	node  *router.RoutePath
+	paths []*router.RoutePath
 }
 
 // BFSSearch 搜索起点到终端的路径，src起点，dst终点，maxDeep最大深度，返回起点到终点的全部路径，bool是否存在
-func (p *RouterBFS) BFSSearch(src, dst uint32, maxDeep uint8) []*implrouter.RoutePath {
+func (p *RouterBFS) BFSSearch(src, dst uint32, maxDeep uint8) []*router.RoutePath {
 	if src == dst {
 		return nil
 	}
-	queue := []*bfsResult{{node: &implrouter.RoutePath{Id: src}, paths: []*implrouter.RoutePath{{Id: src, UnixNano: 0}}}}
+	queue := []*bfsResult{{node: &router.RoutePath{Id: src}, paths: []*router.RoutePath{{Id: src, UnixNano: 0}}}}
 	existTab := map[uint32]struct{}{src: {}}
 	var unixNano int64
 	var ok bool
@@ -307,7 +306,7 @@ func (p *RouterBFS) BFSSearch(src, dst uint32, maxDeep uint8) []*implrouter.Rout
 		}
 		result := p.fullNode.Find(current.node.Id, func(subTab map[uint32]int64) interface{} {
 			if unixNano, ok = subTab[dst]; ok {
-				return append(current.paths, &implrouter.RoutePath{Id: dst, UnixNano: unixNano})
+				return append(current.paths, &router.RoutePath{Id: dst, UnixNano: unixNano})
 			}
 			for subId, unixNano = range subTab {
 				if _, ok = existTab[subId]; ok {
@@ -315,25 +314,25 @@ func (p *RouterBFS) BFSSearch(src, dst uint32, maxDeep uint8) []*implrouter.Rout
 				}
 				existTab[subId] = struct{}{}
 				queue = append(queue, &bfsResult{
-					node:  &implrouter.RoutePath{Id: subId, UnixNano: unixNano},
-					paths: append(current.paths, &implrouter.RoutePath{Id: subId, UnixNano: unixNano})},
+					node:  &router.RoutePath{Id: subId, UnixNano: unixNano},
+					paths: append(current.paths, &router.RoutePath{Id: subId, UnixNano: unixNano})},
 				)
 			}
 			return nil
 		})
 		if result != nil {
-			return result.([]*implrouter.RoutePath)
+			return result.([]*router.RoutePath)
 		}
 	}
 	return nil
 }
 
-func (p *RouterBFS) ReroutingHandleFunc(dst uint32) (*implrouter.RouteEmpty, bool) {
+func (p *RouterBFS) ReroutingHandleFunc(dst uint32) (*router.RouteEmpty, bool) {
 	paths := p.BFSSearch(p.node.NodeId(), dst, p.maxRouteHop)
 	if len(paths) < 2 {
 		return nil, false
 	}
-	empty := &implrouter.RouteEmpty{
+	empty := &router.RouteEmpty{
 		Dst:      dst,
 		Via:      paths[1].Id,
 		Hop:      uint8(len(paths) - 1),

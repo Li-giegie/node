@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/pkg/conn"
-	"github.com/Li-giegie/node/pkg/ctx"
 	"github.com/Li-giegie/node/pkg/message"
+	"github.com/Li-giegie/node/pkg/responsewriter"
 	"log"
 	"net"
 )
@@ -19,23 +19,16 @@ func main() {
 		return true
 	})
 	// 通过认证后连接正式建立的回调,同步调用
-	s.OnConnect(func(conn conn.Conn) {
-		log.Println("OnConnection conn id:", conn.RemoteId())
+	s.OnConnect(func(conn conn.Conn) (next bool) {
+		return true
 	})
-	// 收到消息的回调,同步调用
-	s.OnMessage(func(ctx ctx.Context) {
-		log.Println("OnMessage", string(ctx.Data()))
-		if ctx.Type() != message.MsgType_Default {
-			ctx.Response(message.StateCode_MessageTypeInvalid, nil)
-			return
-		}
-		rdata := fmt.Sprintf("from %d data %s", s.NodeId(), ctx.Data())
-		// 回复消息
-		ctx.Response(200, []byte(rdata))
+	// 所有类型的消息都会进入,同步调用
+	s.OnMessage(func(r responsewriter.ResponseWriter, m *message.Message) (next bool) {
+		r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", s.NodeId())))
+		return true
 	})
-	// 连接断开时回调
-	s.OnClose(func(conn conn.Conn, err error) {
-		log.Println("OnClosed", conn.RemoteId(), err)
+	s.OnClose(func(conn conn.Conn, err error) (next bool) {
+		return true
 	})
 	// 侦听并启动
 	err := s.ListenAndServe("0.0.0.0:8000")

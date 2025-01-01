@@ -1,4 +1,4 @@
-package impl_writequeue
+package implwritequeue
 
 import (
 	"io"

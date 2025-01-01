@@ -5,7 +5,7 @@ import "fmt"
 // 标准消息类型
 const (
 	MsgType_Default uint8 = iota
-	MsgType_Reply
+	MsgType_Response
 	MsgType_KeepaliveASK
 	MsgType_KeepaliveACK
 	MsgType_Undefined

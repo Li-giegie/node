@@ -2,8 +2,9 @@ package internal
 
 import (
 	"encoding/binary"
-	"errors"
+	"github.com/Li-giegie/node/pkg/errors"
 	"io"
+	"math"
 	"time"
 )
 
@@ -12,7 +13,7 @@ var DefaultBasicResp = new(BasicAuthResp)
 
 type BasicAuthReq struct{}
 
-var errBytesLimit = errors.New("number of bytes exceeds the limit size")
+var maxAuthData uint16 = 40
 
 func (BasicAuthReq) Send(w io.Writer, srcId, dstId uint32, accessKey []byte) error {
 	data := make([]byte, 40)
@@ -37,31 +38,34 @@ func (BasicAuthReq) Receive(r io.Reader, t time.Duration) (srcId, dstId uint32, 
 
 type BasicAuthResp struct{}
 
+var maxBasicAuthRespMsgLen = math.MaxUint32 - 100
+var errLenOverflow = errors.New("auth response message length overflow")
+
 func (BasicAuthResp) Send(w io.Writer, permit bool, msg string) error {
-	if len(msg) > 65530 {
-		return errBytesLimit
+	if len(msg) > maxBasicAuthRespMsgLen {
+		return errLenOverflow
 	}
-	p := make([]byte, 3+len(msg))
-	binary.LittleEndian.PutUint16(p, uint16(len(msg)))
+	p := make([]byte, 5+len(msg))
+	binary.LittleEndian.PutUint32(p[:4], uint32(len(msg)))
 	if permit {
-		p[2] = 1
+		p[4] = 1
 	}
-	copy(p[3:], msg)
+	copy(p[5:], msg)
 	_, err := w.Write(p)
 	return err
 }
 
 func (BasicAuthResp) Receive(r io.Reader, t time.Duration) (permit bool, msg string, err error) {
-	buf := make([]byte, 3)
+	buf := make([]byte, 5)
 	err = ReadFull(r, t, buf)
 	if err != nil {
 		return false, "", err
 	}
-	pl := binary.LittleEndian.Uint16(buf)
-	if pl > 65530 {
-		return false, "", errBytesLimit
+	pl := binary.LittleEndian.Uint32(buf)
+	if int(pl) > maxBasicAuthRespMsgLen {
+		return false, "", errLenOverflow
 	}
-	if buf[2] == 1 {
+	if buf[4] == 1 {
 		permit = true
 	}
 	if pl > 0 {
@@ -73,4 +77,18 @@ func (BasicAuthResp) Receive(r io.Reader, t time.Duration) (permit bool, msg str
 		msg = string(buf)
 	}
 	return
+}
+
+func Auth(rw io.ReadWriter, lid, rid uint32, key []byte, timeout time.Duration) error {
+	if err := DefaultBasicReq.Send(rw, lid, rid, key); err != nil {
+		return err
+	}
+	permit, msg, err := DefaultBasicResp.Receive(rw, timeout)
+	if err != nil {
+		return err
+	}
+	if !permit {
+		return errors.New(msg)
+	}
+	return nil
 }

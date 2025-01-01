@@ -9,7 +9,8 @@ import (
 	"github.com/Li-giegie/node/example/bridge/client/cmd"
 	"github.com/Li-giegie/node/pkg/client"
 	"github.com/Li-giegie/node/pkg/conn"
-	context2 "github.com/Li-giegie/node/pkg/ctx"
+	"github.com/Li-giegie/node/pkg/message"
+	"github.com/Li-giegie/node/pkg/responsewriter"
 	"log"
 	"os"
 	"time"
@@ -28,16 +29,14 @@ func main() {
 		client.WithRemoteKey([]byte(*rKey)),
 		client.WithAuthTimeout(*timeout),
 	)
-	c.OnConnect(func(conn conn.Conn) {
-		fmt.Println(conn.RemoteId())
+	c.OnMessage(func(r responsewriter.ResponseWriter, m *message.Message) (next bool) {
+		r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", c.NodeId())))
+		return false
 	})
-	c.OnMessage(func(ctx context2.Context) {
-		fmt.Println(ctx.String())
-		data := fmt.Sprintf("from %d echo %s", c.NodeId(), ctx.Data())
-		ctx.Response(200, []byte(data))
-	})
-	c.OnClose(func(conn conn.Conn, err error) {
+	c.OnClose(func(conn conn.Conn, err error) (next bool) {
+		fmt.Println("client close")
 		exitC <- struct{}{}
+		return true
 	})
 	log.Println("Connect addr", *rAddr)
 	err := c.Connect(*rAddr)

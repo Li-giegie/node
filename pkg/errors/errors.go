@@ -28,3 +28,7 @@ var (
 	AcceptDeniedErr        = Error("AcceptCallback denied the connection establishment")
 	MultipleConfigErr      = Error("config accepts only one parameter")
 )
+
+func New(s string) error {
+	return Error([]byte(s))
+}

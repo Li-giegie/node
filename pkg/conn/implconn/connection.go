@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
-	"github.com/Li-giegie/node/internal/writequeue/impl_writequeue"
+	"github.com/Li-giegie/node/internal/writequeue/implwritequeue"
 	"github.com/Li-giegie/node/pkg/errors"
 	"github.com/Li-giegie/node/pkg/message"
 	"io"
@@ -24,7 +24,7 @@ func NewConn(localId, remoteId uint32, conn net.Conn, revChan map[uint32]chan *m
 	c.unixNano = time.Now().UnixNano()
 	c.maxMsgLen = maxMsgLen
 	c.msgIdSeq = msgIdSeq
-	c.w = impl_writequeue.NewWriteQueue(conn, writerQueueSize, wBufSize)
+	c.w = implwritequeue.NewWriteQueue(conn, writerQueueSize, wBufSize)
 	if rBufSize < 64 {
 		c.r = conn
 	} else {
@@ -66,7 +66,7 @@ func (c *Conn) ReadMessage() (*message.Message, error) {
 	m.DestId = binary.LittleEndian.Uint32(c.headerBuf[10:14])
 	if checksum != binary.LittleEndian.Uint16(c.headerBuf[message.MsgHeaderLen-2:]) {
 		m.SrcId, m.DestId = c.localId, m.SrcId
-		m.Type = message.MsgType_Reply
+		m.Type = message.MsgType_Response
 		m.Data = []byte{byte(message.StateCode_CheckSumInvalid), byte(message.StateCode_CheckSumInvalid >> 8)}
 		_ = c.SendMessage(&m)
 		return nil, errors.ErrChecksumInvalid
@@ -74,7 +74,7 @@ func (c *Conn) ReadMessage() (*message.Message, error) {
 	dataLen := binary.LittleEndian.Uint32(c.headerBuf[14:18])
 	if dataLen > c.maxMsgLen && c.maxMsgLen > 0 {
 		m.SrcId, m.DestId = c.localId, m.SrcId
-		m.Type = message.MsgType_Reply
+		m.Type = message.MsgType_Response
 		m.Data = []byte{byte(message.StateCode_LengthOverflow), byte(message.StateCode_LengthOverflow >> 8)}
 		_ = c.SendMessage(&m)
 		return nil, errors.ErrLengthOverflow

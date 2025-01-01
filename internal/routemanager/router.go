@@ -1,31 +1,35 @@
-package implrouter
+package routemanager
 
 import (
+	"github.com/Li-giegie/node/pkg/router"
 	"sync"
 )
 
 func NewRouter() *Router {
 	return &Router{
-		cache: make(map[uint32]*RouteEmpty),
+		cache: make(map[uint32]*router.RouteEmpty),
 		l:     sync.RWMutex{},
 	}
 }
 
 type Router struct {
 	// dst --> RouteEmpty
-	cache     map[uint32]*RouteEmpty
+	cache     map[uint32]*router.RouteEmpty
 	l         sync.RWMutex
-	rerouting []func(dst uint32) (*RouteEmpty, bool)
+	rerouting []func(dst uint32) (*router.RouteEmpty, bool)
 }
 
-func (r *Router) AddRoute(dst, via uint32, hop uint8, unixNano int64, paths []*RoutePath) bool {
+func (r *Router) AddRoute(dst, via uint32, hop uint8, unixNano int64, paths []*router.RoutePath) bool {
 	r.l.Lock()
 	defer r.l.Unlock()
+	if r.cache == nil {
+		r.cache = make(map[uint32]*router.RouteEmpty)
+	}
 	empty := r.cache[dst]
 	if empty != nil && empty.UnixNano > unixNano {
 		return false
 	}
-	r.cache[dst] = &RouteEmpty{
+	r.cache[dst] = &router.RouteEmpty{
 		Dst:      dst,
 		Via:      via,
 		Hop:      hop,
@@ -80,7 +84,7 @@ func (r *Router) RemoveRouteWithPath(path uint32, unixNano int64) (n int) {
 	return
 }
 
-func (r *Router) GetRoute(dst uint32) (*RouteEmpty, bool) {
+func (r *Router) GetRoute(dst uint32) (*router.RouteEmpty, bool) {
 	r.l.RLock()
 	defer r.l.RUnlock()
 	empty, ok := r.cache[dst]
@@ -97,7 +101,7 @@ func (r *Router) GetRouteVia(dst uint32) (uint32, bool) {
 	return empty.Via, true
 }
 
-func (r *Router) RangeRoute(callback func(*RouteEmpty) bool) {
+func (r *Router) RangeRoute(callback func(*router.RouteEmpty) bool) {
 	r.l.RLock()
 	defer r.l.RUnlock()
 	for _, empty := range r.cache {
@@ -107,11 +111,11 @@ func (r *Router) RangeRoute(callback func(*RouteEmpty) bool) {
 	}
 }
 
-func (r *Router) ReroutingHandleFunc(callback func(dst uint32) (*RouteEmpty, bool)) {
+func (r *Router) ReroutingHandleFunc(callback func(dst uint32) (*router.RouteEmpty, bool)) {
 	r.rerouting = append(r.rerouting, callback)
 }
 
-func (r *Router) Rerouting(dst uint32) (empty *RouteEmpty, ok bool) {
+func (r *Router) Rerouting(dst uint32) (empty *router.RouteEmpty, ok bool) {
 	for _, f := range r.rerouting {
 		empty, ok = f(dst)
 		if ok {
@@ -119,17 +123,4 @@ func (r *Router) Rerouting(dst uint32) (empty *RouteEmpty, ok bool) {
 		}
 	}
 	return nil, false
-}
-
-type RouteEmpty struct {
-	Dst      uint32
-	Via      uint32
-	Hop      uint8
-	UnixNano int64
-	Paths    []*RoutePath
-}
-
-type RoutePath struct {
-	Id       uint32
-	UnixNano int64
 }

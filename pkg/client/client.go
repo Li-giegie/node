@@ -2,11 +2,11 @@ package client
 
 import (
 	"crypto/tls"
-	"github.com/Li-giegie/node/internal/eventmanager/impleventmanager"
 	"github.com/Li-giegie/node/pkg/client/implclient"
 	"github.com/Li-giegie/node/pkg/conn"
 	"github.com/Li-giegie/node/pkg/handler"
 	"github.com/Li-giegie/node/pkg/message"
+	"github.com/Li-giegie/node/pkg/responsewriter"
 	"net"
 	"time"
 )
@@ -18,20 +18,20 @@ type Client interface {
 	// Start 阻塞开启服务
 	Start(conn net.Conn) error
 	conn.Conn
-	OnAccept(callback handler.OnAcceptFunc)
-	OnConnect(callback handler.OnConnectFunc)
-	OnMessage(callback handler.OnMessageFunc)
-	OnClose(callback handler.OnCloseFunc)
-	Register(typ uint8, h handler.Handler) bool
-	Deregister(typ uint8) bool
+	OnAccept(f func(conn net.Conn) (next bool))
+	OnConnect(f func(conn conn.Conn) (next bool))
+	OnMessage(f func(r responsewriter.ResponseWriter, m *message.Message) (next bool))
+	OnClose(f func(conn conn.Conn, err error) (next bool))
+	Register(typ uint8, h handler.Handler)
+	Deregister(typ uint8)
 	State() bool
 }
 
-func NewClient(localId, remoteId uint32, c *Config) Client {
+func NewClient(c *Config) Client {
 	return &implclient.Client{
-		Id:                    localId,
-		Rid:                   remoteId,
-		AuthKey:               c.AuthKey,
+		Id:                    c.Id,
+		RemoteID:              c.RemoteId,
+		RemoteKey:             c.RemoteKey,
 		AuthTimeout:           c.AuthTimeout,
 		MaxMsgLen:             c.MaxMsgLen,
 		WriterQueueSize:       c.WriterQueueSize,
@@ -40,19 +40,23 @@ func NewClient(localId, remoteId uint32, c *Config) Client {
 		KeepaliveInterval:     c.KeepaliveInterval,
 		KeepaliveTimeout:      c.KeepaliveTimeout,
 		KeepaliveTimeoutClose: c.KeepaliveTimeoutClose,
-		EventManager:          impleventmanager.NewEventManager(),
-		RecvChan:              make(map[uint32]chan *message.Message),
 	}
 }
 
-func NewClientOption(localId, remoteId uint32, opts ...Option) Client {
-	return NewClient(localId, remoteId, DefaultConfig(opts...))
+func NewClientOption(lid, rid uint32, opts ...Option) Client {
+	return NewClient(DefaultConfig(append([]Option{WithId(lid), WithRemoteId(rid)}, opts...)...))
 }
 
 type Option func(*Config)
 
 type Config struct {
-	AuthKey     []byte
+	// 当前节点Id
+	Id uint32
+	// 远程节点Id
+	RemoteId uint32
+	// 远程节点Key
+	RemoteKey []byte
+	// 认证超时时长
 	AuthTimeout time.Duration
 	// 大于0时启用，收发消息最大长度，最大值0xffffffff
 	MaxMsgLen uint32
@@ -87,9 +91,19 @@ func DefaultConfig(opts ...Option) *Config {
 	return c
 }
 
+func WithId(id uint32) Option {
+	return func(c *Config) {
+		c.Id = id
+	}
+}
+func WithRemoteId(id uint32) Option {
+	return func(c *Config) {
+		c.RemoteId = id
+	}
+}
 func WithRemoteKey(key []byte) Option {
 	return func(config *Config) {
-		config.AuthKey = key
+		config.RemoteKey = key
 	}
 }
 func WithAuthTimeout(timeout time.Duration) Option {

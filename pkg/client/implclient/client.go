@@ -4,9 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"github.com/Li-giegie/node/internal"
-	"github.com/Li-giegie/node/internal/eventmanager/impleventmanager"
+	"github.com/Li-giegie/node/internal/handlermanager"
 	"github.com/Li-giegie/node/pkg/conn/implconn"
-	"github.com/Li-giegie/node/pkg/ctx/implcontext"
 	"github.com/Li-giegie/node/pkg/errors"
 	"github.com/Li-giegie/node/pkg/message"
 	"net"
@@ -15,9 +14,12 @@ import (
 )
 
 type Client struct {
-	Id          uint32
-	Rid         uint32
-	AuthKey     []byte
+	Id uint32
+	// 远程节点ID
+	RemoteID uint32
+	// 认证密钥
+	RemoteKey []byte
+	// 认证超时时长
 	AuthTimeout time.Duration
 	// 大于0时启用，收发消息最大长度，最大值0xffffffff
 	MaxMsgLen uint32
@@ -33,12 +35,16 @@ type Client struct {
 	KeepaliveTimeout time.Duration
 	// 连接保活最大超时次数
 	KeepaliveTimeoutClose time.Duration
-	RecvChan              map[uint32]chan *message.Message
-	RecvLock              sync.Mutex
-	state                 bool
-	stopCtx               context.Context
-	cancel                context.CancelFunc
-	*impleventmanager.EventManager
+	internalField
+}
+
+type internalField struct {
+	recvChan map[uint32]chan *message.Message
+	recvLock sync.Mutex
+	state    bool
+	stopCtx  context.Context
+	cancel   context.CancelFunc
+	handlemanager.HandlerManager
 	*implconn.Conn
 }
 
@@ -66,36 +72,28 @@ func (c *Client) Start(conn net.Conn) (err error) {
 			_ = conn.Close()
 		}
 	}()
-	c.stopCtx, c.cancel = context.WithCancel(context.Background())
 	if !c.CallOnAccept(conn) {
 		return errors.AcceptDeniedErr
 	}
-	if err = internal.DefaultBasicReq.Send(conn, c.Id, c.Rid, c.AuthKey); err != nil {
+	if err = internal.Auth(conn, c.Id, c.RemoteID, c.RemoteKey, c.AuthTimeout); err != nil {
 		return err
 	}
-	permit, msg, err := internal.DefaultBasicResp.Receive(conn, c.AuthTimeout)
-	if err != nil {
-		return err
-	}
-	c.Conn = implconn.NewConn(c.Id, c.Rid, conn, c.RecvChan, &c.RecvLock, new(uint32), c.ReaderBufSize, c.WriterBufSize, c.WriterQueueSize, c.MaxMsgLen)
-	if !permit {
-		return errors.Error(msg)
-	}
-	c.startHeartbeatCheck()
-	c.CallOnConnect(c.Conn)
-	go func() {
-		err = c.serve()
-		c.CallOnClose(c.Conn, err)
-	}()
+	c.stopCtx, c.cancel = context.WithCancel(context.Background())
+	c.recvChan = make(map[uint32]chan *message.Message)
+	c.Conn = implconn.NewConn(c.Id, c.RemoteID, conn, c.recvChan, &c.recvLock, new(uint32), c.ReaderBufSize, c.WriterBufSize, c.WriterQueueSize, c.MaxMsgLen)
+	go c.Serve()
 	return nil
 }
 
-func (c *Client) serve() error {
+func (c *Client) Serve() (err error) {
+	c.startHeartbeatCheck()
+	c.CallOnConnect(c.Conn)
 	errChan := make(chan error, 1)
 	c.state = true
 	defer func() {
-		_ = c.Conn.Close()
 		c.state = false
+		_ = c.Conn.Close()
+		c.CallOnClose(c.Conn, err)
 	}()
 	go func() {
 		for {
@@ -112,21 +110,25 @@ func (c *Client) serve() error {
 			case message.MsgType_KeepaliveASK:
 				_ = c.Conn.SendType(message.MsgType_KeepaliveACK, nil)
 			case message.MsgType_KeepaliveACK:
-			case message.MsgType_Reply:
-				c.RecvLock.Lock()
-				ch, ok := c.RecvChan[msg.Id]
+			case message.MsgType_Response:
+				c.recvLock.Lock()
+				ch, ok := c.recvChan[msg.Id]
 				if ok {
 					ch <- msg
-					delete(c.RecvChan, msg.Id)
+					delete(c.recvChan, msg.Id)
 				}
-				c.RecvLock.Unlock()
+				c.recvLock.Unlock()
 			default:
-				c.CallOnMessage(implcontext.NewContext(c.Conn, msg))
+				c.CallOnMessage(&internal.ResponseWriter{
+					Conn:     c.Conn,
+					MsgId:    msg.Id,
+					MsgDstId: msg.SrcId,
+				}, msg)
 			}
 		}
 	}()
 	select {
-	case err := <-errChan:
+	case err = <-errChan:
 		return err
 	case <-c.stopCtx.Done():
 		return nil
@@ -141,7 +143,9 @@ func (c *Client) Close() error {
 	if c.Conn == nil {
 		return nil
 	}
-	c.cancel()
+	if c.cancel != nil {
+		c.cancel()
+	}
 	return c.Conn.Close()
 }
 

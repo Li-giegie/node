@@ -8,12 +8,12 @@ import (
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/example/bridge/server/cmd"
 	"github.com/Li-giegie/node/pkg/conn"
-	"github.com/Li-giegie/node/pkg/ctx"
+	"github.com/Li-giegie/node/pkg/handler"
 	"github.com/Li-giegie/node/pkg/message"
 	"github.com/Li-giegie/node/pkg/protocol"
+	"github.com/Li-giegie/node/pkg/responsewriter"
 	"github.com/Li-giegie/node/pkg/server"
 	"log"
-	"net"
 	"os"
 	"time"
 )
@@ -29,24 +29,17 @@ func main() {
 		server.WithAuthKey([]byte(*key)),
 		server.WithAuthTimeout(*timeout),
 	)
-	// 创建Server
-	s.OnAccept(func(conn net.Conn) (allow bool) {
-		log.Println("OnAccept remote addr:", conn.RemoteAddr())
+	s.OnClose(func(conn conn.Conn, err error) (next bool) {
+		fmt.Println("on close", conn.RemoteId())
 		return true
-	})
-	s.OnConnect(func(conn conn.Conn) {
-		log.Println("OnConnect remote id:", conn.RemoteId())
-	})
-	s.OnMessage(func(ctx ctx.Context) {
-		log.Println("OnMessage", ctx.String())
-		ctx.Response(message.StateCode_Success, []byte(fmt.Sprintf("from %d response %s", s.NodeId(), ctx.Data())))
-	})
-	s.OnClose(func(conn conn.Conn, err error) {
-		log.Println("OnClose", conn.RemoteId(), err)
 	})
 	//开启节点发现协议
 	bfsProtocol := protocol.NewRouterBFSProtocol(s)
 	s.Register(bfsProtocol.ProtocolType(), bfsProtocol)
+	s.Register(message.MsgType_Default, &handler.Default{OnMessageFunc: func(r responsewriter.ResponseWriter, m *message.Message) {
+		fmt.Printf("request from %d: %s\n", m.SrcId, m.Data)
+		r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", s.NodeId())))
+	}})
 	// 解析命令
 	go handle(s, nil)
 	log.Println("Listen on", *addr)

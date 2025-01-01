@@ -1,10 +1,2 @@
-github.com/Li-giegie/go-jeans v0.0.0-20240822074043-286467d8e7b6 h1:16EblYHi8z1IPdgvqVj+XqCCV5fxAvT5dKQ9zG1v8dA=
-github.com/Li-giegie/go-jeans v0.0.0-20240822074043-286467d8e7b6/go.mod h1:ewsHn8QY/rPPHMMH7lif5ydGrrh9Lbe+0oHkRmne6zY=
-github.com/Li-giegie/rabbit-cli v0.0.0-20240901095039-9a0c9ee9a855 h1:UZkFfubXI19Jbx2UkOpFJlvhaPuABUw7JQp2kEJ6Jsc=
-github.com/Li-giegie/rabbit-cli v0.0.0-20240901095039-9a0c9ee9a855/go.mod h1:lEiD99bsEzSaUy2WlTZs8lqcKQcX5S6LBbKOxcwEW60=
 github.com/Li-giegie/rabbit-cli v0.0.0-20240906175955-86400afcad5b h1:CaC+HCotacRPSLnXlKUyz5uWZiFoVrHZoGqB9JKehRQ=
 github.com/Li-giegie/rabbit-cli v0.0.0-20240906175955-86400afcad5b/go.mod h1:lEiD99bsEzSaUy2WlTZs8lqcKQcX5S6LBbKOxcwEW60=
-gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
-gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
-gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
-gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=

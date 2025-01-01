@@ -3,7 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"github.com/Li-giegie/node/pkg/router/implrouter"
+	"github.com/Li-giegie/node/pkg/router"
 	"github.com/Li-giegie/node/pkg/server"
 	rabbit "github.com/Li-giegie/rabbit-cli"
 	"time"
@@ -38,7 +38,7 @@ func init() {
 		Run:         nil,
 		RunE: func(c *rabbit.Cmd, args []string) error {
 			srv := c.Context().Value("server").(server.Server)
-			srv.GetRouter().RangeRoute(func(empty *implrouter.RouteEmpty) bool {
+			srv.GetRouter().RangeRoute(func(empty *router.RouteEmpty) bool {
 				fmt.Print("dst ", empty.Dst, " via ", empty.Via, " date-time ", time.UnixMicro(time.Duration(empty.UnixNano).Microseconds()).Format("2006-01-02 15:04:05"), " hop ", empty.Hop)
 				fmt.Print(" path ")
 				for _, path := range empty.Paths {

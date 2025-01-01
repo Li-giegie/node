@@ -3,17 +3,13 @@ package server
 import (
 	"context"
 	"crypto/tls"
-	"github.com/Li-giegie/node/internal"
-	"github.com/Li-giegie/node/internal/connmanager/implconnmanager"
-	"github.com/Li-giegie/node/internal/eventmanager/impleventmanager"
 	"github.com/Li-giegie/node/pkg/conn"
 	"github.com/Li-giegie/node/pkg/handler"
 	"github.com/Li-giegie/node/pkg/message"
+	"github.com/Li-giegie/node/pkg/responsewriter"
 	"github.com/Li-giegie/node/pkg/router"
-	"github.com/Li-giegie/node/pkg/router/implrouter"
 	"github.com/Li-giegie/node/pkg/server/implserver"
 	"net"
-	"sync"
 	"time"
 )
 
@@ -30,25 +26,32 @@ type Server interface {
 	GetConn(id uint32) (conn.Conn, bool)
 	// GetAllConn 获取所有连接
 	GetAllConn() []conn.Conn
+	// GetRouter 获取路由
 	GetRouter() router.Router
-	OnAccept(callback handler.OnAcceptFunc)
-	OnConnect(callback handler.OnConnectFunc)
-	OnMessage(callback handler.OnMessageFunc)
-	OnClose(callback handler.OnCloseFunc)
-	Register(typ uint8, h handler.Handler) bool
-	Deregister(typ uint8) bool
+	OnAccept(f func(conn net.Conn) (next bool))
+	OnConnect(f func(conn conn.Conn) (next bool))
+	OnMessage(f func(r responsewriter.ResponseWriter, m *message.Message) (next bool))
+	OnClose(f func(conn conn.Conn, err error) (next bool))
+	// Register 注册处理接口
+	Register(typ uint8, h handler.Handler)
+	// Deregister 注销消息类型为typ处理接口
+	Deregister(typ uint8)
 	RequestTo(ctx context.Context, dst uint32, data []byte) (resp []byte, stateCode int16, err error)
 	RequestTypeTo(ctx context.Context, typ uint8, dst uint32, data []byte) (resp []byte, stateCode int16, err error)
+	// RequestMessage 构建一个消息并发起请求，不要使用此方法发送消息，除非你知道自己在干什么，m的Id是Server内部维护的
 	RequestMessage(ctx context.Context, msg *message.Message) (resp []byte, stateCode int16, err error)
 	SendTo(dst uint32, data []byte) error
 	SendTypeTo(typ uint8, dst uint32, data []byte) error
+	// SendMessage 构建一个消息并发送，不要使用此方法发送消息除非你知道自己在干什么，m的Id是Server内部维护的
 	SendMessage(m *message.Message) error
+	CreateMessageId() uint32
+	CreateMessage(typ uint8, src uint32, dst uint32, data []byte) *message.Message
 	Close()
 }
 
-func NewServer(localId uint32, c *Config) Server {
+func NewServer(c *Config) Server {
 	return &implserver.Server{
-		Id:                    localId,
+		Id:                    c.Id,
 		AuthKey:               c.AuthKey,
 		AuthTimeout:           c.AuthTimeout,
 		MaxMsgLen:             c.MaxMsgLen,
@@ -61,17 +64,11 @@ func NewServer(localId uint32, c *Config) Server {
 		KeepaliveTimeout:      c.KeepaliveTimeout,
 		KeepaliveTimeoutClose: c.KeepaliveTimeoutClose,
 		MaxHop:                c.MaxHop,
-		HashKey:               internal.Hash(c.AuthKey),
-		RecvChan:              make(map[uint32]chan *message.Message),
-		RecvLock:              sync.Mutex{},
-		Router:                implrouter.NewRouter(),
-		EventManager:          impleventmanager.NewEventManager(),
-		ConnManager:           implconnmanager.NewConnManager(),
 	}
 }
 
-func NewServerOption(localId uint32, opts ...Option) Server {
-	return NewServer(localId, DefaultConfig(opts...))
+func NewServerOption(id uint32, opts ...Option) Server {
+	return NewServer(DefaultConfig(append([]Option{WithId(id)}, opts...)...))
 }
 
 func DefaultConfig(opts ...Option) *Config {
@@ -83,8 +80,8 @@ func DefaultConfig(opts ...Option) *Config {
 		ReaderBufSize:         4096,
 		WriterBufSize:         4096,
 		KeepaliveInterval:     time.Second * 20,
-		KeepaliveTimeout:      time.Minute,
-		KeepaliveTimeoutClose: time.Minute,
+		KeepaliveTimeout:      time.Second * 40,
+		KeepaliveTimeoutClose: time.Second * 120,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -93,6 +90,8 @@ func DefaultConfig(opts ...Option) *Config {
 }
 
 type Config struct {
+	// 节点Id
+	Id uint32
 	// 一条消息的最大转发次数
 	MaxHop uint8
 	// 节点认证Key
@@ -120,6 +119,18 @@ type Config struct {
 }
 
 type Option func(*Config)
+
+func WithId(id uint32) Option {
+	return func(c *Config) {
+		c.Id = id
+	}
+}
+
+func WithMaxHop(n uint8) Option {
+	return func(c *Config) {
+		c.MaxHop = n
+	}
+}
 
 func WithAuthKey(key []byte) Option {
 	return func(c *Config) {
