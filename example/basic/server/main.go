@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/pkg/conn"
+	"github.com/Li-giegie/node/pkg/handler"
 	"github.com/Li-giegie/node/pkg/message"
 	"github.com/Li-giegie/node/pkg/responsewriter"
 	"log"
@@ -29,6 +30,16 @@ func main() {
 	})
 	s.OnClose(func(conn conn.Conn, err error) (next bool) {
 		return true
+	})
+	// 注册消息类型为0的缺省处理函数
+	s.Register(message.MsgType_Default, &handler.Default{
+		OnAcceptFunc:  nil,
+		OnConnectFunc: nil,
+		OnMessageFunc: func(r responsewriter.ResponseWriter, m *message.Message) {
+			log.Println("OnAcceptFunc")
+			r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", s.NodeId())))
+		},
+		OnCloseFunc: nil,
 	})
 	// 侦听并启动
 	err := s.ListenAndServe("0.0.0.0:8000")

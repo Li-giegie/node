@@ -14,7 +14,6 @@ import (
 func main() {
 	// 创建一个节点为8081的节点
 	c := node.NewClientOption(8081, 8000)
-	exitChan := make(chan struct{}, 1)
 	c.OnAccept(func(conn net.Conn) (next bool) {
 		return true
 	})
@@ -29,7 +28,10 @@ func main() {
 		r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", c.NodeId())))
 		return true
 	})
+	// 创建接收
+	exitChan := make(chan struct{}, 1)
 	c.OnClose(func(conn conn.Conn, err error) (next bool) {
+		exitChan <- struct{}{}
 		return true
 	})
 	err := c.Connect("0.0.0.0:8000")
