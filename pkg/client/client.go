@@ -18,10 +18,15 @@ type Client interface {
 	// Start 阻塞开启服务
 	Start(conn net.Conn) error
 	conn.Conn
+	// OnAccept 注册全局OnAccept回调函数，net.Listen.Accept之后第一个回调函数，同步调用
 	OnAccept(f func(conn net.Conn) (next bool))
+	// OnConnect 注册全局OnConnect回调函数，OnAccept之后的回调函数，同步调用
 	OnConnect(f func(conn conn.Conn) (next bool))
+	// OnMessage 注册全局OnMessage回调函数，OnConnect之后每次收到请求时的回调函数，同步调用
 	OnMessage(f func(r responsewriter.ResponseWriter, m *message.Message) (next bool))
+	// OnClose 注册OnClose回调函数，连接被关闭后的回调函数，同步调用
 	OnClose(f func(conn conn.Conn, err error) (next bool))
+	// Register 注册实现了handler.Handler的处理接口，该接口的回调函数在OnAccept、OnConnect、OnMessage、OnClose之后被回调，同步调用
 	Register(typ uint8, h handler.Handler)
 	Deregister(typ uint8)
 	State() bool

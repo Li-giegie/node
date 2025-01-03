@@ -5,9 +5,7 @@ node是一个Go（Golang）编写的轻量级TCP框架，node帮助您轻松、�
 
 特征：
 - 支持请求响应模型
-- 支持多服务端节点桥接组网
-- 支持节点间路由
-- 节点去中心化
+- 支持多服务端节点桥接组网内部实现动态路由协议
 - 并发100w/s 请求响应
 
 ## 传输协议
@@ -48,27 +46,29 @@ go get -u github.com/Li-giegie/node@latest
 [Server 完整的示例](example/basic/server/main.go)
 ```go
 func main() {
-	// 创建一个节点Id为8000的节点
+	// 创建8000服务端节点
 	s := node.NewServerOption(8000)
-	// 全局注册OnAccept钩子，返回值next是否关闭连接和下一个回调
-	s.OnAccept(func(conn net.Conn) (allow bool) {
+	// OnAccept 注册全局OnAccept回调函数，net.Listen.Accept之后第一个回调函数，同步调用
+	s.OnAccept(func(conn net.Conn) (next bool) {
 		log.Println("OnAccept", conn.RemoteAddr().String())
 		return true
 	})
-    // 全局注册 OnConnect钩子，返回值next是否关闭连接和下一个回调
+	// OnConnect 注册全局OnConnect回调函数，OnAccept之后的回调函数，同步调用
 	s.OnConnect(func(conn conn.Conn) (next bool) {
+		log.Println("OnConnect", conn.RemoteAddr().String())
 		return true
 	})
-    // 全局注册 OnMessage，返回值next是否关闭连接和下一个回调
+	// OnMessage 注册全局OnMessage回调函数，OnConnect之后每次收到请求时的回调函数，同步调用
 	s.OnMessage(func(r responsewriter.ResponseWriter, m *message.Message) (next bool) {
-		r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", s.NodeId())))
+		log.Println("OnMessage", m.String())
 		return true
 	})
-    // 全局注册 OnClose，返回值next是否关闭连接和下一个回调
+	// OnClose 注册OnClose回调函数，连接被关闭后的回调函数
 	s.OnClose(func(conn conn.Conn, err error) (next bool) {
+		log.Println("OnClose", conn.RemoteAddr().String())
 		return true
 	})
-	// 注册消息类型为message.MsgType_Default (0) 的 "缺省处理函数"
+	// Register 注册实现了handler.Handler的处理接口，该接口的回调函数在OnAccept、OnConnect、OnMessage、OnClose之后被回调
 	s.Register(message.MsgType_Default, &handler.Default{
 		OnAcceptFunc:  nil,
 		OnConnectFunc: nil,
@@ -78,7 +78,7 @@ func main() {
 		},
 		OnCloseFunc: nil,
 	})
-	// 侦听并启动
+	// 侦听并开启服务
 	err := s.ListenAndServe("0.0.0.0:8000")
 	if err != nil {
 		log.Println(err)
@@ -90,38 +90,44 @@ func main() {
 [Client 完整的示例](example/basic/client/main.go)
 ```go
 func main() {
-	// 创建一个节点为8081的节点，服务端节点8000
+	// 创建一个节点为8081的节点
 	c := node.NewClientOption(8081, 8000)
-	// 全局注册OnAccept钩子，返回值next是否关闭连接和下一个回调
+	// OnAccept 注册全局OnAccept回调函数，net.Listen.Accept之后第一个回调函数，同步调用
 	c.OnAccept(func(conn net.Conn) (next bool) {
+		log.Println("OnAccept", conn.RemoteAddr().String())
 		return true
 	})
-	// 全局注册 OnConnect钩子，返回值next是否关闭连接和下一个回调
+	// OnConnect 注册全局OnConnect回调函数，OnAccept之后的回调函数，同步调用
 	c.OnConnect(func(conn conn.Conn) (next bool) {
+		log.Println("OnConnect", conn.RemoteAddr().String())
 		return true
 	})
-    // 全局注册 OnMessage，返回值next是否关闭连接和下一个回调
+	// OnMessage 注册全局OnMessage回调函数，OnConnect之后每次收到请求时的回调函数，同步调用
 	c.OnMessage(func(r responsewriter.ResponseWriter, m *message.Message) (next bool) {
-		if m.Type != message.MsgType_Default {
-			r.Response(message.StateCode_MessageTypeInvalid, nil)
-			return false
-		}
-		r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", c.NodeId())))
+		log.Println("OnMessage", m.String())
 		return true
 	})
-	// 创建连接断开chan
+	// OnClose 注册OnClose回调函数，连接被关闭后的回调函数
 	exitChan := make(chan struct{}, 1)
-    // 全局注册 OnMessage，返回值next是否关闭连接和下一个回调
 	c.OnClose(func(conn conn.Conn, err error) (next bool) {
+		log.Println("OnClose", conn.RemoteAddr().String())
 		exitChan <- struct{}{}
 		return true
 	})
-	// 连接
+	// Register 注册实现了handler.Handler的处理接口，该接口的回调函数在OnAccept、OnConnect、OnMessage、OnClose之后被回调
+	c.Register(message.MsgType_Default, &handler.Default{
+		OnAcceptFunc:  nil,
+		OnConnectFunc: nil,
+		OnMessageFunc: func(r responsewriter.ResponseWriter, m *message.Message) {
+			log.Println("OnMessageFunc handle")
+			r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", c.NodeId())))
+		},
+		OnCloseFunc: nil,
+	})
 	err := c.Connect("0.0.0.0:8000")
 	if err != nil {
 		log.Fatalln(err)
 	}
-	// 发起请求，并得到回复
 	res, code, err := c.Request(context.Background(), []byte("hello"))
 	fmt.Println(code, string(res), err)
 	_ = c.Close()
