@@ -26,6 +26,8 @@ type Server interface {
 	GetConn(id uint32) (conn.Conn, bool)
 	// GetAllConn 获取所有连接
 	GetAllConn() []conn.Conn
+	LenConn() (n int)
+	RangeConn(f func(conn conn.Conn) bool)
 	// GetRouter 获取路由
 	GetRouter() router.Router
 	// OnAccept 注册全局OnAccept回调函数，net.Listen.Accept之后第一个回调函数，同步调用

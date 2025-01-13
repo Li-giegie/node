@@ -17,7 +17,6 @@ type Client interface {
 	Connect(address string, config ...*tls.Config) (err error)
 	// Start 阻塞开启服务
 	Start(conn net.Conn) error
-	conn.Conn
 	// OnAccept 注册全局OnAccept回调函数，net.Listen.Accept之后第一个回调函数，同步调用
 	OnAccept(f func(conn net.Conn) (next bool))
 	// OnConnect 注册全局OnConnect回调函数，OnAccept之后的回调函数，同步调用
@@ -30,6 +29,7 @@ type Client interface {
 	Register(typ uint8, h handler.Handler)
 	Deregister(typ uint8)
 	State() bool
+	conn.Conn
 }
 
 func NewClient(c *Config) Client {

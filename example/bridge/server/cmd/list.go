@@ -42,7 +42,7 @@ func init() {
 				fmt.Print("dst ", empty.Dst, " via ", empty.Via, " date-time ", time.UnixMicro(time.Duration(empty.UnixNano).Microseconds()).Format("2006-01-02 15:04:05"), " hop ", empty.Hop)
 				fmt.Print(" path ")
 				for _, path := range empty.Paths {
-					fmt.Print(path.Id, " ")
+					fmt.Print(path, " ")
 				}
 				fmt.Println()
 				return true

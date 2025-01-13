@@ -172,7 +172,7 @@ func (s *Server) handleConn(c *implconn.Conn) {
 					continue
 				}
 				// 路由表更新不及时
-				s.RemoveRoute(route.Dst, route.UnixNano)
+				s.RemoveRoute(route.Dst)
 			}
 			r := internal.ResponseWriter{
 				Conn:     c,

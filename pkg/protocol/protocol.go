@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"context"
 	"github.com/Li-giegie/node/pkg/handler"
 	"github.com/Li-giegie/node/pkg/message"
 	"github.com/Li-giegie/node/pkg/protocol/routerbfs"
@@ -10,6 +11,7 @@ import (
 type Protocol interface {
 	ProtocolType() uint8
 	handler.Handler
+	StartNodeSync(ctx context.Context, timeout time.Duration)
 }
 
 var defaultMsgType = message.MsgType_Undefined
@@ -23,7 +25,13 @@ var (
 	protoMsgType_NodeDiscovery = CreateProtocolMsgType()
 )
 
+type Router interface {
+	ProtocolType() uint8
+	handler.Handler
+	StartNodeSync(ctx context.Context, timeout time.Duration)
+}
+
 // NewRouterBFSProtocol BFS 路由协议 n 节点 maxHop 最大跳数
-func NewRouterBFSProtocol(node routerbfs.Node) Protocol {
-	return routerbfs.NewRouterBFS(protoMsgType_NodeDiscovery, node, 32, time.Second*15, time.Second*15)
+func NewRouterBFSProtocol(node routerbfs.Node) Router {
+	return routerbfs.NewRouterBFS(protoMsgType_NodeDiscovery, node, 32)
 }

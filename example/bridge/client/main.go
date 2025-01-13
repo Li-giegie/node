@@ -30,6 +30,7 @@ func main() {
 		client.WithAuthTimeout(*timeout),
 	)
 	c.OnMessage(func(r responsewriter.ResponseWriter, m *message.Message) (next bool) {
+		fmt.Printf("request from %d: %s\n", m.SrcId, m.Data)
 		r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", c.NodeId())))
 		return false
 	})

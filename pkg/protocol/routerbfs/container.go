@@ -3,7 +3,6 @@ package routerbfs
 import (
 	"github.com/Li-giegie/node/pkg/conn"
 	"sync"
-	"time"
 )
 
 func newFullNodeContainer() *fullNodeContainer {
@@ -19,24 +18,48 @@ type fullNodeContainer struct {
 	sync.RWMutex
 }
 
-func (tab *fullNodeContainer) Find(rootId uint32, callback func(subTab map[uint32]int64) interface{}) interface{} {
+func (tab *fullNodeContainer) RootExist(id uint32) bool {
+	tab.RLock()
+	_, ok := tab.cache[id]
+	tab.RUnlock()
+	return ok
+}
+
+func (tab *fullNodeContainer) GetSubNodes(id uint32) []SubInfo {
 	tab.RLock()
 	defer tab.RUnlock()
-	subTab, rootExist := tab.cache[rootId]
+	subTab, rootExist := tab.cache[id]
 	if !rootExist {
 		return nil
 	}
-	return callback(subTab)
+	result := make([]SubInfo, 0, len(subTab))
+	for u, i := range subTab {
+		result = append(result, SubInfo{Id: u, UnixNao: i})
+	}
+	return result
 }
 
-func (tab *fullNodeContainer) Range(callback func(rootId, subId uint32, unixNano int64)) {
+func (tab *fullNodeContainer) Range(callback func(rootId, subId uint32, unixNano int64) bool) {
 	tab.RLock()
 	defer tab.RUnlock()
 	for u, m := range tab.cache {
 		for u2, i := range m {
-			callback(u, u2, i)
+			if !callback(u, u2, i) {
+				return
+			}
 		}
 	}
+}
+
+func (tab *fullNodeContainer) RangeWithRootNode(rootId uint32, callback func(subTab map[uint32]int64)) {
+	tab.RLock()
+	defer tab.RUnlock()
+	subTab, rootExist := tab.cache[rootId]
+	if !rootExist {
+		return
+	}
+	callback(subTab)
+	return
 }
 
 func (tab *fullNodeContainer) GetNodeUnixNano(rootId, subId uint32) (int64, bool) {
@@ -55,11 +78,28 @@ func (tab *fullNodeContainer) Add(rootId uint32, subId uint32, subUnixNao int64)
 		tab.cache[rootId] = map[uint32]int64{subId: subUnixNao}
 		return true
 	}
-	if u, ok := subTab[subId]; ok && u > subUnixNao {
+	if unixNano, ok := subTab[subId]; ok {
+		if unixNano < subUnixNao {
+			subTab[subId] = subUnixNao
+		}
 		return false
 	}
 	subTab[subId] = subUnixNao
 	return true
+}
+
+func (tab *fullNodeContainer) Get(rootId uint32, subId uint32) (int64, bool) {
+	tab.RLock()
+	defer tab.RUnlock()
+	subTab, ok := tab.cache[rootId]
+	if !ok {
+		return 0, false
+	}
+	unixNano, ok := subTab[subId]
+	if !ok {
+		return 0, false
+	}
+	return unixNano, true
 }
 
 func (tab *fullNodeContainer) Remove(rootId uint32, subId uint32, subUnixNao int64) bool {
@@ -73,19 +113,26 @@ func (tab *fullNodeContainer) Remove(rootId uint32, subId uint32, subUnixNao int
 	if !ok || unixNao > subUnixNao {
 		return false
 	}
+	// 删除父节点表中的子节点
 	delete(rootNode, subId)
 	if len(rootNode) == 0 {
 		delete(tab.cache, rootId)
 	}
+	// 查询根节点表中子节点表数据
 	subTab, ok := tab.cache[subId]
 	if !ok {
 		return true
 	}
+	// 子节点表的子节点不包含根节点，这个节点不是协议节点
+	if _, ok = subTab[rootId]; !ok {
+		return true
+	}
+	// 删除子节点为协议节点的关联节点
 	for subTabId, _ := range subTab {
-		subTab, ok = tab.cache[subTabId]
+		rootNode, ok = tab.cache[subTabId]
 		if ok {
-			delete(subTab, subId)
-			if len(subTab) == 0 {
+			delete(rootNode, subId)
+			if len(rootNode) == 0 {
 				delete(tab.cache, subTabId)
 			}
 		}
@@ -94,21 +141,21 @@ func (tab *fullNodeContainer) Remove(rootId uint32, subId uint32, subUnixNao int
 	return true
 }
 
-func (tab *fullNodeContainer) GetAllNodeInfo() []*NodeInfo {
+func (tab *fullNodeContainer) GetAllNodeInfo() []NodeInfo {
 	tab.RLock()
 	defer tab.RUnlock()
-	res := make([]*NodeInfo, 0, len(tab.cache))
+	res := make([]NodeInfo, 0, len(tab.cache))
 	for rootId, info := range tab.cache {
-		subInfo := make([]*SubInfo, 0, len(info))
+		subInfo := make([]SubInfo, 0, len(info))
 		for id, unixNao := range info {
-			subInfo = append(subInfo, &SubInfo{
+			subInfo = append(subInfo, SubInfo{
 				Id:      id,
 				UnixNao: unixNao,
 			})
 		}
-		res = append(res, &NodeInfo{
-			RootNodeId:  rootId,
-			SubNodeInfo: subInfo,
+		res = append(res, NodeInfo{
+			RootId: rootId,
+			SubIds: subInfo,
 		})
 	}
 	return res
@@ -131,81 +178,32 @@ func (p *protoNodeContainer) Add(id uint32, conn conn.Conn) {
 	p.l.Unlock()
 }
 
+func (p *protoNodeContainer) Get(id uint32) (conn.Conn, bool) {
+	p.l.RLock()
+	c, ok := p.cache[id]
+	p.l.RUnlock()
+	return c, ok
+}
+
 func (p *protoNodeContainer) Remove(id uint32) {
 	p.l.Lock()
 	delete(p.cache, id)
 	p.l.Unlock()
 }
 
-func (p *protoNodeContainer) Range(callback func(id uint32, conn conn.Conn)) {
+func (p *protoNodeContainer) Range(callback func(id uint32, conn conn.Conn) bool) {
 	p.l.RLock()
-	for u, conn := range p.cache {
-		callback(u, conn)
+	defer p.l.RUnlock()
+	for u, c := range p.cache {
+		if !callback(u, c) {
+			return
+		}
 	}
+}
+
+func (p *protoNodeContainer) Len() int {
+	p.l.RLock()
+	l := len(p.cache)
 	p.l.RUnlock()
-}
-
-// existContainer 记录消息协议消息Id是否重复
-type existContainer struct {
-	// k -> unixNao
-	cache        map[uint64]int64
-	ClearTimeout time.Duration
-	sync.RWMutex
-}
-
-func newExistContainer(ClearTimeout time.Duration) *existContainer {
-	return &existContainer{
-		cache:        make(map[uint64]int64),
-		RWMutex:      sync.RWMutex{},
-		ClearTimeout: ClearTimeout,
-	}
-}
-
-// Clean 清理value（unixNao）与当前时间差大于timeout的key
-func (m *existContainer) Clean() {
-	var timeoutKey []uint64
-	m.RLock()
-	for u, i := range m.cache {
-		if time.Duration(time.Now().UnixNano()-i) >= m.ClearTimeout {
-			timeoutKey = append(timeoutKey, u)
-		}
-	}
-	m.RUnlock()
-	if len(timeoutKey) > 0 {
-		m.Lock()
-		for _, u := range timeoutKey {
-			delete(m.cache, u)
-		}
-		m.Unlock()
-	}
-}
-
-func (m *existContainer) ExistOrStore(nodeId uint32, msgId uint32, unixNano int64) (exist bool) {
-	m.Lock()
-	defer m.Unlock()
-	key := uint64(nodeId)<<32 | uint64(msgId)
-	if l := len(m.cache); l > 0 && l%100 == 0 {
-		m.Clean()
-	}
-	if _, exist = m.cache[key]; !exist {
-		m.cache[key] = unixNano
-	}
-	return
-}
-
-func (m *existContainer) Remove(k uint32) {
-	m.Lock()
-	defer m.Unlock()
-	for u, _ := range m.cache {
-		if k == uint32(u>>32) {
-			delete(m.cache, u)
-		}
-	}
-}
-
-func (m *existContainer) Get(k uint64) (int64, bool) {
-	m.RLock()
-	defer m.RUnlock()
-	m2, ok := m.cache[k]
-	return m2, ok
+	return l
 }
