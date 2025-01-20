@@ -14,9 +14,11 @@ import (
 	"github.com/Li-giegie/node/pkg/protocol/routerbfs"
 	"github.com/Li-giegie/node/pkg/responsewriter"
 	"github.com/Li-giegie/node/pkg/server"
+	"github.com/sirupsen/logrus"
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +39,11 @@ func init() {
 var bfsProtocol protocol.Protocol
 
 func main() {
+
+	logrus.SetFormatter(&logrus.TextFormatter{
+		ForceColors: true,
+	})
+	var stopChan = make(chan interface{}, 1)
 	s := node.NewServerOption(conf.Id,
 		server.WithAuthKey([]byte(conf.Key)),
 		server.WithAuthTimeout(time.Second*6),
@@ -45,18 +52,19 @@ func main() {
 		fmt.Println("on close", conn.RemoteId())
 		return true
 	})
+	defer s.Close()
+
 	//开启节点发现协议
 	bfsProtocol = protocol.NewRouterBFSProtocol(s)
-	bfsProtocol.StartNodeSync(context.TODO(), time.Second*5)
+	//bfsProtocol.StartNodeSync(context.TODO(), time.Second*5)
 	s.Register(bfsProtocol.ProtocolType(), bfsProtocol)
 	s.Register(message.MsgType_Default, &handler.Default{OnMessageFunc: func(r responsewriter.ResponseWriter, m *message.Message) {
 		if string(m.Data) == "exit" {
 			for _, c := range s.GetAllConn() {
 				_ = c.Send(m.Data)
 			}
-			s.Close()
-			time.Sleep(time.Second)
-			os.Exit(0)
+			stopChan <- "receive：exit-cmd"
+			return
 		}
 		fmt.Printf("request from %d: %s\n", m.SrcId, m.Data)
 		r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", s.NodeId())))
@@ -97,9 +105,18 @@ func main() {
 			}
 		}
 	}()
-	log.Println("Listen on", conf.Addr)
-	if err := s.ListenAndServe(conf.Addr); err != nil {
-		log.Println(err)
+	go func() {
+		log.Println("Listen on", conf.Addr)
+		stopChan <- s.ListenAndServe(conf.Addr)
+	}()
+	exit := make(chan os.Signal, 1)
+	signal.Notify(exit)
+	var v interface{}
+	select {
+	case v = <-stopChan:
+		v = fmt.Sprintln("stop", v)
+	case v = <-exit:
+		v = fmt.Sprintln("exit", v)
 	}
 }
 
@@ -124,14 +141,24 @@ func handle(s server.Server, p protocol.Protocol) {
 			s.Close()
 			time.Sleep(time.Second)
 			os.Exit(0)
+		case "ne":
+			r.RangeNeighbor(func(id uint32, conn *routerbfs.Conn) bool {
+				fmt.Println("ne", id)
+				return true
+			})
 		case "full":
-			for _, info := range r.FullNode.GetAllNodeInfo() {
-				fmt.Print("root", info.RootId)
-				for _, id := range info.SubIds {
-					fmt.Print(" sub ", id.Id)
+			fmt.Println()
+			r.Range(func(rootId uint32, empty map[uint32]struct{}) bool {
+				fmt.Print("root", rootId)
+				for id := range empty {
+					fmt.Print(" sub ", id)
 				}
 				fmt.Println()
-			}
+				return true
+			})
+		case "start":
+			bfsProtocol.StartNodeSync(context.TODO(), time.Second*5)
+			fmt.Println("start sync success")
 		case "add", "remove":
 			if len(fields) < 3 {
 				fmt.Println("args < 4: add 1 2")
@@ -145,9 +172,9 @@ func handle(s server.Server, p protocol.Protocol) {
 			} else {
 				ok := true
 				if fields[0] == "add" {
-					ok = r.FullNode.Add(uint32(rid), uint32(sid), time.Now().UnixNano())
+					r.AddSub(uint32(rid), uint32(sid))
 				} else {
-					ok = r.FullNode.Remove(uint32(rid), uint32(sid), time.Now().UnixNano())
+					ok = r.DeleteSub(uint32(rid), uint32(sid))
 				}
 				if ok {
 					fmt.Printf("%s 操作成功 root %d sub %d\n", fields[0], rid, sid)

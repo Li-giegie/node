@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"github.com/Li-giegie/node/internal/writequeue/implwritequeue"
+	"github.com/Li-giegie/node/pkg/conn"
 	"github.com/Li-giegie/node/pkg/errors"
 	"github.com/Li-giegie/node/pkg/message"
 	"io"
@@ -14,36 +15,38 @@ import (
 	"time"
 )
 
-func NewConn(localId, remoteId uint32, conn net.Conn, revChan map[uint32]chan *message.Message, revLock *sync.Mutex, msgIdSeq *uint32, rBufSize, wBufSize, writerQueueSize int, maxMsgLen uint32) *Conn {
-	var c Conn
-	c.remoteId = remoteId
-	c.revChan = revChan
-	c.revLock = revLock
-	c.localId = localId
-	c.conn = conn
-	c.unixNano = time.Now().UnixNano()
-	c.maxMsgLen = maxMsgLen
-	c.msgIdSeq = msgIdSeq
-	c.w = implwritequeue.NewWriteQueue(conn, writerQueueSize, wBufSize)
-	if rBufSize < 64 {
-		c.r = conn
-	} else {
-		c.r = bufio.NewReaderSize(c.conn, rBufSize)
+func NewConn(nodeType conn.NodeType, localId, remoteId uint32, conn net.Conn, revChan map[uint32]chan *message.Message, revLock *sync.Mutex, msgIdSeq *uint32, rBufSize, wBufSize, writerQueueSize int, maxMsgLen uint32) *Conn {
+	r := io.Reader(conn)
+	if rBufSize > 16 {
+		r = bufio.NewReaderSize(conn, rBufSize)
 	}
-	c.headerBuf = make([]byte, message.MsgHeaderLen)
-	return &c
+	return &Conn{
+		nodeType:  nodeType,
+		localId:   localId,
+		remoteId:  remoteId,
+		maxMsgLen: maxMsgLen,
+		msgIdSeq:  msgIdSeq,
+		unixNano:  time.Now().UnixNano(),
+		revChan:   revChan,
+		revLock:   revLock,
+		conn:      conn,
+		headerBuf: make([]byte, message.MsgHeaderLen),
+		w:         implwritequeue.NewWriteQueue(conn, writerQueueSize, wBufSize),
+		r:         r,
+	}
 }
 
 type Conn struct {
+	nodeType  conn.NodeType
 	localId   uint32
 	remoteId  uint32
 	maxMsgLen uint32
 	msgIdSeq  *uint32
 	unixNano  int64
+	headerBuf []byte
 	revChan   map[uint32]chan *message.Message
 	revLock   *sync.Mutex
 	conn      net.Conn
-	headerBuf []byte
 	w         io.WriteCloser
 	r         io.Reader
 }
@@ -263,4 +266,8 @@ func (c *Conn) LocalAddr() net.Addr {
 
 func (c *Conn) RemoteAddr() net.Addr {
 	return c.conn.RemoteAddr()
+}
+
+func (c *Conn) NodeType() conn.NodeType {
+	return c.nodeType
 }

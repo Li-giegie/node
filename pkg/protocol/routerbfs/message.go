@@ -1,92 +1,133 @@
 package routerbfs
 
 import (
-	"encoding/json"
+	"encoding/binary"
 	"fmt"
 	"github.com/Li-giegie/node/pkg/errors"
 )
 
+type Action uint8
+
 const (
-	Action_Unknown = iota
-	Action_AddNode
-	Action_RemoveNode
-	Action_QueryProtocol
-	Action_ReplyProtocol
+	Action_NeighborASK Action = 1 + iota
+	Action_NeighborACK
+	Action_Update
 	Action_SyncHash
 	Action_SyncQueryNode
-	Action_SyncReplyNode
-	Action_Undefine
 )
 
-var errInvalidAction = errors.New("invalid action")
+func (action Action) String() string {
+	switch action {
+	case Action_Update:
+		return "Update"
+	case Action_NeighborASK:
+		return "NeighborASK"
+	case Action_NeighborACK:
+		return "NeighborACK"
+	case Action_SyncHash:
+		return "SyncHash"
+	case Action_SyncQueryNode:
+		return "SyncQueryNode"
+	default:
+		return "Unknown"
+	}
+}
 
 func decodeProtoMsg(b []byte) (*ProtoMsg, error) {
 	p := new(ProtoMsg)
 	err := p.Decode(b)
-	if err != nil {
-		return nil, err
-	}
-	if p.Action < Action_Unknown || p.Action > Action_Undefine {
-		return nil, errInvalidAction
-	}
-	return p, nil
+	return p, err
 }
 
 type ProtoMsg struct {
-	Action   uint8
-	Paths    []uint32   `json:"paths,omitempty"`
-	Nodes    []NodeInfo `json:"nodes,omitempty"`
-	SyncInfo *SyncInfo  `json:"synInfo,omitempty"`
+	Action   Action
+	UnixNano int64
+	SrcId    uint32
+	Paths    []uint32
+	Data     []byte
 }
 
 func (m *ProtoMsg) Encode() []byte {
-	p, _ := json.Marshal(m)
-	return p
+	buf := make([]byte, 17+(len(m.Paths)*4)+len(m.Data))
+	buf[0] = byte(m.Action)
+	binary.LittleEndian.PutUint64(buf[1:9], uint64(m.UnixNano))
+	binary.LittleEndian.PutUint32(buf[9:13], m.SrcId)
+	binary.LittleEndian.PutUint32(buf[13:17], uint32(len(m.Paths)))
+	index := 17
+	for _, path := range m.Paths {
+		binary.LittleEndian.PutUint32(buf[index:], path)
+		index += 4
+	}
+	copy(buf[index:], m.Data)
+	return buf
+}
+
+func (m *ProtoMsg) Valid() error {
+	if len(m.Paths) == 0 {
+		return errors.New("paths is invalid")
+	}
+	if m.UnixNano <= 0 {
+		return errors.New("unixNano is invalid")
+	}
+	if m.Action < 1 || m.Action > 5 {
+		return errors.New("action is invalid")
+	}
+	return nil
 }
 
 func (m *ProtoMsg) Decode(p []byte) error {
-	return json.Unmarshal(p, m)
+	if len(p) < 17 {
+		return errors.New("message too short")
+	}
+	m.Action = Action(p[0])
+	m.UnixNano = int64(binary.LittleEndian.Uint64(p[1:9]))
+	m.SrcId = binary.LittleEndian.Uint32(p[9:13])
+	l := int(binary.LittleEndian.Uint32(p[13:17]))
+	m.Paths = make([]uint32, l)
+	index := 17
+	for i := 0; i < l; i++ {
+		m.Paths[i] = binary.LittleEndian.Uint32(p[index:])
+		index += 4
+	}
+	m.Data = p[index:]
+	return nil
 }
 
 func (m *ProtoMsg) String() string {
-	switch m.Action {
-	case Action_QueryProtocol:
-		return fmt.Sprintf("Action_QueryProtocol paths %v", m.Paths)
-	case Action_ReplyProtocol:
-		return fmt.Sprintf("Action_ReplyProtocol paths %v nodes %+v", m.Paths, m.Nodes)
-	case Action_AddNode:
-		return fmt.Sprintf("Action_AddNode paths %v nodes %+v", m.Paths, m.Nodes)
-	case Action_RemoveNode:
-		return fmt.Sprintf("Action_RemoveNode paths %v nodes %+v", m.Paths, m.Nodes)
-	case Action_SyncHash:
-		return fmt.Sprintf("Action_SyncNode paths %+v syncnode %+v", m.Paths, m.SyncInfo)
-	case Action_SyncQueryNode:
-		return fmt.Sprintf("Action_SyncNode paths %+v syncnode %+v", m.Paths, m.SyncInfo)
-	case Action_SyncReplyNode:
-		return fmt.Sprintf("Action_SyncNode paths %+v syncnode %+v", m.Paths, m.SyncInfo)
-	default:
-		return fmt.Sprintf("invalid action %v %v %v %v", m.Action, m.Paths, m.Nodes, m.SyncInfo)
+	return fmt.Sprintf("Action: %s, UnixNano: %d, SrcId: %d, Paths: %v, Data: %s", m.Action.String(), m.UnixNano, m.SrcId, m.Paths, m.Data)
+}
+
+type SyncMsg struct {
+	Id         uint32
+	SubNodeNum uint32
+	Hash       uint64
+}
+
+type UpdateAction uint8
+
+func (u UpdateAction) String() string {
+	switch u {
+	case UpdateAction_AddRoot:
+		return "AddRoot"
+	case UpdateAction_RemoveRoot:
+		return "RemoveRoot"
+	case UpdateAction_AddSub:
+		return "AddSub"
+	case UpdateAction_DeleteSub:
+		return "DeleteSub"
 	}
+	return "invalid UpdateAction"
 }
 
-type NodeInfo struct {
+const (
+	UpdateAction_AddSub UpdateAction = iota
+	UpdateAction_DeleteSub
+	UpdateAction_AddRoot
+	UpdateAction_RemoveRoot
+)
+
+type UpdateMsg struct {
+	Action UpdateAction
 	RootId uint32
-	SubIds []SubInfo
-}
-
-type SubInfo struct {
-	Id      uint32
-	UnixNao int64
-}
-
-type SyncInfo struct {
-	Hash             uint64
-	NodeNum          uint32
-	ValidityUnixNano int64
-	*SyncNode
-}
-
-type SyncNode struct {
-	RootId uint32
-	SubIds []uint32
+	SubId  uint32
 }

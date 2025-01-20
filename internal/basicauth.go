@@ -2,6 +2,7 @@ package internal
 
 import (
 	"encoding/binary"
+	"github.com/Li-giegie/node/pkg/conn"
 	"github.com/Li-giegie/node/pkg/errors"
 	"io"
 	"math"
@@ -13,82 +14,92 @@ var DefaultBasicResp = new(BasicAuthResp)
 
 type BasicAuthReq struct{}
 
-var maxAuthData uint16 = 40
+func (a BasicAuthReq) HeaderLen() int {
+	return 41
+}
 
-func (BasicAuthReq) Send(w io.Writer, srcId, dstId uint32, accessKey []byte) error {
-	data := make([]byte, 40)
-	binary.LittleEndian.PutUint32(data[0:4], srcId)
-	binary.LittleEndian.PutUint32(data[4:8], dstId)
-	copy(data[8:], Hash(accessKey))
+func (a BasicAuthReq) Send(w io.Writer, srcType conn.NodeType, srcId, dstId uint32, accessKey []byte) error {
+	data := make([]byte, a.HeaderLen())
+	data[0] = byte(srcType)
+	binary.LittleEndian.PutUint32(data[1:5], srcId)
+	binary.LittleEndian.PutUint32(data[5:9], dstId)
+	copy(data[9:], Hash(accessKey))
 	_, err := w.Write(data)
 	return err
 }
 
-func (BasicAuthReq) Receive(r io.Reader, t time.Duration) (srcId, dstId uint32, hashKey []byte, err error) {
-	var buf = make([]byte, 40)
-	err = ReadFull(r, t, buf)
-	if err != nil {
-		return 0, 0, nil, err
+func (a BasicAuthReq) Receive(r io.Reader, t time.Duration) (srcType conn.NodeType, srcId, dstId uint32, hashKey []byte, err error) {
+	var buf = make([]byte, a.HeaderLen())
+	if err = ReadFull(r, t, buf); err != nil {
+		return
 	}
-	srcId = binary.LittleEndian.Uint32(buf[0:4])
-	dstId = binary.LittleEndian.Uint32(buf[4:8])
-	hashKey = buf[8:]
+	srcType = conn.NodeType(buf[0])
+	if err = srcType.Valid(); err != nil {
+		return
+	}
+	srcId = binary.LittleEndian.Uint32(buf[1:5])
+	dstId = binary.LittleEndian.Uint32(buf[5:9])
+	hashKey = buf[9:]
 	return
 }
 
 type BasicAuthResp struct{}
 
+func (a BasicAuthResp) HeaderLen() int {
+	return 6
+}
+
 var maxBasicAuthRespMsgLen = math.MaxUint32 - 100
 var errLenOverflow = errors.New("auth response message length overflow")
 
-func (BasicAuthResp) Send(w io.Writer, permit bool, msg string) error {
+func (a BasicAuthResp) Send(w io.Writer, srcType conn.NodeType, permit bool, msg string) error {
 	if len(msg) > maxBasicAuthRespMsgLen {
 		return errLenOverflow
 	}
-	p := make([]byte, 5+len(msg))
-	binary.LittleEndian.PutUint32(p[:4], uint32(len(msg)))
-	if permit {
-		p[4] = 1
-	}
-	copy(p[5:], msg)
+	p := make([]byte, a.HeaderLen()+len(msg))
+	p[0] = byte(srcType)
+	p[1] = bool2uint8(permit)
+	binary.LittleEndian.PutUint32(p[2:6], uint32(len(msg)))
+	copy(p[6:], msg)
 	_, err := w.Write(p)
 	return err
 }
 
-func (BasicAuthResp) Receive(r io.Reader, t time.Duration) (permit bool, msg string, err error) {
-	buf := make([]byte, 5)
-	err = ReadFull(r, t, buf)
-	if err != nil {
-		return false, "", err
+func (a BasicAuthResp) Receive(r io.Reader, t time.Duration) (dstType conn.NodeType, permit bool, msg string, err error) {
+	buf := make([]byte, a.HeaderLen())
+	if err = ReadFull(r, t, buf); err != nil {
+		return
 	}
-	pl := binary.LittleEndian.Uint32(buf)
+	dstType = conn.NodeType(buf[0])
+	if err = dstType.Valid(); err != nil {
+		return
+	}
+	permit = uint82bool(buf[1])
+	pl := binary.LittleEndian.Uint32(buf[2:6])
 	if int(pl) > maxBasicAuthRespMsgLen {
-		return false, "", errLenOverflow
-	}
-	if buf[4] == 1 {
-		permit = true
+		err = errLenOverflow
+		return
 	}
 	if pl > 0 {
 		buf = make([]byte, pl)
-		err = ReadFull(r, t, buf)
-		if err != nil {
-			return false, "", err
+		if err = ReadFull(r, t, buf); err != nil {
+			return
 		}
 		msg = string(buf)
 	}
 	return
 }
 
-func Auth(rw io.ReadWriter, lid, rid uint32, key []byte, timeout time.Duration) error {
-	if err := DefaultBasicReq.Send(rw, lid, rid, key); err != nil {
-		return err
+func Auth(rw io.ReadWriter, srcType conn.NodeType, srcId, dstId uint32, key []byte, timeout time.Duration) (dstType conn.NodeType, err error) {
+	if err := DefaultBasicReq.Send(rw, srcType, srcId, dstId, key); err != nil {
+		return 0, err
 	}
-	permit, msg, err := DefaultBasicResp.Receive(rw, timeout)
+	dstType, permit, msg, err := DefaultBasicResp.Receive(rw, timeout)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if !permit {
-		return errors.New(msg)
+		return 0, errors.New(msg)
 	}
-	return nil
+	return dstType, nil
 }

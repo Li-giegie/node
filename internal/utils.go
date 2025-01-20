@@ -46,3 +46,17 @@ func ReadFull(r io.Reader, timeout time.Duration, buf []byte) (err error) {
 		return errors.New("timeout")
 	}
 }
+
+func bool2uint8(b bool) uint8 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func uint82bool(n uint8) bool {
+	if n == 1 {
+		return true
+	}
+	return false
+}

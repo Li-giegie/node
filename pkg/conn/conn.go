@@ -2,6 +2,7 @@ package conn
 
 import (
 	"context"
+	"github.com/Li-giegie/node/pkg/errors"
 	"github.com/Li-giegie/node/pkg/message"
 	"net"
 	"time"
@@ -51,4 +52,31 @@ type Conn interface {
 	CreateMessage(typ uint8, src uint32, dst uint32, data []byte) *message.Message
 	// CreateMessageId 创建一个唯一的消息Id
 	CreateMessageId() uint32
+	NodeType() NodeType
 }
+
+type NodeType uint8
+
+func (t NodeType) String() string {
+	switch t {
+	case NodeTypeClient:
+		return "client"
+	case NodeTypeServer:
+		return "server"
+	default:
+		return "unknown"
+	}
+}
+
+func (t NodeType) Valid() error {
+	if t < NodeTypeClient || t > NodeTypeServer {
+		return errors.New("invalid conn type")
+	}
+	return nil
+}
+
+const (
+	NodeTypeUnknown NodeType = iota
+	NodeTypeClient
+	NodeTypeServer
+)

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"github.com/Li-giegie/node/internal"
 	"github.com/Li-giegie/node/internal/handlermanager"
+	"github.com/Li-giegie/node/pkg/conn"
 	"github.com/Li-giegie/node/pkg/conn/implconn"
 	"github.com/Li-giegie/node/pkg/errors"
 	"github.com/Li-giegie/node/pkg/message"
@@ -51,36 +52,37 @@ type internalField struct {
 // Connect address 支持url格式例如 tcp://127.0.0.1:5555 = 127.0.0.1:5555，缺省协议默认tcp，config参数只能接受0个或者1个
 func (c *Client) Connect(address string, config ...*tls.Config) (err error) {
 	network, addr := internal.ParseAddr(address)
-	var conn net.Conn
+	var native net.Conn
 	if n := len(config); n > 0 {
 		if n != 1 {
 			return errors.MultipleConfigErr
 		}
-		conn, err = tls.Dial(network, addr, config[0])
+		native, err = tls.Dial(network, addr, config[0])
 	} else {
-		conn, err = net.Dial(network, addr)
+		native, err = net.Dial(network, addr)
 	}
 	if err != nil {
 		return err
 	}
-	return c.Start(conn)
+	return c.Start(native)
 }
 
-func (c *Client) Start(conn net.Conn) (err error) {
+func (c *Client) Start(native net.Conn) (err error) {
 	defer func() {
 		if err != nil {
-			_ = conn.Close()
+			_ = native.Close()
 		}
 	}()
-	if !c.CallOnAccept(conn) {
+	if !c.CallOnAccept(native) {
 		return errors.AcceptDeniedErr
 	}
-	if err = internal.Auth(conn, c.Id, c.RemoteID, c.RemoteKey, c.AuthTimeout); err != nil {
+	var dstType conn.NodeType
+	if dstType, err = internal.Auth(native, conn.NodeTypeClient, c.Id, c.RemoteID, c.RemoteKey, c.AuthTimeout); err != nil {
 		return err
 	}
 	c.stopCtx, c.cancel = context.WithCancel(context.Background())
 	c.recvChan = make(map[uint32]chan *message.Message)
-	c.Conn = implconn.NewConn(c.Id, c.RemoteID, conn, c.recvChan, &c.recvLock, new(uint32), c.ReaderBufSize, c.WriterBufSize, c.WriterQueueSize, c.MaxMsgLen)
+	c.Conn = implconn.NewConn(dstType, c.Id, c.RemoteID, native, c.recvChan, &c.recvLock, new(uint32), c.ReaderBufSize, c.WriterBufSize, c.WriterQueueSize, c.MaxMsgLen)
 	go c.Serve()
 	return nil
 }

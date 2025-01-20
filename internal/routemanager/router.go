@@ -81,7 +81,10 @@ func (r *Router) GetRoute(dst uint32) (*router.RouteEmpty, bool) {
 	r.l.RLock()
 	defer r.l.RUnlock()
 	empty, ok := r.cache[dst]
-	return empty, ok
+	if !ok {
+		return nil, false
+	}
+	return CopyRouteEmpty(empty), ok
 }
 
 func (r *Router) GetRouteVia(dst uint32) (uint32, bool) {
@@ -123,9 +126,21 @@ func (r *Router) RangeRoute(callback func(*router.RouteEmpty) bool) {
 	r.l.RLock()
 	defer r.l.RUnlock()
 	for _, empty := range r.cache {
-		if !callback(empty) {
+		if !callback(CopyRouteEmpty(empty)) {
 			return
 		}
+	}
+}
+
+func CopyRouteEmpty(empty *router.RouteEmpty) *router.RouteEmpty {
+	paths := make([]uint32, len(empty.Paths))
+	copy(paths, empty.Paths)
+	return &router.RouteEmpty{
+		Dst:      empty.Dst,
+		Via:      empty.Via,
+		Hop:      empty.Hop,
+		UnixNano: empty.UnixNano,
+		Paths:    paths,
 	}
 }
 
@@ -135,10 +150,15 @@ func (r *Router) ReroutingHandleFunc(callback func(dst uint32) (*router.RouteEmp
 
 func (r *Router) Rerouting(dst uint32) (empty *router.RouteEmpty, ok bool) {
 	for _, f := range r.rerouting {
-		empty, ok = f(dst)
-		if ok {
+		if empty, ok = f(dst); ok {
 			return
 		}
 	}
 	return nil, false
+}
+
+func (r *Router) RouteLen() int {
+	r.l.RLock()
+	defer r.l.RUnlock()
+	return len(r.cache)
 }

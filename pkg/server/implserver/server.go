@@ -7,6 +7,7 @@ import (
 	"github.com/Li-giegie/node/internal/connmanager"
 	"github.com/Li-giegie/node/internal/handlermanager"
 	"github.com/Li-giegie/node/internal/routemanager"
+	"github.com/Li-giegie/node/pkg/conn"
 	"github.com/Li-giegie/node/pkg/conn/implconn"
 	"github.com/Li-giegie/node/pkg/errors"
 	"github.com/Li-giegie/node/pkg/message"
@@ -88,17 +89,17 @@ func (s *Server) Serve(l net.Listener) error {
 				time.Sleep(s.SleepOnMaxConnections)
 				continue
 			}
-			conn, err := l.Accept()
+			native, err := l.Accept()
 			if err != nil {
 				errChan <- err
 				return
 			}
 			go func() {
-				if !s.CallOnAccept(conn) {
-					_ = conn.Close()
+				if !s.CallOnAccept(native) {
+					_ = native.Close()
 					return
 				}
-				s.handleAuthenticate(conn)
+				s.handleAuthenticate(native)
 			}()
 		}
 	}()
@@ -110,35 +111,35 @@ func (s *Server) Serve(l net.Listener) error {
 	}
 }
 
-func (s *Server) handleAuthenticate(conn net.Conn) {
-	src, dst, key, err := internal.DefaultBasicReq.Receive(conn, s.AuthTimeout)
+func (s *Server) handleAuthenticate(native net.Conn) {
+	srcType, src, dst, key, err := internal.DefaultBasicReq.Receive(native, s.AuthTimeout)
 	if err != nil {
-		_ = conn.Close()
+		_ = native.Close()
 		return
 	}
 	if src == s.Id {
-		_ = internal.DefaultBasicResp.Send(conn, false, "error: local id invalid")
-		_ = conn.Close()
+		_ = internal.DefaultBasicResp.Send(native, 0, false, "error: local id invalid")
+		_ = native.Close()
 		return
 	}
 	if dst != s.Id {
-		_ = internal.DefaultBasicResp.Send(conn, false, "error: remote id invalid")
-		_ = conn.Close()
+		_ = internal.DefaultBasicResp.Send(native, 0, false, "error: remote id invalid")
+		_ = native.Close()
 		return
 	}
 	if !internal.BytesEqual(s.hashKey, key) {
-		_ = internal.DefaultBasicResp.Send(conn, false, "error: key invalid")
-		_ = conn.Close()
+		_ = internal.DefaultBasicResp.Send(native, 0, false, "error: key invalid")
+		_ = native.Close()
 		return
 	}
-	c := implconn.NewConn(s.Id, src, conn, s.recvChan, &s.recvLock, &s.idCounter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
-	if !s.AddConn(src, c) {
-		_ = internal.DefaultBasicResp.Send(conn, false, "error: id already exists")
-		_ = conn.Close()
+	c := implconn.NewConn(srcType, s.Id, src, native, s.recvChan, &s.recvLock, &s.idCounter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
+	if !s.AddConn(c) {
+		_ = internal.DefaultBasicResp.Send(native, 0, false, "error: id already exists")
+		_ = native.Close()
 		return
 	}
-	if err = internal.DefaultBasicResp.Send(conn, true, ""); err != nil {
-		_ = conn.Close()
+	if err = internal.DefaultBasicResp.Send(native, conn.NodeTypeServer, true, ""); err != nil {
+		_ = native.Close()
 		s.RemoveConn(c.RemoteId())
 		return
 	}
@@ -256,10 +257,10 @@ func (s *Server) SendMessage(msg *message.Message) error {
 	return errors.ErrNodeNotExist
 }
 
-func (s *Server) Bridge(conn net.Conn, remoteId uint32, remoteAuthKey []byte) (err error) {
+func (s *Server) Bridge(native net.Conn, remoteId uint32, remoteAuthKey []byte) (err error) {
 	defer func() {
 		if err != nil {
-			_ = conn.Close()
+			_ = native.Close()
 		}
 	}()
 	if remoteId == s.Id {
@@ -268,18 +269,18 @@ func (s *Server) Bridge(conn net.Conn, remoteId uint32, remoteAuthKey []byte) (e
 	if _, ok := s.GetConn(remoteId); ok {
 		return errors.BridgeRemoteIdExistErr
 	}
-	if err = internal.DefaultBasicReq.Send(conn, s.Id, remoteId, remoteAuthKey); err != nil {
+	if err = internal.DefaultBasicReq.Send(native, conn.NodeTypeServer, s.Id, remoteId, remoteAuthKey); err != nil {
 		return err
 	}
-	permit, msg, err := internal.DefaultBasicResp.Receive(conn, s.AuthTimeout)
+	dstType, permit, msg, err := internal.DefaultBasicResp.Receive(native, s.AuthTimeout)
 	if err != nil {
 		return err
 	}
 	if !permit {
 		return errors.Error(msg)
 	}
-	c := implconn.NewConn(s.Id, remoteId, conn, s.recvChan, &s.recvLock, &s.idCounter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
-	if !s.AddConn(remoteId, c) {
+	c := implconn.NewConn(dstType, s.Id, remoteId, native, s.recvChan, &s.recvLock, &s.idCounter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
+	if !s.AddConn(c) {
 		return errors.BridgeRemoteIdExistErr
 	}
 	go s.handleConn(c)

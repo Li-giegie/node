@@ -26,6 +26,7 @@ type Router interface {
 	ReroutingHandleFunc(f func(dst uint32) (*RouteEmpty, bool))
 	// Rerouting 重新计算目的路由下一跳，而不是从路由表中取路由
 	Rerouting(dst uint32) (*RouteEmpty, bool)
+	RouteLen() int
 }
 
 type RouteEmpty struct {

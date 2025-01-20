@@ -10,15 +10,15 @@ type ConnManager struct {
 	l sync.RWMutex
 }
 
-func (s *ConnManager) AddConn(id uint32, c conn.Conn) bool {
+func (s *ConnManager) AddConn(c conn.Conn) bool {
 	s.l.Lock()
 	defer s.l.Unlock()
 	if s.m == nil {
 		s.m = make(map[uint32]conn.Conn)
 	}
-	_, exist := s.m[id]
+	_, exist := s.m[c.RemoteId()]
 	if !exist {
-		s.m[id] = c
+		s.m[c.RemoteId()] = c
 	}
 	return !exist
 }
@@ -39,8 +39,8 @@ func (s *ConnManager) GetConn(id uint32) (conn.Conn, bool) {
 func (s *ConnManager) GetAllConn() []conn.Conn {
 	s.l.RLock()
 	result := make([]conn.Conn, 0, len(s.m))
-	for _, conn := range s.m {
-		result = append(result, conn)
+	for _, c := range s.m {
+		result = append(result, c)
 	}
 	s.l.RUnlock()
 	return result
@@ -49,8 +49,8 @@ func (s *ConnManager) GetAllConn() []conn.Conn {
 func (s *ConnManager) RangeConn(f func(conn conn.Conn) bool) {
 	s.l.RLock()
 	defer s.l.RUnlock()
-	for _, conn := range s.m {
-		if !f(conn) {
+	for _, c := range s.m {
+		if !f(c) {
 			return
 		}
 	}
