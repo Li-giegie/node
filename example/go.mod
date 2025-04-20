@@ -3,11 +3,11 @@ module github.com/Li-giegie/node/example
 go 1.21.3
 
 require (
-	github.com/Li-giegie/node v0.0.0
-	github.com/Li-giegie/rabbit-cli v0.0.0-20240827163237-a0becb3f9de3
-	gopkg.in/yaml.v3 v3.0.1
+	github.com/Li-giegie/node v1.3.0
+	github.com/Li-giegie/rabbit-cli v0.0.0-20240906175955-86400afcad5b
+	github.com/sirupsen/logrus v1.9.3
 )
 
-require github.com/Li-giegie/go-jeans v0.0.0-20240822074043-286467d8e7b6 // indirect
+require golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8 // indirect
 
-replace github.com/Li-giegie/node v0.0.0 => ../
+replace github.com/Li-giegie/node v1.3.0 => ../

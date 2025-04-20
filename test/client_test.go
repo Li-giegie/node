@@ -4,81 +4,50 @@ import (
 	"context"
 	"fmt"
 	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/common"
-	"io"
+	"github.com/Li-giegie/node/pkg/client"
+	"github.com/Li-giegie/node/pkg/conn"
+	"github.com/Li-giegie/node/pkg/message"
+	"github.com/Li-giegie/node/pkg/responsewriter"
 	"log"
-	"strconv"
-	"sync"
+	"net"
 	"testing"
-	"time"
 )
 
-type CliHandler struct {
-}
-
-func (h CliHandler) Connection(conn common.Conn) {
-	log.Println("Handle", conn.RemoteId())
-}
-
-func (h CliHandler) Handle(ctx common.Context) {
-	log.Println("Handle", ctx.String())
-	if err := ctx.Reply(ctx.Data()); err != nil {
-		fmt.Println(err)
-	}
-	ctx.RecycleMsg()
-}
-
-func (h CliHandler) ErrHandle(ctx common.ErrContext, err error) {
-	log.Println("ErrHandle", err, ctx.String())
-	ctx.RecycleMsg()
-}
-
-func (h CliHandler) CustomHandle(ctx common.CustomContext) {
-	log.Println("CustomHandle", ctx.String())
-	ctx.CustomReply(ctx.Type(), ctx.Data())
-	ctx.RecycleMsg()
-
-}
-
-func (h CliHandler) Disconnect(id uint16, err error) {
-	log.Println("Disconnect", id, err)
-}
-
 func TestClient(t *testing.T) {
-	conn, err := node.DialTCP(context.Background(), 8001, 8000, "0.0.0.0:8000", &CliHandler{})
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	defer conn.Close()
-	t1 := time.Now()
-	wg := sync.WaitGroup{}
-	for i := 0; i < 1000000; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			data := []byte(strconv.Itoa(i))
-			res, err := conn.Request(context.Background(), data)
-			if err != nil {
-				t.Error(err, res)
-				return
-			}
-			//fmt.Println(string(res))
-			if string(res) != string(data) {
-				log.Fatalln("值被修改", string(res), string(data))
-			}
-		}(i)
-	}
-	wg.Wait()
-	fmt.Println(time.Since(t1))
-}
+	stopC := make(chan struct{}, 1)
+	c := node.NewClientOption(2, 2,
+		client.WithRemoteKey([]byte("hello")),
+	)
+	c.OnAccept(func(conn net.Conn) (next bool) {
+		fmt.Println("OnAccept", conn.RemoteAddr())
+		return true
+	})
+	c.OnConnect(func(conn conn.Conn) bool {
+		fmt.Println("OnConnect", conn.RemoteId())
+		return true
+	})
+	c.OnMessage(func(w responsewriter.ResponseWriter, m *message.Message) (next bool) {
+		w.Response(message.StateCode_Success, m.Data)
+		return true
+	})
+	c.OnClose(func(conn conn.Conn, err error) bool {
+		stopC <- struct{}{}
+		return true
+	})
 
-func TestAAA(t *testing.T) {
-	var b []byte = make([]byte, 100000)
-	t1 := time.Now()
-	for i := 1; i < 100000; i++ {
-		b = b[:i]
+	err := c.Connect("tcp://127.0.0.1:8000")
+	if err != nil {
+		log.Fatalln(err)
 	}
-	fmt.Println(time.Since(t1))
-	io.Discard.Write(b)
+	resp, code, err := c.Request(context.Background(), []byte("ping"))
+	fmt.Printf("1 Request res %s,code %d ,err %v \n", resp, code, err)
+	resp, code, err = c.RequestTo(context.Background(), 5, []byte("hello"))
+	fmt.Printf("2 Request res %s,code %d ,err %v \n", resp, code, err)
+	resp, code, err = c.RequestType(context.Background(), message.MsgType_Undefined, []byte("hello"))
+	fmt.Printf("3 Request res %s,code %d ,err %v \n", resp, code, err)
+	resp, code, err = c.RequestType(context.Background(), message.MsgType_Undefined, make([]byte, 5))
+	fmt.Printf("4 Request res %s,code %d ,err %v \n", resp, code, err)
+	_ = c.Close()
+	fmt.Println("close")
+	<-stopC
 }

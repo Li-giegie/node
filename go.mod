@@ -1,5 +1,9 @@
 module github.com/Li-giegie/node
 
-go 1.19
+go 1.21
 
-require github.com/Li-giegie/go-jeans v0.0.0-20240822074043-286467d8e7b6 // indirect
+require (
+	github.com/sirupsen/logrus v1.9.3
+)
+
+require golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8 // indirect
