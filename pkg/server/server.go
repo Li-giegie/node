@@ -52,6 +52,7 @@ type Server interface {
 	SendMessage(m *message.Message) error
 	CreateMessageId() uint32
 	CreateMessage(typ uint8, src uint32, dst uint32, data []byte) *message.Message
+	RouteHop() uint8
 	Close()
 }
 
@@ -69,7 +70,7 @@ func NewServer(c *Config) Server {
 		KeepaliveInterval:     c.KeepaliveInterval,
 		KeepaliveTimeout:      c.KeepaliveTimeout,
 		KeepaliveTimeoutClose: c.KeepaliveTimeoutClose,
-		MaxHop:                c.MaxHop,
+		MaxRouteHop:           c.MaxRouteHop,
 	}
 }
 
@@ -79,7 +80,7 @@ func NewServerOption(id uint32, opts ...Option) Server {
 
 func DefaultConfig(opts ...Option) *Config {
 	c := &Config{
-		MaxHop:                32,
+		MaxRouteHop:           32,
 		AuthTimeout:           time.Second * 6,
 		MaxMsgLen:             0xffffff,
 		WriterQueueSize:       128,
@@ -99,7 +100,7 @@ type Config struct {
 	// 节点Id
 	Id uint32
 	// 一条消息的最大转发次数
-	MaxHop uint8
+	MaxRouteHop uint8
 	// 节点认证Key
 	AuthKey []byte
 	// 认证超时时长
@@ -132,9 +133,9 @@ func WithId(id uint32) Option {
 	}
 }
 
-func WithMaxHop(n uint8) Option {
+func WithMaxRouteHop(n uint8) Option {
 	return func(c *Config) {
-		c.MaxHop = n
+		c.MaxRouteHop = n
 	}
 }
 

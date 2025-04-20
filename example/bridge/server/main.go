@@ -36,7 +36,7 @@ func init() {
 	}
 }
 
-var bfsProtocol protocol.Protocol
+var bfsProtocol protocol.Router
 
 func main() {
 
@@ -49,14 +49,13 @@ func main() {
 		server.WithAuthTimeout(time.Second*6),
 	)
 	s.OnClose(func(conn conn.Conn, err error) (next bool) {
-		fmt.Println("on close", conn.RemoteId())
+		fmt.Println("on close", conn.RemoteId(), err)
 		return true
 	})
 	defer s.Close()
-
 	//开启节点发现协议
 	bfsProtocol = protocol.NewRouterBFSProtocol(s)
-	//bfsProtocol.StartNodeSync(context.TODO(), time.Second*5)
+	//bfsProtocol.StartNodeSync(context.TODO(), time.Second*3)
 	s.Register(bfsProtocol.ProtocolType(), bfsProtocol)
 	s.Register(message.MsgType_Default, &handler.Default{OnMessageFunc: func(r responsewriter.ResponseWriter, m *message.Message) {
 		if string(m.Data) == "exit" {
@@ -127,6 +126,22 @@ func handle(s server.Server, p protocol.Protocol) {
 	sc := bufio.NewScanner(os.Stdin)
 	r := bfsProtocol.(*routerbfs.RouterBFS)
 	fmt.Print(envName)
+	go func() {
+		return
+		for {
+
+			r.Range(func(rootId uint32, empty *routerbfs.NodeTableEmpty) bool {
+				fmt.Print("root ", rootId, " version ")
+				for id := range empty.Cache {
+					fmt.Print("  sub ", id)
+				}
+				fmt.Println()
+				return true
+			})
+			fmt.Print("\n\n")
+			time.Sleep(time.Second * 3)
+		}
+	}()
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
 		if len(fields) == 0 {
@@ -148,15 +163,15 @@ func handle(s server.Server, p protocol.Protocol) {
 			})
 		case "full":
 			fmt.Println()
-			r.Range(func(rootId uint32, empty map[uint32]struct{}) bool {
+			r.Range(func(rootId uint32, empty *routerbfs.NodeTableEmpty) bool {
 				fmt.Print("root", rootId)
-				for id := range empty {
+				for id := range empty.Cache {
 					fmt.Print(" sub ", id)
 				}
 				fmt.Println()
 				return true
 			})
-		case "start":
+		case "sync":
 			bfsProtocol.StartNodeSync(context.TODO(), time.Second*5)
 			fmt.Println("start sync success")
 		case "add", "remove":
@@ -172,9 +187,9 @@ func handle(s server.Server, p protocol.Protocol) {
 			} else {
 				ok := true
 				if fields[0] == "add" {
-					r.AddSub(uint32(rid), uint32(sid))
+					r.AddNode(uint32(rid), uint32(sid), 1)
 				} else {
-					ok = r.DeleteSub(uint32(rid), uint32(sid))
+					ok = r.RemoveNode(uint32(rid), uint32(sid), 1)
 				}
 				if ok {
 					fmt.Printf("%s 操作成功 root %d sub %d\n", fields[0], rid, sid)

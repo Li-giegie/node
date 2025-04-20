@@ -3,9 +3,6 @@
 	"Addr": ":8007",
 	"Key": "hello",
 	"Bridge": [
-		{
-			"Id": 6,
-			"Address": ":8006"
-		}
+
 	]
 }

@@ -43,7 +43,8 @@ type Server struct {
 	KeepaliveTimeout time.Duration
 	// 连接保活最大超时次数
 	KeepaliveTimeoutClose time.Duration
-	MaxHop                uint8
+	// 最大路由转发跳数
+	MaxRouteHop uint8
 	internalField
 }
 
@@ -156,7 +157,7 @@ func (s *Server) handleConn(c *implconn.Conn) {
 			s.CallOnClose(c, err)
 			return
 		}
-		if msg.Hop >= 254 || msg.Hop >= s.MaxHop && s.MaxHop > 0 {
+		if msg.Hop >= 254 || msg.Hop >= s.MaxRouteHop && s.MaxRouteHop > 0 {
 			continue
 		}
 		msg.Hop++
@@ -331,6 +332,10 @@ func (s *Server) startHeartbeatCheck() {
 		}
 	}()
 	return
+}
+
+func (s *Server) RouteHop() uint8 {
+	return s.MaxRouteHop
 }
 
 func (s *Server) GetRouter() router.Router {

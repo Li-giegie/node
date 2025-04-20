@@ -2,36 +2,33 @@ package routerbfs
 
 import (
 	"context"
-	"encoding/json"
 	"github.com/Li-giegie/node/pkg/conn"
 	"github.com/Li-giegie/node/pkg/errors"
 	"github.com/Li-giegie/node/pkg/handler"
 	"github.com/Li-giegie/node/pkg/message"
 	"github.com/Li-giegie/node/pkg/responsewriter"
 	"github.com/Li-giegie/node/pkg/router"
-	"github.com/sirupsen/logrus"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type Node interface {
 	NodeId() uint32
-	GetAllConn() []conn.Conn
 	LenConn() (n int)
 	GetConn(id uint32) (conn.Conn, bool)
 	GetRouter() router.Router
 	RangeConn(f func(conn conn.Conn) bool)
+	RouteHop() uint8
 }
 
-func NewRouterBFS(protoType uint8, node Node, MaxRouteHop uint8) *RouterBFS {
+func NewRouterBFS(protoType uint8, node Node) *RouterBFS {
 	p := &RouterBFS{
 		node:          node,
 		protoType:     protoType,
-		maxRouteHop:   MaxRouteHop,
 		nodeTable:     newNodeTable(),
 		neighborTable: newNeighborTable(),
-		checkTable:    newCheckTable(5),
 		init:          true,
-		nodeId:        node.NodeId(),
 	}
 	node.GetRouter().ReroutingHandleFunc(p.CalcRoute)
 	return p
@@ -39,14 +36,14 @@ func NewRouterBFS(protoType uint8, node Node, MaxRouteHop uint8) *RouterBFS {
 
 type RouterBFS struct {
 	handler.Empty
-	protoType      uint8 //协议类型
-	maxRouteHop    uint8 //最大路由跳数
-	init           bool  // 是否第一次OnConnect
-	node           Node  // 当前节点
-	nodeId         uint32
-	*nodeTable     //全部节点
-	*neighborTable //直连的协议节点
-	*checkTable    //检查消息时间戳
+	protoType       uint8 //协议类型
+	init            bool  // 是否第一次OnConnect
+	node            Node  // 当前节点
+	idCounter       int64
+	neighborACKWait sync.WaitGroup
+	*nodeTable      //全部节点
+	*neighborTable  //直连的协议节点
+
 }
 
 func (p *RouterBFS) ProtocolType() uint8 {
@@ -56,7 +53,6 @@ func (p *RouterBFS) ProtocolType() uint8 {
 func (p *RouterBFS) OnConnect(c conn.Conn) {
 	if p.init {
 		p.init = false
-		p.nodeTable.AddRoot(p.node.NodeId())
 		p.node.RangeConn(func(c conn.Conn) bool {
 			go p.onConnect(c)
 			return true
@@ -68,289 +64,250 @@ func (p *RouterBFS) OnConnect(c conn.Conn) {
 
 func (p *RouterBFS) onConnect(c conn.Conn) {
 	subId := c.RemoteId()
-	unixNao := time.Now().UnixNano()
-	p.nodeTable.AddSub(p.nodeId, subId)
-	logrus.Infoln("OnConnect", subId)
-	// 广播通知协议节点，当前节点有新节点上线
-	updateList := []*UpdateMsg{
-		{
-			Action: UpdateAction_AddSub,
-			RootId: p.node.NodeId(),
-			SubId:  subId,
-		},
-	}
-	data, _ := json.Marshal(updateList)
+	p.nodeTable.AddNode(p.node.NodeId(), subId, c.NodeType())
+	p.node.GetRouter().RemoveRoute(c.RemoteId())
 	p.broadcast(0, &ProtoMsg{
-		Action:   Action_Update,
-		Paths:    []uint32{p.nodeId, subId},
-		UnixNano: unixNao,
-		SrcId:    p.nodeId,
-		Data:     data,
+		Id:     atomic.AddInt64(&p.idCounter, 1),
+		Action: Action_Update,
+		SrcId:  p.node.NodeId(),
+		Paths:  []uint32{p.node.NodeId(), subId},
+		Data: (&UpdateMsg{
+			{
+				Action:  UpdateAction_AddNode,
+				RootId:  p.node.NodeId(),
+				SubId:   subId,
+				SubType: c.NodeType(),
+			},
+		}).Encode(),
 	})
-	// 查询对端节点是否开启当前协议
 	if c.NodeType() == conn.NodeTypeServer {
-		p.send(c, &ProtoMsg{
-			Action:   Action_NeighborASK,
-			UnixNano: unixNao,
-			SrcId:    p.nodeId,
-			Paths:    []uint32{p.nodeId},
-		})
-		logrus.Infoln("OnConnect NeighborASK", p.nodeId)
+		c.SendType(p.protoType, (&ProtoMsg{
+			Id:     atomic.AddInt64(&p.idCounter, 1),
+			Action: Action_NeighborASK,
+			SrcId:  p.node.NodeId(),
+			Paths:  []uint32{p.node.NodeId()},
+		}).Encode())
 	}
 }
 
 func (p *RouterBFS) OnMessage(r responsewriter.ResponseWriter, msg *message.Message) {
 	proto, err := p.validMessage(msg)
 	if err != nil {
-		if proto != nil {
-			logrus.Errorln(err, proto.String())
-		} else {
-			logrus.Errorln(err)
-		}
 		return
 	}
-	logrus.Infoln("OnMessage", proto.String())
-	unixNao := time.Now().UnixNano()
-	// 当前节点添加到已处理路径中
-	proto.Paths = append(proto.Paths, p.nodeId)
 	switch proto.Action {
-	case Action_NeighborASK: //走单播
-		data, err := p.nodeTable.Encode()
-		if err != nil {
-			logrus.Errorln(err)
+	case Action_NeighborASK: //邻居捂手请求 走单播
+		r.GetConn().SendType(p.protoType, (&ProtoMsg{
+			Id:     atomic.AddInt64(&p.idCounter, 1),
+			Action: Action_NeighborACK,
+			SrcId:  p.node.NodeId(),
+			Paths:  []uint32{p.node.NodeId()},
+		}).Encode())
+	case Action_NeighborACK: //邻居握手响应 走单播，并携带已知信息，去拉取邻居节点的信息
+		p.neighborTable.AddNeighbor(proto.SrcId, r.GetConn())
+		r.GetConn().SendType(p.protoType, (&ProtoMsg{
+			Id:     atomic.AddInt64(&p.idCounter, 1),
+			Action: Action_PullNode,
+			SrcId:  p.node.NodeId(),
+			Paths:  []uint32{p.node.NodeId()},
+			Data:   p.nodeTable.RootList(proto.SrcId).Encode(),
+		}).Encode())
+	case Action_PullNode: // 邻居响应当前节点的已知节点
+		var hasNodeList List
+		if err = hasNodeList.Decode(proto.Data); err != nil {
 			return
 		}
-		p.send(r.GetConn(), &ProtoMsg{
-			Action:   Action_NeighborACK,
-			UnixNano: unixNao,
-			SrcId:    p.nodeId,
-			Paths:    []uint32{p.nodeId},
-			Data:     data,
-		})
-	case Action_NeighborACK:
-		var nodeList map[uint32]map[uint32]struct{}
-		if err = json.Unmarshal(proto.Data, &nodeList); err != nil {
-			logrus.Errorln("解码失败：", err)
-			return
+		m := hasNodeList.Map()
+		var push PushMsg
+		if pl := p.nodeTable.Len() - len(hasNodeList); pl > 0 {
+			push = make(PushMsg, 0, pl)
 		}
-		if !p.neighborTable.AddNeighbor(proto.SrcId, r.GetConn()) {
-			logrus.Warningln("邻居已存在：", proto.SrcId)
-			return
-		}
-		for rId, empty := range nodeList {
-			if !p.nodeTable.AddRoot(rId) {
-				delete(nodeList, rId)
-				logrus.Warningln("添加节点失败节点存在", rId)
-				return
+		paths := make([]uint32, 1, p.nodeTable.Len())
+		paths[0] = p.node.NodeId()
+		p.nodeTable.Range(func(rootId uint32, item *NodeTableEmpty) bool {
+			if rootId != proto.SrcId && rootId != p.node.NodeId() {
+				paths = append(paths, rootId)
 			}
-			for sId := range empty {
-				if !p.nodeTable.AddSub(rId, sId) {
-					delete(empty, sId)
-				}
-			}
-		}
-		for rId, empty := range nodeList {
-			rInfo, ok := p.addRoute(rId)
-			if !ok {
-				delete(nodeList, rId)
-				logrus.Warningln("添加路由失败已存在", rId)
-				continue
-			}
-			route := p.node.GetRouter()
-			for sId := range empty {
-				if sId == p.nodeId {
-					continue
-				}
-				if _, ok = p.node.GetConn(sId); ok {
-					continue
-				}
-				paths := make([]uint32, len(rInfo.Paths)+1)
-				copy(paths, rInfo.Paths)
-				paths[len(rInfo.Paths)] = sId
-				route.AddRoute(sId, rId, rInfo.Hop+1, time.Now().UnixNano(), paths)
-			}
-		}
-		updateList := make([]*UpdateMsg, 0, len(nodeList))
-		for u, empty := range nodeList {
-			updateList = append(updateList, &UpdateMsg{
-				Action: UpdateAction_AddRoot,
-				RootId: u,
-			})
-			for sId := range empty {
-				updateList = append(updateList, &UpdateMsg{
-					Action: UpdateAction_AddSub,
-					RootId: u,
-					SubId:  sId,
-				})
-			}
-		}
-		data, _ := json.Marshal(updateList)
-		p.broadcast(0, &ProtoMsg{
-			Action:   Action_Update,
-			UnixNano: unixNao,
-			SrcId:    p.nodeId,
-			Paths:    []uint32{p.nodeId, proto.SrcId},
-			Data:     data,
-		})
-	case Action_Update:
-		var updateList []*UpdateMsg
-		if err = json.Unmarshal(proto.Data, &updateList); err != nil {
-			logrus.Errorln("Action_Update,err:", err)
-			return
-		}
-		successUpdates := make([]*UpdateMsg, 0, len(updateList))
-		var success bool
-		for _, update := range updateList {
-			if update.RootId == p.nodeId {
-				continue
-			}
-			switch update.Action {
-			case UpdateAction_AddRoot:
-				success = p.AddRoot(update.RootId)
-			case UpdateAction_AddSub:
-				success = p.AddSub(update.RootId, update.SubId)
-			case UpdateAction_RemoveRoot:
-				success = p.RemoveRoot(update.RootId)
-			case UpdateAction_DeleteSub:
-				success = p.DeleteSub(update.RootId, update.SubId)
-			default:
-				success = false
-			}
-			if success {
-				successUpdates = append(successUpdates, update)
-			}
-		}
-		for _, update := range successUpdates {
-			switch update.Action {
-			case UpdateAction_AddRoot:
-				p.addRoute(update.RootId)
-			case UpdateAction_AddSub:
-				p.addRoute(update.SubId)
-			case UpdateAction_RemoveRoot:
-				p.removeRoute(update.RootId)
-			case UpdateAction_DeleteSub:
-				p.removeRoute(update.SubId)
-			}
-		}
-		data, _ := json.Marshal(successUpdates)
-		proto.Data = data
-		p.broadcast(msg.Hop, proto)
-	case Action_SyncHash:
-		var syncHashs []*SyncMsg
-		if err = json.Unmarshal(proto.Data, &syncHashs); err != nil {
-			return
-		}
-		var needs []*SyncMsg
-		for _, hash := range syncHashs {
-			if hash.Id == p.nodeId {
-				continue
-			}
-			result := p.getNodeHash(hash.Id)
-			if !equalSyncHash(result, hash) {
-				if result == nil {
-					hash.Hash = 0
-					hash.SubNodeNum = 0
-				} else {
-					hash.Hash = result.Hash
-					hash.SubNodeNum = result.SubNodeNum
-				}
-				needs = append(needs, hash)
-			}
-		}
-		if len(needs) > 0 {
-			data, _ := json.Marshal(needs)
-			p.send(r.GetConn(), &ProtoMsg{
-				Action:   Action_SyncQueryNode,
-				UnixNano: unixNao,
-				SrcId:    p.nodeId,
-				Paths:    []uint32{p.nodeId},
-				Data:     data,
-			})
-		}
-	case Action_SyncQueryNode: //请求同步，单播
-		var needs []*SyncMsg
-		if err = json.Unmarshal(proto.Data, &needs); err != nil {
-			logrus.Errorln(err)
-			return
-		}
-		updateList := make([]*UpdateMsg, 0, len(needs))
-		for _, need := range needs {
-			result := p.getNodeHash(need.Id)
-			if result == nil {
-				updateList = append(updateList, &UpdateMsg{
-					Action: UpdateAction_RemoveRoot,
-					RootId: need.Id,
-				})
-				continue
-			}
-			if !equalSyncHash(result, need) {
-				updateList = append(updateList, &UpdateMsg{
-					Action: UpdateAction_RemoveRoot,
-					RootId: need.Id,
-				})
-				if result.SubNodeNum == 0 {
-					continue
-				}
-				updateList = append(updateList, &UpdateMsg{
-					Action: UpdateAction_AddRoot,
-					RootId: need.Id,
-				})
-				for _, u := range p.nodeTable.GetSubNodes(need.Id) {
-					updateList = append(updateList, &UpdateMsg{
-						Action: UpdateAction_AddSub,
-						RootId: need.Id,
-						SubId:  u,
+			if _, ok := m[rootId]; !ok {
+				var entry PushMsgEntry
+				entry.Root = rootId
+				entry.SubEntry = make([]PushMsgSubEntry, 0, len(item.Cache))
+				for sId, sType := range item.Cache {
+					entry.SubEntry = append(entry.SubEntry, PushMsgSubEntry{
+						SubId:   sId,
+						SubType: sType,
 					})
 				}
+				push = append(push, entry)
+			}
+			return true
+		})
+		if len(push) > 0 {
+			r.GetConn().SendType(p.protoType, (&ProtoMsg{
+				Id:     atomic.AddInt64(&p.idCounter, 1),
+				Action: Action_PushNode,
+				SrcId:  p.node.NodeId(),
+				Paths:  paths,
+				Data:   push.Encode(),
+			}).Encode())
+		}
+	case Action_PushNode:
+		var push PushMsg
+		if err = push.Decode(proto.Data); err != nil {
+			return
+		}
+		for _, entry := range push {
+			for _, subEntry := range entry.SubEntry {
+				p.nodeTable.AddNode(entry.Root, subEntry.SubId, subEntry.SubType)
 			}
 		}
-		if len(updateList) > 0 {
-			data, _ := json.Marshal(updateList)
-			p.send(r.GetConn(), &ProtoMsg{
-				Action:   Action_Update,
-				UnixNano: unixNao,
-				SrcId:    p.nodeId,
-				Paths:    []uint32{p.nodeId},
-				Data:     data,
-			})
+		p.nodeTable.Range(func(rootId uint32, item *NodeTableEmpty) bool {
+			p.addRoute(rootId)
+			for sId := range item.Cache {
+				p.addRoute(sId)
+			}
+			return true
+		})
+		p.broadcast(msg.Hop, proto)
+	case Action_Update:
+		var updateList UpdateMsg
+		if err = updateList.Decode(proto.Data); err != nil {
+			return
 		}
+		var success = make(UpdateMsg, 0, len(updateList))
+		for _, update := range updateList {
+			if update.RootId == p.node.NodeId() {
+				continue
+			}
+			switch update.Action {
+			case UpdateAction_AddNode:
+				if p.AddNode(update.RootId, update.SubId, update.SubType) {
+					success = append(success, update)
+				}
+			case UpdateAction_RemoveNode:
+				if p.RemoveNode(update.RootId, update.SubId, update.SubType) {
+					success = append(success, update)
+				}
+			}
+		}
+		if len(success) > 0 {
+			for _, updateMsg := range success {
+				if updateMsg.Action == UpdateAction_AddNode {
+					p.addRoute(updateMsg.SubId)
+				} else {
+					p.removeRoute(updateMsg.SubId)
+				}
+			}
+			proto.Data = success.Encode()
+			p.broadcast(msg.Hop, proto)
+		}
+	case Action_SyncHash:
+		var syncHash SyncMsg
+		if err = syncHash.Decode(proto.Data); err != nil {
+			return
+		}
+		localHash := p.getNodeHash(syncHash.Id)
+		if *localHash != syncHash {
+			if syncHash.SubNodeNum == 0 {
+				p.RemoveRootNode(syncHash.Id)
+				p.nodeTable.Range(func(rootId uint32, item *NodeTableEmpty) bool {
+					p.addRoute(rootId)
+					for sId := range item.Cache {
+						p.addRoute(sId)
+					}
+					return true
+				})
+				return
+			}
+			r.GetConn().SendType(p.protoType, (&ProtoMsg{
+				Id:     atomic.AddInt64(&p.idCounter, 1),
+				Action: Action_SyncQueryNode,
+				SrcId:  p.node.NodeId(),
+				Paths:  []uint32{p.node.NodeId()},
+				Data:   proto.Data,
+			}).Encode())
+		}
+		p.broadcast(msg.Hop, proto)
+	case Action_SyncQueryNode:
+		var syncHash SyncMsg
+		if err = syncHash.Decode(proto.Data); err != nil {
+			return
+		}
+		dstHash := p.getNodeHash(syncHash.Id)
+		if *dstHash == syncHash {
+			var push PushMsgEntry
+			p.nodeTable.RangeSubNode(syncHash.Id, func(m map[uint32]conn.NodeType) {
+				push.Root = syncHash.Id
+				push.SubEntry = make([]PushMsgSubEntry, 0, len(m))
+				for u, nodeType := range m {
+					push.SubEntry = append(push.SubEntry, PushMsgSubEntry{
+						SubId:   u,
+						SubType: nodeType,
+					})
+				}
+			})
+			if len(push.SubEntry) > 0 {
+				r.GetConn().SendType(p.protoType, (&ProtoMsg{
+					Id:     atomic.AddInt64(&p.idCounter, 1),
+					Action: Action_SyncNode,
+					SrcId:  p.node.NodeId(),
+					Paths:  *p.nodeTable.RootList(proto.SrcId),
+					Data:   push.Encode(),
+				}).Encode())
+			}
+			return
+		}
+		p.broadcast(msg.Hop, proto)
+	case Action_SyncNode:
+		var pushEntry PushMsgEntry
+		if err = pushEntry.Decode(proto.Data); err != nil {
+			return
+		}
+		p.nodeTable.RemoveRootNode(pushEntry.Root)
+		for _, entry := range pushEntry.SubEntry {
+			p.nodeTable.AddNode(pushEntry.Root, entry.SubId, entry.SubType)
+		}
+		p.nodeTable.Range(func(rootId uint32, item *NodeTableEmpty) bool {
+			p.addRoute(rootId)
+			for sId := range item.Cache {
+				p.addRoute(sId)
+			}
+			return true
+		})
+	default:
+
 	}
 }
 
-func (p *RouterBFS) OnClose(conn conn.Conn, err error) {
-	subId := conn.RemoteId()
-	unixNano := time.Now().UnixNano()
-	p.nodeTable.DeleteSub(p.nodeId, subId)
-	updates := []*UpdateMsg{
-		{
-			Action: UpdateAction_DeleteSub,
-			RootId: p.nodeId,
-			SubId:  subId,
-		},
-	}
-	if _, ok := p.neighborTable.GetNeighbor(subId); ok {
+func (p *RouterBFS) OnClose(c conn.Conn, err error) {
+	subId := c.RemoteId()
+	p.nodeTable.RemoveNode(p.node.NodeId(), subId, c.NodeType())
+	p.removeRoute(subId)
+	if c.NodeType() == conn.NodeTypeServer {
 		p.neighborTable.DeleteNeighbor(subId)
-		p.nodeTable.RemoveRoot(subId)
-		updates = append(updates, &UpdateMsg{
-			Action: UpdateAction_RemoveRoot,
-			RootId: subId,
-		})
 	}
-	data, _ := json.Marshal(updates)
 	p.broadcast(0, &ProtoMsg{
-		Action:   Action_Update,
-		UnixNano: unixNano,
-		SrcId:    p.nodeId,
-		Paths:    []uint32{p.nodeId, subId},
-		Data:     data,
+		Action: Action_Update,
+		Id:     atomic.AddInt64(&p.idCounter, 1),
+		SrcId:  p.node.NodeId(),
+		Paths:  []uint32{p.node.NodeId(), subId},
+		Data: (&UpdateMsg{
+			{
+				Action:  UpdateAction_RemoveNode,
+				RootId:  p.node.NodeId(),
+				SubId:   subId,
+				SubType: c.NodeType(),
+			},
+		}).Encode(),
 	})
 }
 
 func (p *RouterBFS) validMessage(msg *message.Message) (*ProtoMsg, error) {
-	if msg.Hop >= 254 || msg.Hop >= p.maxRouteHop && p.maxRouteHop > 0 {
+	if msg.Hop >= 254 || msg.Hop >= p.node.RouteHop() && p.node.RouteHop() > 0 {
 		return nil, errors.New("hop overflow Loop messages")
 	}
-	proto, err := decodeProtoMsg(msg.Data)
+	proto := new(ProtoMsg)
+	err := proto.Decode(msg.Data)
 	if err != nil {
 		return nil, err
 	}
@@ -358,13 +315,11 @@ func (p *RouterBFS) validMessage(msg *message.Message) (*ProtoMsg, error) {
 		return proto, err
 	}
 	for _, path := range proto.Paths {
-		if path == p.nodeId {
+		if path == p.node.NodeId() {
 			return proto, errors.New("invalid path")
 		}
 	}
-	if !p.Permit(proto.SrcId, proto.UnixNano) {
-		return proto, errors.New("invalid unixNano")
-	}
+	proto.Paths = append(proto.Paths, p.node.NodeId())
 	return proto, nil
 }
 
@@ -373,14 +328,21 @@ func (p *RouterBFS) addRoute(id uint32) (*router.RouteEmpty, bool) {
 		return nil, false
 	}
 	if _, ok := p.node.GetConn(id); ok {
-		return &router.RouteEmpty{Dst: id, Via: id, Hop: 1, Paths: []uint32{p.node.NodeId(), id}}, true
+		return nil, true
 	}
 	empty, ok := p.CalcRoute(id)
 	if !ok {
 		return nil, false
 	}
-	p.node.GetRouter().AddRoute(empty.Dst, empty.Via, empty.Hop, time.Now().UnixNano(), empty.Paths)
+	p.node.GetRouter().AddRoute(empty.Dst, empty.Via, empty.Hop, empty.UnixNano, empty.Paths)
 	return empty, true
+}
+
+func (p *RouterBFS) copyPath(paths []uint32, v uint32) []uint32 {
+	newPath := make([]uint32, len(paths)+1)
+	copy(newPath, paths)
+	newPath[len(paths)] = v
+	return newPath
 }
 
 func (p *RouterBFS) removeRoute(id uint32) {
@@ -400,18 +362,8 @@ func (p *RouterBFS) removeRoute(id uint32) {
 	}
 }
 
-func (p *RouterBFS) send(conn conn.Conn, msg *ProtoMsg, debugPrefix ...string) {
-	if len(debugPrefix) > 0 {
-		logrus.Infoln("[Send]", debugPrefix[0], msg.String())
-	} else {
-		logrus.Infoln("[Send]", msg.String())
-	}
-	conn.SendType(p.protoType, msg.Encode())
-}
-
 func (p *RouterBFS) broadcast(hop uint8, msg *ProtoMsg) {
-	p.LenNeighbor()
-	num := p.node.LenConn()
+	num := p.neighborTable.Len()
 	if num == 0 {
 		return
 	}
@@ -422,26 +374,12 @@ func (p *RouterBFS) broadcast(hop uint8, msg *ProtoMsg) {
 	var conns = make([]*Conn, 0, num)
 	var connIds = make([]uint32, 0, num)
 	p.RangeNeighbor(func(id uint32, conn *Conn) bool {
-		if _, ok := filterIds[id]; ok {
-			return true
+		if _, ok := filterIds[id]; !ok {
+			connIds = append(connIds, id)
+			conns = append(conns, conn)
 		}
-		connIds = append(connIds, id)
-		conns = append(conns, conn)
 		return true
 	})
-	if len(conns) == 0 {
-		return
-	}
-	if len(conns) == 1 {
-		_ = conns[0].SendMessage(&message.Message{
-			Type:   p.protoType,
-			Hop:    hop,
-			SrcId:  conns[0].LocalId(),
-			DestId: conns[0].RemoteId(),
-			Data:   msg.Encode(),
-		})
-		return
-	}
 	l := len(msg.Paths)
 	for i, c := range conns {
 		msg.Paths = append(msg.Paths, connIds[:i]...)
@@ -478,7 +416,7 @@ func (p *RouterBFS) BFSSearch(src, dst uint32, maxDeep uint8) (result []uint32) 
 		if len(current.paths) >= int(maxDeep) {
 			return nil
 		}
-		p.RangeSubNode(current.node, func(empty map[uint32]struct{}) {
+		p.RangeSubNode(current.node, func(empty map[uint32]conn.NodeType) {
 			var ok bool
 			if _, ok = empty[dst]; ok {
 				result = append(current.paths, dst)
@@ -504,7 +442,7 @@ func (p *RouterBFS) BFSSearch(src, dst uint32, maxDeep uint8) (result []uint32) 
 }
 
 func (p *RouterBFS) CalcRoute(dst uint32) (*router.RouteEmpty, bool) {
-	paths := p.BFSSearch(p.node.NodeId(), dst, p.maxRouteHop)
+	paths := p.BFSSearch(p.node.NodeId(), dst, p.node.RouteHop())
 	if len(paths) < 2 {
 		return nil, false
 	}
@@ -519,32 +457,21 @@ func (p *RouterBFS) CalcRoute(dst uint32) (*router.RouteEmpty, bool) {
 
 func (p *RouterBFS) StartNodeSync(ctx context.Context, timeout time.Duration) {
 	go func() {
-		currId := p.node.NodeId()
 		ticker := time.NewTicker(timeout)
 		defer ticker.Stop()
 		go func() {
 			<-ctx.Done()
 			ticker.Stop()
 		}()
-		m := &ProtoMsg{
-			Action: Action_SyncHash,
-			SrcId:  currId,
-			Paths:  []uint32{currId},
-		}
-		for t := range ticker.C {
-			if p.neighborTable.LenNeighbor() == 0 {
-				continue
+		for range ticker.C {
+			msg := &ProtoMsg{
+				Id:     atomic.AddInt64(&p.idCounter, 1),
+				Action: Action_SyncHash,
+				SrcId:  p.node.NodeId(),
+				Paths:  []uint32{p.node.NodeId()},
+				Data:   p.getNodeHash(p.node.NodeId()).Encode(),
 			}
-			syncList := make([]*SyncMsg, 0, 1+p.neighborTable.LenNeighbor())
-			p.neighborTable.RangeNeighbor(func(id uint32, conn *Conn) bool {
-				syncList = append(syncList, p.getNodeHash(id))
-				return true
-			})
-			syncList = append(syncList, p.getNodeHash(currId))
-			m.UnixNano = t.UnixNano()
-			data, _ := json.Marshal(syncList)
-			m.Data = data
-			p.broadcast(0, m)
+			p.broadcast(p.protoType, msg)
 		}
 	}()
 }
@@ -565,20 +492,4 @@ func (p *RouterBFS) getNodeHash(id uint32) *SyncMsg {
 		SubNodeNum: uint32(len(sIds)),
 		Hash:       sum(sIds),
 	}
-}
-
-func sum(v []uint32) (n uint64) {
-	for i := 0; i < len(v); i++ {
-		n += uint64(v[i])
-	}
-	return
-}
-func equalSyncHash(a, b *SyncMsg) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	return a.Id == b.Id && a.SubNodeNum == b.SubNodeNum && a.Hash == b.Hash
 }

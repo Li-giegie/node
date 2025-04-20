@@ -6,14 +6,18 @@ import (
 )
 
 func TestName(t *testing.T) {
-	nums := []int64{0, 0, 0, 0, 0}
-	fmt.Println(checkAndReplace(3, nums), nums)
-	fmt.Println(checkAndReplace(1, nums), nums)
-	fmt.Println(checkAndReplace(5, nums), nums)
-	fmt.Println(checkAndReplace(2, nums), nums)
-	fmt.Println(checkAndReplace(6, nums), nums)
-	fmt.Println(checkAndReplace(7, nums), nums)
-	fmt.Println(checkAndReplace(3, nums), nums)
+
+	sync1 := SyncMsg{
+		Id:         0,
+		SubNodeNum: 0,
+		Hash:       0,
+	}
+	sync2 := &SyncMsg{
+		Id:         0,
+		SubNodeNum: 0,
+		Hash:       0,
+	}
+	fmt.Println(sync1 == *sync2)
 }
 
 func checkAndReplace(num int64, arr []int64) bool {

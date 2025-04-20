@@ -3,4 +3,4 @@
 *.bkp
 *.log
 *.exe
-temp_test.go
+temp/
