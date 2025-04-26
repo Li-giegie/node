@@ -43,7 +43,7 @@ go get -u github.com/Li-giegie/node@latest
 ```
 ## 快速开始
 ### Server
-[Server 完整的示例](example/basic/server/main.go)
+[Server 完整的示例](example/base/server/main.go)
 ```go
 func main() {
 	// 创建8000服务端节点
@@ -87,7 +87,7 @@ func main() {
 ```
 
 ### Client
-[Client 完整的示例](example/basic/client/main.go)
+[Client 完整的示例](example/base/client/main.go)
 ```go
 func main() {
 	// 创建一个节点为8081的节点

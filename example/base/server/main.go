@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"fmt"
 	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/pkg/conn"
@@ -9,6 +11,7 @@ import (
 	"github.com/Li-giegie/node/pkg/responsewriter"
 	"log"
 	"net"
+	"os"
 )
 
 func main() {
@@ -34,16 +37,35 @@ func main() {
 		log.Println("OnClose", conn.RemoteAddr().String())
 		return true
 	})
-	// Register 注册实现了handler.Handler的处理接口，该接口的回调函数在OnAccept、OnConnect、OnMessage、OnClose之后被回调
+	// Register 注册实现了handler.Handler的处理接口，该接口的回调函数在全局OnAccept、OnConnect、OnMessage、OnClose之后被回调
 	s.Register(message.MsgType_Default, &handler.Default{
-		OnAcceptFunc:  nil,
-		OnConnectFunc: nil,
 		OnMessageFunc: func(r responsewriter.ResponseWriter, m *message.Message) {
-			log.Println("OnMessageFunc handle")
-			r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", s.NodeId())))
+			log.Println("Register OnMessage", m.String())
+			r.Response(message.StateCode_Success, append([]byte(fmt.Sprintf("response from %d: ", s.NodeId())), m.Data...))
 		},
-		OnCloseFunc: nil,
 	})
+	go func() {
+		scan := bufio.NewScanner(os.Stdin)
+		print(">>")
+		for scan.Scan() {
+			switch scan.Text() {
+			case "":
+			case "exit":
+				print("bye~")
+				return
+			default:
+				for _, c := range s.GetAllConn() {
+					res, code, err := c.Request(context.Background(), scan.Bytes())
+					if err != nil {
+						fmt.Println(err)
+					} else {
+						fmt.Println(code, string(res))
+					}
+				}
+			}
+			print(">>")
+		}
+	}()
 	// 侦听并开启服务
 	err := s.ListenAndServe("0.0.0.0:8000")
 	if err != nil {

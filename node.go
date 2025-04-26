@@ -14,8 +14,8 @@ func NewServer(c *server.Config) server.Server {
 }
 
 // NewClientOption 创建客户端，lid本地节点Id，rid远程节点Id
-func NewClientOption(lid, rid uint32, opts ...client.Option) client.Client {
-	return client.NewClientOption(lid, rid, opts...)
+func NewClientOption(localId, remoteId uint32, opts ...client.Option) client.Client {
+	return client.NewClientOption(localId, remoteId, opts...)
 }
 
 func NewClient(c *client.Config) client.Client {

@@ -5,101 +5,153 @@ import (
 	"github.com/Li-giegie/node/pkg/conn"
 	"github.com/Li-giegie/node/pkg/errors"
 	"io"
-	"math"
 	"time"
 )
 
-var DefaultBasicReq = new(BasicAuthReq)
-var DefaultBasicResp = new(BasicAuthResp)
+var DefaultAuthService = new(BaseAuthService)
 
-type BasicAuthReq struct{}
+type BaseAuthRequest struct {
+	ConnType conn.NodeType
+	SrcId    uint32
+	DstId    uint32
+	Key      []byte
+}
 
-func (a BasicAuthReq) HeaderLen() int {
+func (r *BaseAuthRequest) Len() int {
 	return 41
 }
 
-func (a BasicAuthReq) Send(w io.Writer, srcType conn.NodeType, srcId, dstId uint32, accessKey []byte) error {
-	data := make([]byte, a.HeaderLen())
-	data[0] = byte(srcType)
-	binary.LittleEndian.PutUint32(data[1:5], srcId)
-	binary.LittleEndian.PutUint32(data[5:9], dstId)
-	copy(data[9:], Hash(accessKey))
-	_, err := w.Write(data)
+func (r *BaseAuthRequest) Encode() []byte {
+	buf := make([]byte, r.Len())
+	buf[0] = byte(r.ConnType)
+	binary.LittleEndian.PutUint32(buf[1:5], r.SrcId)
+	binary.LittleEndian.PutUint32(buf[5:9], r.DstId)
+	copy(buf[9:], Hash(r.Key))
+	return buf
+}
+
+func (r *BaseAuthRequest) Decode(buf []byte) (err error) {
+	if len(buf) != r.Len() {
+		return errors.New("decode bad: request length invalid")
+	}
+	r.ConnType = conn.NodeType(buf[0])
+	if err = r.ConnType.Valid(); err != nil {
+		return err
+	}
+	r.SrcId = binary.LittleEndian.Uint32(buf[1:5])
+	r.DstId = binary.LittleEndian.Uint32(buf[5:9])
+	r.Key = buf[9:]
+	return nil
+}
+
+type BaseAuthService struct {
+}
+
+func (s *BaseAuthService) Request(w io.Writer, req *BaseAuthRequest) (err error) {
+	_, err = w.Write(req.Encode())
 	return err
 }
 
-func (a BasicAuthReq) Receive(r io.Reader, t time.Duration) (srcType conn.NodeType, srcId, dstId uint32, hashKey []byte, err error) {
-	var buf = make([]byte, a.HeaderLen())
-	if err = ReadFull(r, t, buf); err != nil {
-		return
+func (s *BaseAuthService) ReadRequest(r io.Reader, timeout time.Duration) (req *BaseAuthRequest, err error) {
+	req = new(BaseAuthRequest)
+	buf := make([]byte, req.Len())
+	if err = ReadFull(r, timeout, buf); err != nil {
+		return nil, err
 	}
-	srcType = conn.NodeType(buf[0])
-	if err = srcType.Valid(); err != nil {
-		return
+	if err = req.Decode(buf); err != nil {
+		return nil, err
 	}
-	srcId = binary.LittleEndian.Uint32(buf[1:5])
-	dstId = binary.LittleEndian.Uint32(buf[5:9])
-	hashKey = buf[9:]
+	return req, req.ConnType.Valid()
+}
+
+type BaseAuthResponseCode uint8
+
+const (
+	BaseAuthResponseCodeInvalidSrcId BaseAuthResponseCode = iota + 1
+	BaseAuthResponseCodeInvalidDestId
+	BaseAuthResponseCodeInvalidKey
+	BaseAuthResponseCodeSrcIdExists
+	BaseAuthResponseCodeSuccess
+)
+
+func (b BaseAuthResponseCode) String() string {
+	switch b {
+	case BaseAuthResponseCodeInvalidSrcId:
+		return "invalid src"
+	case BaseAuthResponseCodeInvalidDestId:
+		return "invalid dest"
+	case BaseAuthResponseCodeInvalidKey:
+		return "invalid key"
+	case BaseAuthResponseCodeSrcIdExists:
+		return "src id exists"
+	case BaseAuthResponseCodeSuccess:
+		return "success"
+	default:
+		return "invalid code"
+	}
+}
+
+func (b BaseAuthResponseCode) Valid() error {
+	if b >= BaseAuthResponseCodeInvalidSrcId && b <= BaseAuthResponseCodeSuccess {
+		return nil
+	}
+	return errors.New("invalid code")
+}
+
+type BaseAuthResponse struct {
+	ConnType              conn.NodeType
+	Code                  BaseAuthResponseCode
+	MaxMsgLen             uint32
+	KeepaliveTimeout      time.Duration
+	KeepaliveTimeoutClose time.Duration
+}
+
+func (r *BaseAuthResponse) Len() int {
+	return 22
+}
+
+func (r *BaseAuthResponse) Encode() []byte {
+	buf := make([]byte, r.Len())
+	buf[0] = byte(r.ConnType)
+	buf[1] = byte(r.Code)
+	binary.LittleEndian.PutUint32(buf[2:6], r.MaxMsgLen)
+	binary.LittleEndian.PutUint64(buf[6:14], uint64(r.KeepaliveTimeout))
+	binary.LittleEndian.PutUint64(buf[14:], uint64(r.KeepaliveTimeoutClose))
+	return buf
+}
+
+func (r *BaseAuthResponse) Decode(buf []byte) (err error) {
+	if len(buf) != 22 {
+		return errors.New("decode bad: response length invalid")
+	}
+	r.ConnType = conn.NodeType(buf[0])
+	if err = r.ConnType.Valid(); err != nil {
+		return err
+	}
+	r.Code = BaseAuthResponseCode(buf[1])
+	if err = r.Code.Valid(); err != nil {
+		return err
+	}
+	r.MaxMsgLen = binary.LittleEndian.Uint32(buf[2:6])
+	r.KeepaliveTimeout = time.Duration(binary.LittleEndian.Uint64(buf[6:14]))
+	r.KeepaliveTimeoutClose = time.Duration(binary.LittleEndian.Uint64(buf[14:]))
+	return nil
+}
+
+func (s *BaseAuthService) Response(w io.Writer, resp *BaseAuthResponse) (err error) {
+	_, err = w.Write(resp.Encode())
 	return
 }
 
-type BasicAuthResp struct{}
-
-func (a BasicAuthResp) HeaderLen() int {
-	return 6
-}
-
-var maxBasicAuthRespMsgLen = math.MaxUint32 - 100
-var errLenOverflow = errors.New("auth response message length overflow")
-
-func (a BasicAuthResp) Send(w io.Writer, srcType conn.NodeType, permit bool, msg string) error {
-	if len(msg) > maxBasicAuthRespMsgLen {
-		return errLenOverflow
-	}
-	p := make([]byte, a.HeaderLen()+len(msg))
-	p[0] = byte(srcType)
-	p[1] = bool2uint8(permit)
-	binary.LittleEndian.PutUint32(p[2:6], uint32(len(msg)))
-	copy(p[6:], msg)
-	_, err := w.Write(p)
-	return err
-}
-
-func (a BasicAuthResp) Receive(r io.Reader, t time.Duration) (dstType conn.NodeType, permit bool, msg string, err error) {
-	buf := make([]byte, a.HeaderLen())
-	if err = ReadFull(r, t, buf); err != nil {
-		return
-	}
-	dstType = conn.NodeType(buf[0])
-	if err = dstType.Valid(); err != nil {
-		return
-	}
-	permit = uint82bool(buf[1])
-	pl := binary.LittleEndian.Uint32(buf[2:6])
-	if int(pl) > maxBasicAuthRespMsgLen {
-		err = errLenOverflow
-		return
-	}
-	if pl > 0 {
-		buf = make([]byte, pl)
-		if err = ReadFull(r, t, buf); err != nil {
-			return
-		}
-		msg = string(buf)
-	}
-	return
-}
-
-func Auth(rw io.ReadWriter, srcType conn.NodeType, srcId, dstId uint32, key []byte, timeout time.Duration) (dstType conn.NodeType, err error) {
-	if err := DefaultBasicReq.Send(rw, srcType, srcId, dstId, key); err != nil {
-		return 0, err
-	}
-	dstType, permit, msg, err := DefaultBasicResp.Receive(rw, timeout)
+func (s *BaseAuthService) ReadResponse(r io.Reader, timeout time.Duration) (resp *BaseAuthResponse, err error) {
+	resp = new(BaseAuthResponse)
+	buf := make([]byte, resp.Len())
+	err = ReadFull(r, timeout, buf)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	if !permit {
-		return 0, errors.New(msg)
+	if err = resp.Decode(buf); err != nil {
+		return nil, err
 	}
-	return dstType, nil
+	return resp, nil
 }

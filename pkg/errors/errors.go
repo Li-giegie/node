@@ -7,10 +7,6 @@ type NodeError interface {
 
 type Error []byte
 
-func NewError(b []byte) NodeError {
-	return Error(b)
-}
-
 func (n Error) Error() string {
 	return string(n)
 }
@@ -25,8 +21,6 @@ var (
 	ErrLengthOverflow      = Error("length overflow")
 	ErrNodeNotExist        = Error("node not exist")
 	BridgeRemoteIdExistErr = Error("Bridge error: remote id exist")
-	AcceptDeniedErr        = Error("AcceptCallback denied the connection establishment")
-	MultipleConfigErr      = Error("config accepts only one parameter")
 )
 
 func New(s string) error {

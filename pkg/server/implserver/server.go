@@ -60,14 +60,14 @@ type internalField struct {
 	handlemanager.HandlerManager
 }
 
-func (s *Server) ListenAndServe(address string, conf ...*tls.Config) (err error) {
+func (s *Server) ListenAndServe(address string, config ...*tls.Config) (err error) {
 	var listen net.Listener
 	network, addr := internal.ParseAddr(address)
-	if n := len(conf); n > 0 {
+	if n := len(config); n > 0 {
 		if n != 1 {
-			return errors.MultipleConfigErr
+			panic("only one config option is allowed")
 		}
-		listen, err = tls.Listen(network, addr, conf[0])
+		listen, err = tls.Listen(network, addr, config[0])
 	} else {
 		listen, err = net.Listen(network, addr)
 	}
@@ -113,33 +113,44 @@ func (s *Server) Serve(l net.Listener) error {
 }
 
 func (s *Server) handleAuthenticate(native net.Conn) {
-	srcType, src, dst, key, err := internal.DefaultBasicReq.Receive(native, s.AuthTimeout)
+	req, err := internal.DefaultAuthService.ReadRequest(native, s.AuthTimeout)
 	if err != nil {
 		_ = native.Close()
 		return
 	}
-	if src == s.Id {
-		_ = internal.DefaultBasicResp.Send(native, 0, false, "error: local id invalid")
+	resp := &internal.BaseAuthResponse{
+		ConnType:              conn.NodeTypeServer,
+		MaxMsgLen:             s.MaxMsgLen,
+		KeepaliveTimeout:      s.KeepaliveTimeout,
+		KeepaliveTimeoutClose: s.KeepaliveTimeoutClose,
+	}
+	if req.SrcId == s.Id {
+		resp.Code = internal.BaseAuthResponseCodeInvalidSrcId
+		_ = internal.DefaultAuthService.Response(native, resp)
 		_ = native.Close()
 		return
 	}
-	if dst != s.Id {
-		_ = internal.DefaultBasicResp.Send(native, 0, false, "error: remote id invalid")
+	if req.DstId != s.Id {
+		resp.Code = internal.BaseAuthResponseCodeInvalidDestId
+		_ = internal.DefaultAuthService.Response(native, resp)
 		_ = native.Close()
 		return
 	}
-	if !internal.BytesEqual(s.hashKey, key) {
-		_ = internal.DefaultBasicResp.Send(native, 0, false, "error: key invalid")
+	if !internal.BytesEqual(s.hashKey, req.Key) {
+		resp.Code = internal.BaseAuthResponseCodeInvalidKey
+		_ = internal.DefaultAuthService.Response(native, resp)
 		_ = native.Close()
 		return
 	}
-	c := implconn.NewConn(srcType, s.Id, src, native, s.recvChan, &s.recvLock, &s.idCounter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
+	c := implconn.NewConn(req.ConnType, s.Id, req.SrcId, native, s.recvChan, &s.recvLock, &s.idCounter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
 	if !s.AddConn(c) {
-		_ = internal.DefaultBasicResp.Send(native, 0, false, "error: id already exists")
+		resp.Code = internal.BaseAuthResponseCodeSrcIdExists
+		_ = internal.DefaultAuthService.Response(native, resp)
 		_ = native.Close()
 		return
 	}
-	if err = internal.DefaultBasicResp.Send(native, conn.NodeTypeServer, true, ""); err != nil {
+	resp.Code = internal.BaseAuthResponseCodeSuccess
+	if err = internal.DefaultAuthService.Response(native, resp); err != nil {
 		_ = native.Close()
 		s.RemoveConn(c.RemoteId())
 		return
@@ -270,17 +281,23 @@ func (s *Server) Bridge(native net.Conn, remoteId uint32, remoteAuthKey []byte) 
 	if _, ok := s.GetConn(remoteId); ok {
 		return errors.BridgeRemoteIdExistErr
 	}
-	if err = internal.DefaultBasicReq.Send(native, conn.NodeTypeServer, s.Id, remoteId, remoteAuthKey); err != nil {
-		return err
-	}
-	dstType, permit, msg, err := internal.DefaultBasicResp.Receive(native, s.AuthTimeout)
+	err = internal.DefaultAuthService.Request(native, &internal.BaseAuthRequest{
+		ConnType: conn.NodeTypeServer,
+		SrcId:    s.NodeId(),
+		DstId:    remoteId,
+		Key:      remoteAuthKey,
+	})
 	if err != nil {
 		return err
 	}
-	if !permit {
-		return errors.Error(msg)
+	resp, err := internal.DefaultAuthService.ReadResponse(native, s.AuthTimeout)
+	if err != nil {
+		return err
 	}
-	c := implconn.NewConn(dstType, s.Id, remoteId, native, s.recvChan, &s.recvLock, &s.idCounter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
+	if resp.Code != internal.BaseAuthResponseCodeSuccess {
+		return errors.New(resp.Code.String())
+	}
+	c := implconn.NewConn(resp.ConnType, s.Id, remoteId, native, s.recvChan, &s.recvLock, &s.idCounter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
 	if !s.AddConn(c) {
 		return errors.BridgeRemoteIdExistErr
 	}

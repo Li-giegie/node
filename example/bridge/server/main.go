@@ -3,210 +3,123 @@ package main
 import (
 	"bufio"
 	"context"
-	"flag"
 	"fmt"
 	"github.com/Li-giegie/node"
-	"github.com/Li-giegie/node/example/bridge/server/cmd"
 	"github.com/Li-giegie/node/pkg/conn"
 	"github.com/Li-giegie/node/pkg/handler"
 	"github.com/Li-giegie/node/pkg/message"
-	"github.com/Li-giegie/node/pkg/protocol"
-	"github.com/Li-giegie/node/pkg/protocol/routerbfs"
 	"github.com/Li-giegie/node/pkg/responsewriter"
-	"github.com/Li-giegie/node/pkg/server"
-	"github.com/sirupsen/logrus"
 	"log"
 	"net"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
-	"time"
 )
 
-var configFile = flag.String("c", "./1.json", "config file path")
-var gen = flag.String("gen", "", "gen config file")
-
-func init() {
-	flag.Parse()
-	if *gen != "" {
-		genConfTemplate(*gen)
-	} else {
-		loadConfTemplate(*configFile)
-	}
-}
-
-var bfsProtocol protocol.Router
-
 func main() {
-
-	logrus.SetFormatter(&logrus.TextFormatter{
-		ForceColors: true,
-	})
-	var stopChan = make(chan interface{}, 1)
-	s := node.NewServerOption(conf.Id,
-		server.WithAuthKey([]byte(conf.Key)),
-		server.WithAuthTimeout(time.Second*6),
-	)
-	s.OnClose(func(conn conn.Conn, err error) (next bool) {
-		fmt.Println("on close", conn.RemoteId(), err)
+	id := uint32(8000)
+	addr := ":8000"
+	// 创建8000服务端节点
+	s := node.NewServerOption(id)
+	// OnAccept 注册全局OnAccept回调函数，net.Listen.Accept之后第一个回调函数，同步调用
+	s.OnAccept(func(conn net.Conn) (next bool) {
+		log.Println("OnAccept", conn.RemoteAddr().String())
 		return true
 	})
-	defer s.Close()
-	//开启节点发现协议
-	bfsProtocol = protocol.NewRouterBFSProtocol(s)
-	//bfsProtocol.StartNodeSync(context.TODO(), time.Second*3)
-	s.Register(bfsProtocol.ProtocolType(), bfsProtocol)
-	s.Register(message.MsgType_Default, &handler.Default{OnMessageFunc: func(r responsewriter.ResponseWriter, m *message.Message) {
-		if string(m.Data) == "exit" {
-			for _, c := range s.GetAllConn() {
-				_ = c.Send(m.Data)
-			}
-			stopChan <- "receive：exit-cmd"
-			return
-		}
-		fmt.Printf("request from %d: %s\n", m.SrcId, m.Data)
-		r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", s.NodeId())))
-	}})
-	// 解析命令
-	go handle(s, nil)
+	// OnConnect 注册全局OnConnect回调函数，OnAccept之后的回调函数，同步调用
+	s.OnConnect(func(conn conn.Conn) (next bool) {
+		log.Println("OnConnect", conn.RemoteAddr().String())
+		return true
+	})
+	// OnMessage 注册全局OnMessage回调函数，OnConnect之后每次收到请求时的回调函数，同步调用
+	s.OnMessage(func(r responsewriter.ResponseWriter, m *message.Message) (next bool) {
+		log.Println("OnMessage", m.String())
+		return true
+	})
+	// OnClose 注册OnClose回调函数，连接被关闭后的回调函数
+	s.OnClose(func(conn conn.Conn, err error) (next bool) {
+		log.Println("OnClose", conn.RemoteAddr().String())
+		return true
+	})
+	// Register 注册实现了handler.Handler的处理接口，该接口的回调函数在全局OnAccept、OnConnect、OnMessage、OnClose之后被回调
+	s.Register(message.MsgType_Default, &handler.Default{
+		OnMessageFunc: func(r responsewriter.ResponseWriter, m *message.Message) {
+			log.Println("Register OnMessage", m.String())
+			r.Response(message.StateCode_Success, append([]byte(fmt.Sprintf("response from %d: ", s.NodeId())), m.Data...))
+		},
+	})
 	go func() {
-		for {
-			time.Sleep(time.Second * 2)
-			success := false
-			run := false
-			for !success {
-				time.Sleep(time.Second * 2)
-				success = true
-				for _, bridgeNode := range conf.Bridge {
-					if _, ok := s.GetConn(bridgeNode.Id); ok {
-						continue
+		scan := bufio.NewScanner(os.Stdin)
+		print(">>")
+		for scan.Scan() {
+			fields := strings.Fields(scan.Text())
+			if len(fields) > 0 {
+				switch fields[0] {
+				case "bridge":
+					if len(fields) < 3 {
+						println("invalid command", scan.Text())
+					} else {
+						c, err := net.Dial("tcp", fields[1])
+						if err != nil {
+							println("dial error", err.Error())
+						} else {
+							rid, err := strconv.Atoi(fields[2])
+							if err != nil {
+								println("invalid remote id", fields[2])
+							} else {
+								fmt.Println(fields)
+								key := []byte{}
+								if len(fields) > 3 {
+									key = []byte(fields[3])
+								}
+								err = s.Bridge(c, uint32(rid), key)
+								if err != nil {
+									println("bridge error", err.Error())
+								}
+							}
+						}
 					}
-					run = true
-					conn, err := net.Dial("tcp", bridgeNode.Address)
-					if err != nil {
-						//log.Println(err)
-						success = false
-						continue
+				case "exit":
+					s.Close()
+					println("bye~")
+					return
+				case "help":
+					println("bridge usage: bridge [remote address] [remote id] [remote key]")
+					println("request usage: request [remote id] [data]")
+					println("exit usage: exit")
+				case "request":
+					if len(fields) != 3 {
+						println("invalid command", scan.Text())
+					} else {
+						rid, err := strconv.Atoi(fields[1])
+						if err != nil {
+							println("invalid remote id", fields[1])
+						} else {
+							resp, code, err := s.RequestTo(context.TODO(), uint32(rid), []byte(fields[2]))
+							if err != nil {
+								println(err.Error())
+							} else {
+								println(code, string(resp))
+							}
+						}
 					}
-					err = s.Bridge(conn, bridgeNode.Id, []byte("hello"))
-					if err != nil {
-						//log.Println(err)
-						success = false
+				default:
+					for _, c := range s.GetAllConn() {
+						res, code, err := c.Request(context.Background(), scan.Bytes())
+						if err != nil {
+							fmt.Println(err)
+						} else {
+							fmt.Println(code, string(res))
+						}
 					}
 				}
 			}
-			if run && success {
-				for _, bridge := range conf.Bridge {
-					fmt.Println("bridge", bridge.Id, bridge.Address)
-				}
-				fmt.Println("bridge success")
-			}
+			print(">>")
 		}
 	}()
-	go func() {
-		log.Println("Listen on", conf.Addr)
-		stopChan <- s.ListenAndServe(conf.Addr)
-	}()
-	exit := make(chan os.Signal, 1)
-	signal.Notify(exit)
-	var v interface{}
-	select {
-	case v = <-stopChan:
-		v = fmt.Sprintln("stop", v)
-	case v = <-exit:
-		v = fmt.Sprintln("exit", v)
-	}
-}
-
-func handle(s server.Server, p protocol.Protocol) {
-	ctx := context.WithValue(context.WithValue(context.Background(), "server", s), "bfs", p)
-	time.Sleep(time.Second)
-	envName := fmt.Sprintf("%d@>>", conf.Id)
-	sc := bufio.NewScanner(os.Stdin)
-	r := bfsProtocol.(*routerbfs.RouterBFS)
-	fmt.Print(envName)
-	go func() {
-		return
-		for {
-
-			r.Range(func(rootId uint32, empty *routerbfs.NodeTableEmpty) bool {
-				fmt.Print("root ", rootId, " version ")
-				for id := range empty.Cache {
-					fmt.Print("  sub ", id)
-				}
-				fmt.Println()
-				return true
-			})
-			fmt.Print("\n\n")
-			time.Sleep(time.Second * 3)
-		}
-	}()
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) == 0 {
-			fmt.Print(envName)
-			continue
-		}
-		switch fields[0] {
-		case "exit":
-			for _, c := range s.GetAllConn() {
-				c.Send([]byte("exit"))
-			}
-			s.Close()
-			time.Sleep(time.Second)
-			os.Exit(0)
-		case "ne":
-			r.RangeNeighbor(func(id uint32, conn *routerbfs.Conn) bool {
-				fmt.Println("ne", id)
-				return true
-			})
-		case "full":
-			fmt.Println()
-			r.Range(func(rootId uint32, empty *routerbfs.NodeTableEmpty) bool {
-				fmt.Print("root", rootId)
-				for id := range empty.Cache {
-					fmt.Print(" sub ", id)
-				}
-				fmt.Println()
-				return true
-			})
-		case "sync":
-			bfsProtocol.StartNodeSync(context.TODO(), time.Second*5)
-			fmt.Println("start sync success")
-		case "add", "remove":
-			if len(fields) < 3 {
-				fmt.Println("args < 4: add 1 2")
-				fmt.Print(envName)
-				continue
-			}
-			rid, err := strconv.Atoi(fields[1])
-			sid, err2 := strconv.Atoi(fields[2])
-			if err != nil || err2 != nil {
-				fmt.Println(err, err2)
-			} else {
-				ok := true
-				if fields[0] == "add" {
-					r.AddNode(uint32(rid), uint32(sid), 1)
-				} else {
-					ok = r.RemoveNode(uint32(rid), uint32(sid), 1)
-				}
-				if ok {
-					fmt.Printf("%s 操作成功 root %d sub %d\n", fields[0], rid, sid)
-				} else {
-					fmt.Printf("%s 操作失败 root %d sub %d\n", fields[0], rid, sid)
-				}
-			}
-		default:
-			executeCmd, err := cmd.Group.ExecuteCmdLineContext(ctx, sc.Text())
-			if err != nil {
-				if executeCmd == nil {
-					cmd.Group.Usage()
-				} else {
-					fmt.Println(err)
-				}
-			}
-		}
-		fmt.Print(envName)
+	// 侦听并开启服务
+	err := s.ListenAndServe(addr)
+	if err != nil {
+		log.Println(err)
 	}
 }
