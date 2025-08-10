@@ -1,82 +1,286 @@
 package conn
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
+	"github.com/Li-giegie/node/internal/bufwriter"
 	"github.com/Li-giegie/node/pkg/errors"
 	"github.com/Li-giegie/node/pkg/message"
+	"io"
 	"net"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// Conn 接口实现了对连接的发送、请求、关闭，和一些属性查询方法
-// Type 字段用于实现某些缺失功能协议，而不是用于区别不同场景，不可滥用，所有业务场景都能在Data字段内封装实现
-// Request、Send系列方法实现了核心功能，发出的消息Type属性字段均为 MsgType_Default，他们在逻辑上不同，还有Request有一个
-// 收发队列而Send没有，在OnMessage等回调函数哪里看到的就是一个消息可以响应，也可以不响应，具体根据你的场景
-// 如果使用了RequestType、RequestTypeTo、RequestMessage等变更Type的方法时，响应方法Response返回的类型必须是MsgType_Reply（默认就是），
-// 否则接收端收到消息后无法进入响应队列从而得不到响应结果，会进入OnProtocolMessage回调那么就不能认为这是一次请求，因为和发送没有区别。
-// 如果需要构造message发送时需要注意id、type、hop字段，type上文有提到，id字段为消息的唯一标识，当发起请求时，id必须保证唯一，
-// 当要使用RequestMessage方法时就需要给一个唯一id，其他的方法内部已经维护好了自增id，CreateMessage可以创建一个维护好的id消息，CreateMessageId则可以创建一个唯一Id，
-// hop 字段为消息的跳数，主要用在路由协议中，初始值为0，每经过一个节点都会加1，如果不是转发，初始值都应该是0,
-type Conn interface {
-	// Request 发起请求到直连的服务端
-	Request(ctx context.Context, data []byte) (resp []byte, stateCode int16, err error)
-	// RequestTo 发起请求到目的节点，当目的节点不是直连节点时使用此方法
-	RequestTo(ctx context.Context, dst uint32, data []byte) (resp []byte, stateCode int16, err error)
-	// RequestType 发起请求到服务端，并指定type，type字段通常用于协议
-	RequestType(ctx context.Context, typ uint8, data []byte) (resp []byte, stateCode int16, err error)
-	// RequestTypeTo 发起请求到目的节点，并指定type，type字段通常用于协议,当目的节点不是直连节点时使用此方法
-	RequestTypeTo(ctx context.Context, typ uint8, dst uint32, data []byte) (resp []byte, stateCode int16, err error)
-	// RequestMessage 发起请求，并自主构建完整的消息，注意：msg请使用CreateMessage创建一个完整的msg或者使用CreateMessageId创建，保证Id字段唯一性
-	RequestMessage(ctx context.Context, msg *message.Message) (resp []byte, stateCode int16, err error)
-	// Send 发送数据到服务端
-	Send(data []byte) error
-	// SendTo 发送数据到目的节点，当目的节点不是直连节点时使用此方法
-	SendTo(dst uint32, data []byte) error
-	// SendType 发送数据到服务端，并指定type，type字段通常用于协议
-	SendType(typ uint8, data []byte) error
-	// SendTypeTo 发送数据到目的节点，并设置type，type字段通常用于协议，当目的节点不是直连节点时使用此方法
-	SendTypeTo(typ uint8, dst uint32, data []byte) error
-	// SendMessage 发送一个自主构建的消息
-	SendMessage(m *message.Message) error
-	// Close 关闭连接
-	Close() error
-	// LocalId 本地ID
-	LocalId() uint32
-	// RemoteId 对端Id
-	RemoteId() uint32
-	// Activate 激活时间
-	Activate() time.Duration
-	LocalAddr() net.Addr
-	RemoteAddr() net.Addr
-	// CreateMessage 创建一个唯一消息Id的消息，hop为0
-	CreateMessage(typ uint8, src uint32, dst uint32, data []byte) *message.Message
-	// CreateMessageId 创建一个唯一的消息Id
-	CreateMessageId() uint32
-	NodeType() NodeType
+func NewConn(typ Type, localId, remoteId uint32, conn net.Conn, revChan map[uint32]chan *message.Message, revLock *sync.Mutex, msgIdSeq *uint32, rBufSize, wBufSize, writerQueueSize int, maxMsgLen uint32) *Conn {
+	var c Conn
+	c.typ = typ
+	c.localId = localId
+	c.remoteId = remoteId
+	c.maxMsgLen = maxMsgLen
+	c.msgIdSeq = msgIdSeq
+	c.unixNano = time.Now().UnixNano()
+	c.revChan = revChan
+	c.revLock = revLock
+	c.conn = conn
+	c.headerBuf = make([]byte, message.MsgHeaderLen)
+	if rBufSize > 16 {
+		c.r = bufio.NewReaderSize(conn, rBufSize)
+	} else {
+		c.r = conn
+	}
+	if wBufSize > 16 && writerQueueSize > 1 {
+		w := bufwriter.NewWriter(conn, writerQueueSize, wBufSize)
+		w.Start()
+		c.w = w
+	} else {
+		c.w = conn
+	}
+	return &c
 }
 
-type NodeType uint8
+type Conn struct {
+	typ       Type
+	localId   uint32
+	remoteId  uint32
+	maxMsgLen uint32
+	msgIdSeq  *uint32
+	unixNano  int64
+	headerBuf []byte
+	revChan   map[uint32]chan *message.Message
+	revLock   *sync.Mutex
+	conn      net.Conn
+	w         io.WriteCloser
+	r         io.Reader
+}
 
-func (t NodeType) String() string {
-	switch t {
-	case NodeTypeClient:
-		return "client"
-	case NodeTypeServer:
-		return "server"
-	default:
-		return "unknown"
+func (c *Conn) ReadMessage() (*message.Message, error) {
+	_, err := io.ReadAtLeast(c.r, c.headerBuf, message.MsgHeaderLen)
+	if err != nil {
+		return nil, err
+	}
+	c.unixNano = time.Now().UnixNano()
+	var checksum uint16
+	for i := 0; i < message.MsgHeaderLen-2; i++ {
+		checksum += uint16(c.headerBuf[i])
+	}
+	var m message.Message
+	m.Type = c.headerBuf[0]
+	m.Hop = c.headerBuf[1]
+	m.Id = binary.LittleEndian.Uint32(c.headerBuf[2:6])
+	m.SrcId = binary.LittleEndian.Uint32(c.headerBuf[6:10])
+	m.DestId = binary.LittleEndian.Uint32(c.headerBuf[10:14])
+	if checksum != binary.LittleEndian.Uint16(c.headerBuf[message.MsgHeaderLen-2:]) {
+		m.SrcId, m.DestId = c.localId, m.SrcId
+		m.Type = message.MsgType_Response
+		m.Data = []byte{byte(message.StateCode_CheckSumInvalid), byte(message.StateCode_CheckSumInvalid >> 8)}
+		_ = c.SendMessage(&m)
+		return nil, errors.ErrChecksumInvalid
+	}
+	dataLen := binary.LittleEndian.Uint32(c.headerBuf[14:18])
+	if dataLen > c.maxMsgLen && c.maxMsgLen > 0 {
+		m.SrcId, m.DestId = c.localId, m.SrcId
+		m.Type = message.MsgType_Response
+		m.Data = []byte{byte(message.StateCode_LengthOverflow), byte(message.StateCode_LengthOverflow >> 8)}
+		_ = c.SendMessage(&m)
+		return nil, errors.ErrLengthOverflow
+	}
+	if dataLen > 0 {
+		m.Data = make([]byte, dataLen)
+		_, err = io.ReadAtLeast(c.r, m.Data, int(dataLen))
+	}
+	return &m, err
+}
+
+func (c *Conn) SendMessage(m *message.Message) error {
+	if m.DestId == c.localId {
+		return errors.ErrWriteMsgYourself
+	}
+	msgLen := message.MsgHeaderLen + len(m.Data)
+	if msgLen > int(c.maxMsgLen) && c.maxMsgLen > 0 {
+		return errors.ErrLengthOverflow
+	}
+	data := make([]byte, msgLen)
+	data[0] = m.Type
+	data[1] = m.Hop
+	binary.LittleEndian.PutUint32(data[2:6], m.Id)
+	binary.LittleEndian.PutUint32(data[6:10], m.SrcId)
+	binary.LittleEndian.PutUint32(data[10:14], m.DestId)
+	binary.LittleEndian.PutUint32(data[14:18], uint32(len(m.Data)))
+	var checksum uint16
+	for i := 0; i < 18; i++ {
+		checksum += uint16(data[i])
+	}
+	binary.LittleEndian.PutUint16(data[18:], checksum)
+	copy(data[20:], m.Data)
+	_, err := c.w.Write(data)
+	return err
+}
+
+func (c *Conn) Send(data []byte) error {
+	return c.SendMessage(&message.Message{
+		Type:   message.MsgType_Default,
+		Hop:    0,
+		Id:     atomic.AddUint32(c.msgIdSeq, 1),
+		SrcId:  c.localId,
+		DestId: c.remoteId,
+		Data:   data,
+	})
+}
+
+func (c *Conn) SendTo(dst uint32, data []byte) error {
+	return c.SendMessage(&message.Message{
+		Type:   message.MsgType_Default,
+		Hop:    0,
+		Id:     atomic.AddUint32(c.msgIdSeq, 1),
+		SrcId:  c.localId,
+		DestId: dst,
+		Data:   data,
+	})
+}
+
+func (c *Conn) SendType(typ uint8, data []byte) error {
+	return c.SendMessage(&message.Message{
+		Type:   typ,
+		Hop:    0,
+		Id:     atomic.AddUint32(c.msgIdSeq, 1),
+		SrcId:  c.localId,
+		DestId: c.remoteId,
+		Data:   data,
+	})
+}
+
+func (c *Conn) SendTypeTo(typ uint8, dst uint32, data []byte) error {
+	return c.SendMessage(&message.Message{
+		Type:   typ,
+		Hop:    0,
+		Id:     atomic.AddUint32(c.msgIdSeq, 1),
+		SrcId:  c.localId,
+		DestId: dst,
+		Data:   data,
+	})
+}
+
+func (c *Conn) Request(ctx context.Context, data []byte) (int16, []byte, error) {
+	return c.RequestMessage(ctx, &message.Message{
+		Type:   message.MsgType_Default,
+		Id:     atomic.AddUint32(c.msgIdSeq, 1),
+		SrcId:  c.localId,
+		DestId: c.remoteId,
+		Data:   data,
+	})
+}
+
+func (c *Conn) RequestTo(ctx context.Context, dst uint32, data []byte) (int16, []byte, error) {
+	return c.RequestMessage(ctx, &message.Message{
+		Type:   message.MsgType_Default,
+		Id:     atomic.AddUint32(c.msgIdSeq, 1),
+		SrcId:  c.localId,
+		DestId: dst,
+		Data:   data,
+	})
+}
+
+func (c *Conn) RequestType(ctx context.Context, typ uint8, data []byte) (int16, []byte, error) {
+	return c.RequestMessage(ctx, &message.Message{
+		Type:   typ,
+		Id:     atomic.AddUint32(c.msgIdSeq, 1),
+		SrcId:  c.localId,
+		DestId: c.remoteId,
+		Data:   data,
+	})
+}
+
+func (c *Conn) RequestTypeTo(ctx context.Context, typ uint8, dst uint32, data []byte) (int16, []byte, error) {
+	return c.RequestMessage(ctx, &message.Message{
+		Type:   typ,
+		Id:     atomic.AddUint32(c.msgIdSeq, 1),
+		SrcId:  c.localId,
+		DestId: dst,
+		Data:   data,
+	})
+}
+
+func (c *Conn) RequestMessage(ctx context.Context, msg *message.Message) (int16, []byte, error) {
+	ch := make(chan *message.Message, 1)
+	id := msg.Id
+	c.revLock.Lock()
+	c.revChan[id] = ch
+	c.revLock.Unlock()
+	if err := c.SendMessage(msg); err != nil {
+		c.revLock.Lock()
+		delete(c.revChan, id)
+		c.revLock.Unlock()
+		close(ch)
+		return 0, nil, err
+	}
+	select {
+	case <-ctx.Done():
+		c.revLock.Lock()
+		_ch, ok := c.revChan[id]
+		if ok {
+			close(_ch)
+			delete(c.revChan, id)
+		}
+		c.revLock.Unlock()
+		return message.StateCode_RequestTimeout, nil, errors.Error(ctx.Err().Error())
+	case resp := <-ch:
+		close(ch)
+		if len(resp.Data) < 2 {
+			return message.StateCode_ResponseInvalid, nil, errors.ErrInvalidResponse
+		}
+		return int16(resp.Data[0]) | int16(resp.Data[1])<<8, resp.Data[2:], nil
 	}
 }
 
-func (t NodeType) Valid() error {
-	if t < NodeTypeClient || t > NodeTypeServer {
-		return errors.New("invalid conn type")
-	}
-	return nil
+func (c *Conn) Activate() time.Duration {
+	return time.Duration(c.unixNano)
 }
+
+func (c *Conn) LocalId() uint32 {
+	return c.localId
+}
+
+func (c *Conn) RemoteId() uint32 {
+	return c.remoteId
+}
+
+func (c *Conn) CreateMessage(typ uint8, src uint32, dst uint32, data []byte) *message.Message {
+	return &message.Message{
+		Type:   typ,
+		Id:     atomic.AddUint32(c.msgIdSeq, 1),
+		SrcId:  src,
+		DestId: dst,
+		Data:   data,
+	}
+}
+
+func (c *Conn) CreateMessageId() uint32 {
+	return atomic.AddUint32(c.msgIdSeq, 1)
+}
+
+func (c *Conn) Close() error {
+	return c.w.Close()
+}
+
+func (c *Conn) LocalAddr() net.Addr {
+	return c.conn.LocalAddr()
+}
+
+func (c *Conn) RemoteAddr() net.Addr {
+	return c.conn.RemoteAddr()
+}
+
+func (c *Conn) ConnType() Type {
+	return c.typ
+}
+
+type Type uint8
 
 const (
-	NodeTypeUnknown NodeType = iota
-	NodeTypeClient
-	NodeTypeServer
+	TypeUnknown Type = iota
+	TypeClient
+	TypeServer
 )

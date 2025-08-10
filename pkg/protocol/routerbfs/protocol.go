@@ -2,27 +2,18 @@ package routerbfs
 
 import (
 	"context"
+	"github.com/Li-giegie/node"
 	"github.com/Li-giegie/node/pkg/conn"
 	"github.com/Li-giegie/node/pkg/errors"
-	"github.com/Li-giegie/node/pkg/handler"
 	"github.com/Li-giegie/node/pkg/message"
-	"github.com/Li-giegie/node/pkg/responsewriter"
+	"github.com/Li-giegie/node/pkg/reply"
 	"github.com/Li-giegie/node/pkg/router"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-type Node interface {
-	NodeId() uint32
-	LenConn() (n int)
-	GetConn(id uint32) (conn.Conn, bool)
-	GetRouter() router.Router
-	RangeConn(f func(conn conn.Conn) bool)
-	RouteHop() uint8
-}
-
-func NewRouterBFS(protoType uint8, node Node) *RouterBFS {
+func NewRouterBFS(protoType uint8, node node.Server) *RouterBFS {
 	p := &RouterBFS{
 		node:          node,
 		protoType:     protoType,
@@ -35,10 +26,9 @@ func NewRouterBFS(protoType uint8, node Node) *RouterBFS {
 }
 
 type RouterBFS struct {
-	handler.Empty
-	protoType       uint8 //协议类型
-	init            bool  // 是否第一次OnConnect
-	node            Node  // 当前节点
+	protoType       uint8       //协议类型
+	init            bool        // 是否第一次OnConnect
+	node            node.Server // 当前节点
 	idCounter       int64
 	neighborACKWait sync.WaitGroup
 	*nodeTable      //全部节点
@@ -46,25 +36,21 @@ type RouterBFS struct {
 
 }
 
-func (p *RouterBFS) ProtocolType() uint8 {
-	return p.protoType
-}
-
-func (p *RouterBFS) OnConnect(c conn.Conn) {
+func (p *RouterBFS) OnConnect(c *conn.Conn) bool {
 	if p.init {
 		p.init = false
-		p.node.RangeConn(func(c conn.Conn) bool {
+		p.node.RangeConn(func(c *conn.Conn) bool {
 			go p.onConnect(c)
 			return true
 		})
-		return
 	}
 	go p.onConnect(c)
+	return true
 }
 
-func (p *RouterBFS) onConnect(c conn.Conn) {
+func (p *RouterBFS) onConnect(c *conn.Conn) {
 	subId := c.RemoteId()
-	p.nodeTable.AddNode(p.node.NodeId(), subId, c.NodeType())
+	p.nodeTable.AddNode(p.node.NodeId(), subId, c.ConnType())
 	p.node.GetRouter().RemoveRoute(c.RemoteId())
 	p.broadcast(0, &ProtoMsg{
 		Id:     atomic.AddInt64(&p.idCounter, 1),
@@ -76,11 +62,11 @@ func (p *RouterBFS) onConnect(c conn.Conn) {
 				Action:  UpdateAction_AddNode,
 				RootId:  p.node.NodeId(),
 				SubId:   subId,
-				SubType: c.NodeType(),
+				SubType: c.ConnType(),
 			},
 		}).Encode(),
 	})
-	if c.NodeType() == conn.NodeTypeServer {
+	if c.ConnType() == conn.TypeServer {
 		c.SendType(p.protoType, (&ProtoMsg{
 			Id:     atomic.AddInt64(&p.idCounter, 1),
 			Action: Action_NeighborASK,
@@ -90,10 +76,10 @@ func (p *RouterBFS) onConnect(c conn.Conn) {
 	}
 }
 
-func (p *RouterBFS) OnMessage(r responsewriter.ResponseWriter, msg *message.Message) {
+func (p *RouterBFS) OnMessage(r *reply.Reply, msg *message.Message) bool {
 	proto, err := p.validMessage(msg)
 	if err != nil {
-		return
+		return true
 	}
 	switch proto.Action {
 	case Action_NeighborASK: //邻居捂手请求 走单播
@@ -115,7 +101,7 @@ func (p *RouterBFS) OnMessage(r responsewriter.ResponseWriter, msg *message.Mess
 	case Action_PullNode: // 邻居响应当前节点的已知节点
 		var hasNodeList List
 		if err = hasNodeList.Decode(proto.Data); err != nil {
-			return
+			return false
 		}
 		m := hasNodeList.Map()
 		var push PushMsg
@@ -154,7 +140,7 @@ func (p *RouterBFS) OnMessage(r responsewriter.ResponseWriter, msg *message.Mess
 	case Action_PushNode:
 		var push PushMsg
 		if err = push.Decode(proto.Data); err != nil {
-			return
+			return false
 		}
 		for _, entry := range push {
 			for _, subEntry := range entry.SubEntry {
@@ -172,7 +158,7 @@ func (p *RouterBFS) OnMessage(r responsewriter.ResponseWriter, msg *message.Mess
 	case Action_Update:
 		var updateList UpdateMsg
 		if err = updateList.Decode(proto.Data); err != nil {
-			return
+			return false
 		}
 		var success = make(UpdateMsg, 0, len(updateList))
 		for _, update := range updateList {
@@ -204,7 +190,7 @@ func (p *RouterBFS) OnMessage(r responsewriter.ResponseWriter, msg *message.Mess
 	case Action_SyncHash:
 		var syncHash SyncMsg
 		if err = syncHash.Decode(proto.Data); err != nil {
-			return
+			return false
 		}
 		localHash := p.getNodeHash(syncHash.Id)
 		if *localHash != syncHash {
@@ -217,7 +203,7 @@ func (p *RouterBFS) OnMessage(r responsewriter.ResponseWriter, msg *message.Mess
 					}
 					return true
 				})
-				return
+				return false
 			}
 			r.GetConn().SendType(p.protoType, (&ProtoMsg{
 				Id:     atomic.AddInt64(&p.idCounter, 1),
@@ -231,12 +217,12 @@ func (p *RouterBFS) OnMessage(r responsewriter.ResponseWriter, msg *message.Mess
 	case Action_SyncQueryNode:
 		var syncHash SyncMsg
 		if err = syncHash.Decode(proto.Data); err != nil {
-			return
+			return false
 		}
 		dstHash := p.getNodeHash(syncHash.Id)
 		if *dstHash == syncHash {
 			var push PushMsgEntry
-			p.nodeTable.RangeSubNode(syncHash.Id, func(m map[uint32]conn.NodeType) {
+			p.nodeTable.RangeSubNode(syncHash.Id, func(m map[uint32]conn.Type) {
 				push.Root = syncHash.Id
 				push.SubEntry = make([]PushMsgSubEntry, 0, len(m))
 				for u, nodeType := range m {
@@ -255,13 +241,13 @@ func (p *RouterBFS) OnMessage(r responsewriter.ResponseWriter, msg *message.Mess
 					Data:   push.Encode(),
 				}).Encode())
 			}
-			return
+			return false
 		}
 		p.broadcast(msg.Hop, proto)
 	case Action_SyncNode:
 		var pushEntry PushMsgEntry
 		if err = pushEntry.Decode(proto.Data); err != nil {
-			return
+			return false
 		}
 		p.nodeTable.RemoveRootNode(pushEntry.Root)
 		for _, entry := range pushEntry.SubEntry {
@@ -274,16 +260,15 @@ func (p *RouterBFS) OnMessage(r responsewriter.ResponseWriter, msg *message.Mess
 			}
 			return true
 		})
-	default:
-
 	}
+	return false
 }
 
-func (p *RouterBFS) OnClose(c conn.Conn, err error) {
+func (p *RouterBFS) OnClose(c *conn.Conn, err error) bool {
 	subId := c.RemoteId()
-	p.nodeTable.RemoveNode(p.node.NodeId(), subId, c.NodeType())
+	p.nodeTable.RemoveNode(p.node.NodeId(), subId, c.ConnType())
 	p.removeRoute(subId)
-	if c.NodeType() == conn.NodeTypeServer {
+	if c.ConnType() == conn.TypeServer {
 		p.neighborTable.DeleteNeighbor(subId)
 	}
 	p.broadcast(0, &ProtoMsg{
@@ -296,10 +281,11 @@ func (p *RouterBFS) OnClose(c conn.Conn, err error) {
 				Action:  UpdateAction_RemoveNode,
 				RootId:  p.node.NodeId(),
 				SubId:   subId,
-				SubType: c.NodeType(),
+				SubType: c.ConnType(),
 			},
 		}).Encode(),
 	})
+	return true
 }
 
 func (p *RouterBFS) validMessage(msg *message.Message) (*ProtoMsg, error) {
@@ -371,9 +357,9 @@ func (p *RouterBFS) broadcast(hop uint8, msg *ProtoMsg) {
 	for _, path := range msg.Paths {
 		filterIds[path] = struct{}{}
 	}
-	var conns = make([]*Conn, 0, num)
+	var conns = make([]*conn.Conn, 0, num)
 	var connIds = make([]uint32, 0, num)
-	p.RangeNeighbor(func(id uint32, conn *Conn) bool {
+	p.RangeNeighbor(func(id uint32, conn *conn.Conn) bool {
 		if _, ok := filterIds[id]; !ok {
 			connIds = append(connIds, id)
 			conns = append(conns, conn)
@@ -416,7 +402,7 @@ func (p *RouterBFS) BFSSearch(src, dst uint32, maxDeep uint8) (result []uint32) 
 		if len(current.paths) >= int(maxDeep) {
 			return nil
 		}
-		p.RangeSubNode(current.node, func(empty map[uint32]conn.NodeType) {
+		p.RangeSubNode(current.node, func(empty map[uint32]conn.Type) {
 			var ok bool
 			if _, ok = empty[dst]; ok {
 				result = append(current.paths, dst)
@@ -480,7 +466,7 @@ func (p *RouterBFS) getNodeHash(id uint32) *SyncMsg {
 	var sIds []uint32
 	if id == p.node.NodeId() {
 		sIds = make([]uint32, 0, p.node.LenConn())
-		p.node.RangeConn(func(conn conn.Conn) bool {
+		p.node.RangeConn(func(conn *conn.Conn) bool {
 			sIds = append(sIds, conn.RemoteId())
 			return true
 		})

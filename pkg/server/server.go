@@ -3,107 +3,25 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"github.com/Li-giegie/node/internal"
+	"github.com/Li-giegie/node/internal/routemanager"
 	"github.com/Li-giegie/node/pkg/conn"
-	"github.com/Li-giegie/node/pkg/handler"
+	"github.com/Li-giegie/node/pkg/errors"
 	"github.com/Li-giegie/node/pkg/message"
-	"github.com/Li-giegie/node/pkg/responsewriter"
+	"github.com/Li-giegie/node/pkg/reply"
 	"github.com/Li-giegie/node/pkg/router"
-	"github.com/Li-giegie/node/pkg/server/implserver"
 	"net"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
-type Server interface {
-	// NodeId 当前节点ID
-	NodeId() uint32
-	// Serve 开启服务
-	Serve(l net.Listener) error
-	// ListenAndServe 侦听并开启服务,address 支持url格式例如 tcp://127.0.0.1:5555 = 127.0.0.1:5555，缺省协议默认tcp
-	ListenAndServe(address string, conf ...*tls.Config) (err error)
-	//Bridge 从当前节点桥接一个节点,组成一个更大的域，如果要完整启用该功能则需要开启节点动态发现协议
-	Bridge(conn net.Conn, remoteId uint32, remoteAuthKey []byte) (err error)
-	// GetConn 获取连接
-	GetConn(id uint32) (conn.Conn, bool)
-	// GetAllConn 获取所有连接
-	GetAllConn() []conn.Conn
-	LenConn() (n int)
-	RangeConn(f func(conn conn.Conn) bool)
-	// GetRouter 获取路由
-	GetRouter() router.Router
-	// OnAccept 注册全局OnAccept回调函数，net.Listen.Accept之后第一个回调函数，同步调用
-	OnAccept(f func(conn net.Conn) (next bool))
-	// OnConnect 注册全局OnConnect回调函数，OnAccept之后的回调函数，同步调用
-	OnConnect(f func(conn conn.Conn) (next bool))
-	// OnMessage 注册全局OnMessage回调函数，OnConnect之后每次收到请求时的回调函数，同步调用
-	OnMessage(f func(r responsewriter.ResponseWriter, m *message.Message) (next bool))
-	// OnClose 注册OnClose回调函数，连接被关闭后的回调函数，同步调用
-	OnClose(f func(conn conn.Conn, err error) (next bool))
-	// Register 注册实现了handler.Handler的处理接口，该接口的回调函数在OnAccept、OnConnect、OnMessage、OnClose之后被回调，同步调用
-	Register(typ uint8, h handler.Handler)
-	// Deregister 注销消息类型为typ处理接口
-	Deregister(typ uint8)
-	RequestTo(ctx context.Context, dst uint32, data []byte) (resp []byte, stateCode int16, err error)
-	RequestTypeTo(ctx context.Context, typ uint8, dst uint32, data []byte) (resp []byte, stateCode int16, err error)
-	// RequestMessage 构建一个消息并发起请求，不要使用此方法发送消息，除非你知道自己在干什么，m的Id是Server内部维护的
-	RequestMessage(ctx context.Context, msg *message.Message) (resp []byte, stateCode int16, err error)
-	SendTo(dst uint32, data []byte) error
-	SendTypeTo(typ uint8, dst uint32, data []byte) error
-	// SendMessage 构建一个消息并发送，不要使用此方法发送消息除非你知道自己在干什么，m的Id是Server内部维护的
-	SendMessage(m *message.Message) error
-	CreateMessageId() uint32
-	CreateMessage(typ uint8, src uint32, dst uint32, data []byte) *message.Message
-	RouteHop() uint8
-	Close()
-}
-
-func NewServer(c *Config) Server {
-	return &implserver.Server{
-		Id:                    c.Id,
-		AuthKey:               c.AuthKey,
-		AuthTimeout:           c.AuthTimeout,
-		MaxMsgLen:             c.MaxMsgLen,
-		WriterQueueSize:       c.WriterQueueSize,
-		ReaderBufSize:         c.ReaderBufSize,
-		WriterBufSize:         c.WriterBufSize,
-		MaxConnections:        c.MaxConnections,
-		SleepOnMaxConnections: c.SleepOnMaxConnections,
-		KeepaliveInterval:     c.KeepaliveInterval,
-		KeepaliveTimeout:      c.KeepaliveTimeout,
-		KeepaliveTimeoutClose: c.KeepaliveTimeoutClose,
-		MaxRouteHop:           c.MaxRouteHop,
-	}
-}
-
-func NewServerOption(id uint32, opts ...Option) Server {
-	return NewServer(DefaultConfig(append([]Option{WithId(id)}, opts...)...))
-}
-
-func DefaultConfig(opts ...Option) *Config {
-	c := &Config{
-		MaxRouteHop:           32,
-		AuthTimeout:           time.Second * 6,
-		MaxMsgLen:             0xffffff,
-		WriterQueueSize:       128,
-		ReaderBufSize:         4096,
-		WriterBufSize:         4096,
-		KeepaliveInterval:     time.Second * 20,
-		KeepaliveTimeout:      time.Second * 40,
-		KeepaliveTimeoutClose: time.Second * 120,
-	}
-	for _, opt := range opts {
-		opt(c)
-	}
-	return c
-}
-
-type Config struct {
+type Server struct {
 	// 节点Id
 	Id uint32
-	// 一条消息的最大转发次数
-	MaxRouteHop uint8
-	// 节点认证Key
+	// 节点认证key
 	AuthKey []byte
-	// 认证超时时长
+	// 认证超时
 	AuthTimeout time.Duration
 	// 大于0时启用，收发消息最大长度，最大值0xffffffff
 	MaxMsgLen uint32
@@ -123,75 +41,340 @@ type Config struct {
 	KeepaliveTimeout time.Duration
 	// 连接保活最大超时次数
 	KeepaliveTimeoutClose time.Duration
+	// 最大路由转发跳数
+	MaxRouteHop uint8
+	internalField
 }
 
-type Option func(*Config)
-
-func WithId(id uint32) Option {
-	return func(c *Config) {
-		c.Id = id
-	}
+type internalField struct {
+	hashKey   []byte
+	idCounter uint32
+	state     uint32
+	recvChan  map[uint32]chan *message.Message
+	recvLock  sync.Mutex
+	net.Listener
+	routemanager.Router
+	connections
+	Handler
 }
 
-func WithMaxRouteHop(n uint8) Option {
-	return func(c *Config) {
-		c.MaxRouteHop = n
+func (s *Server) ListenAndServe(address string, h Handler, config ...*tls.Config) (err error) {
+	var listen net.Listener
+	network, addr := internal.ParseAddr(address)
+	if n := len(config); n > 0 {
+		if n != 1 {
+			panic("only one config option is allowed")
+		}
+		listen, err = tls.Listen(network, addr, config[0])
+	} else {
+		listen, err = net.Listen(network, addr)
+	}
+	if err != nil {
+		return err
+	}
+	return s.Serve(listen, h)
+}
+
+func (s *Server) Serve(l net.Listener, h Handler) error {
+	if h == nil {
+		s.Handler = &Default
+	} else {
+		s.Handler = h
+	}
+	s.state = 1
+	s.Listener = l
+	s.recvChan = make(map[uint32]chan *message.Message)
+	s.hashKey = internal.Hash(s.AuthKey)
+	ctx, cancel := context.WithCancel(context.TODO())
+	s.StartKeepalive(ctx)
+	defer func() {
+		s.state = 0
+		cancel()
+		l.Close()
+	}()
+	for {
+		if s.MaxConnections > 0 && s.LenConn() > s.MaxConnections {
+			time.Sleep(s.SleepOnMaxConnections)
+			continue
+		}
+		native, err := l.Accept()
+		if err != nil {
+			if s.state == 1 {
+				return err
+			}
+			return nil
+		}
+		go func() {
+			if !s.OnAccept(native) {
+				_ = native.Close()
+				return
+			}
+			c, success := s.Auth(native)
+			if !success {
+				return
+			}
+			s.Handle(c)
+		}()
 	}
 }
 
-func WithAuthKey(key []byte) Option {
-	return func(c *Config) {
-		c.AuthKey = key
+func (s *Server) Auth(native net.Conn) (c *conn.Conn, success bool) {
+	var code internal.BaseAuthResponseCode
+	defer func() {
+		if code == 0 {
+			return
+		}
+		err := internal.DefaultAuthService.Response(native, &internal.BaseAuthResponse{
+			ConnType:              conn.TypeServer,
+			Code:                  code,
+			MaxMsgLen:             s.MaxMsgLen,
+			KeepaliveTimeout:      s.KeepaliveTimeout,
+			KeepaliveTimeoutClose: s.KeepaliveTimeoutClose,
+		})
+		if code != internal.BaseAuthResponseCodeSuccess || err != nil {
+			if code == internal.BaseAuthResponseCodeSuccess {
+				s.RemoveConn(c.RemoteId())
+			}
+			_ = native.Close()
+			success = false
+			c = nil
+		}
+	}()
+	req, err := internal.DefaultAuthService.ReadRequest(native, s.AuthTimeout)
+	if err != nil {
+		return nil, false
 	}
-}
-func WithAuthTimeout(timeout time.Duration) Option {
-	return func(c *Config) {
-		c.AuthTimeout = timeout
+	if req.SrcId == s.Id {
+		code = internal.BaseAuthResponseCodeInvalidSrcId
+		return nil, false
 	}
-}
-func WithMaxMsgLen(maxMsgLen uint32) Option {
-	return func(c *Config) {
-		c.MaxMsgLen = maxMsgLen
+	if req.DstId != s.Id {
+		code = internal.BaseAuthResponseCodeInvalidDestId
+		return nil, false
 	}
+	if !internal.BytesEqual(s.hashKey, req.Key) {
+		code = internal.BaseAuthResponseCodeInvalidKey
+		return nil, false
+	}
+	c = conn.NewConn(req.ConnType, s.Id, req.SrcId, native, s.recvChan, &s.recvLock, &s.idCounter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
+	if !s.AddConn(c) {
+		code = internal.BaseAuthResponseCodeSrcIdExists
+		return nil, false
+	}
+	code = internal.BaseAuthResponseCodeSuccess
+	return c, true
 }
-func WithWriterQueueSize(max int) Option {
-	return func(c *Config) {
-		c.WriterQueueSize = max
+
+func (s *Server) Handle(c *conn.Conn) {
+	s.OnConnect(c)
+	for {
+		msg, err := c.ReadMessage()
+		if err != nil {
+			_ = c.Close()
+			s.RemoveConn(c.RemoteId())
+			s.OnClose(c, err)
+			return
+		}
+		if msg.Hop >= 254 || msg.Hop >= s.MaxRouteHop && s.MaxRouteHop > 0 {
+			continue
+		}
+		msg.Hop++
+		if msg.DestId != s.Id {
+			// 本地存在
+			if dstConn, exist := s.GetConn(msg.DestId); exist {
+				_ = dstConn.SendMessage(msg)
+				continue
+			}
+			// 查路由存在
+			if route, ok := s.GetRoute(msg.DestId); ok {
+				if conn, ok := s.GetConn(route.Via); ok {
+					_ = conn.SendMessage(msg)
+					continue
+				}
+				// 路由表更新不及时
+				s.RemoveRoute(route.Dst)
+			}
+			reply.NewReply(c, msg.Id, msg.SrcId).Write(message.StateCode_NodeNotExist, nil)
+			continue
+		}
+		switch msg.Type {
+		case message.MsgType_KeepaliveASK:
+			_ = c.SendType(message.MsgType_KeepaliveACK, nil)
+		case message.MsgType_KeepaliveACK:
+		case message.MsgType_Response:
+			s.recvLock.Lock()
+			ch, ok := s.recvChan[msg.Id]
+			if ok {
+				ch <- msg
+				delete(s.recvChan, msg.Id)
+			}
+			s.recvLock.Unlock()
+		default:
+			s.OnMessage(reply.NewReply(c, msg.Id, msg.SrcId), msg)
+		}
 	}
 }
 
-func WithReaderBufSize(max int) Option {
-	return func(c *Config) {
-		c.ReaderBufSize = max
-	}
+func (s *Server) RequestTo(ctx context.Context, dst uint32, data []byte) (int16, []byte, error) {
+	return s.RequestTypeTo(ctx, message.MsgType_Default, dst, data)
 }
-func WithWriterBufSize(max int) Option {
-	return func(c *Config) {
-		c.WriterBufSize = max
-	}
+
+func (s *Server) RequestTypeTo(ctx context.Context, typ uint8, dst uint32, data []byte) (int16, []byte, error) {
+	return s.RequestMessage(ctx, &message.Message{
+		Type:   typ,
+		Id:     atomic.AddUint32(&s.idCounter, 1),
+		SrcId:  s.Id,
+		DestId: dst,
+		Data:   data,
+	})
 }
-func WithMaxConnections(max int) Option {
-	return func(c *Config) {
-		c.MaxConnections = max
+
+func (s *Server) RequestMessage(ctx context.Context, msg *message.Message) (int16, []byte, error) {
+	conn, ok := s.GetConn(msg.DestId)
+	if ok {
+		return conn.RequestMessage(ctx, msg)
 	}
-}
-func WithSleepOnMaxConnections(sleepOnMaxConnections time.Duration) Option {
-	return func(c *Config) {
-		c.SleepOnMaxConnections = sleepOnMaxConnections
+	route, ok := s.GetRoute(msg.DestId)
+	if ok {
+		if conn, ok = s.GetConn(route.Via); ok {
+			return conn.RequestMessage(ctx, msg)
+		}
 	}
+	return message.StateCode_NodeNotExist, nil, nil
 }
-func WithKeepaliveInterval(keepaliveInterval time.Duration) Option {
-	return func(c *Config) {
-		c.KeepaliveInterval = keepaliveInterval
+
+func (s *Server) SendTo(dst uint32, data []byte) error {
+	return s.SendTypeTo(message.MsgType_Default, dst, data)
+}
+
+func (s *Server) SendTypeTo(typ uint8, dst uint32, data []byte) error {
+	return s.SendMessage(&message.Message{
+		Type:   typ,
+		Id:     atomic.AddUint32(&s.idCounter, 1),
+		SrcId:  s.Id,
+		DestId: dst,
+		Data:   data,
+	})
+}
+
+func (s *Server) SendMessage(msg *message.Message) error {
+	conn, ok := s.GetConn(msg.DestId)
+	if ok {
+		return conn.SendMessage(msg)
 	}
-}
-func WithKeepaliveTimeout(timeout time.Duration) Option {
-	return func(c *Config) {
-		c.KeepaliveTimeout = timeout
+	route, ok := s.GetRoute(msg.DestId)
+	if ok {
+		if conn, ok = s.GetConn(route.Via); ok {
+			return conn.SendMessage(msg)
+		}
 	}
+	return errors.ErrNodeNotExist
 }
-func WithKeepaliveTimeoutClose(timeout time.Duration) Option {
-	return func(c *Config) {
-		c.KeepaliveTimeoutClose = timeout
+
+func (s *Server) Bridge(native net.Conn, remoteId uint32, remoteAuthKey []byte) (err error) {
+	defer func() {
+		if err != nil {
+			_ = native.Close()
+		}
+	}()
+	if remoteId == s.Id {
+		return errors.BridgeRemoteIdExistErr
+	}
+	if _, ok := s.GetConn(remoteId); ok {
+		return errors.BridgeRemoteIdExistErr
+	}
+	err = internal.DefaultAuthService.Request(native, &internal.BaseAuthRequest{
+		ConnType: conn.TypeServer,
+		SrcId:    s.NodeId(),
+		DstId:    remoteId,
+		Key:      remoteAuthKey,
+	})
+	if err != nil {
+		return err
+	}
+	resp, err := internal.DefaultAuthService.ReadResponse(native, s.AuthTimeout)
+	if err != nil {
+		return err
+	}
+	if resp.Code != internal.BaseAuthResponseCodeSuccess {
+		return errors.New(resp.Code.String())
+	}
+	c := conn.NewConn(resp.ConnType, s.Id, remoteId, native, s.recvChan, &s.recvLock, &s.idCounter, s.ReaderBufSize, s.WriterBufSize, s.WriterQueueSize, s.MaxMsgLen)
+	if !s.AddConn(c) {
+		return errors.BridgeRemoteIdExistErr
+	}
+	go s.Handle(c)
+	return nil
+}
+
+func (s *Server) NodeId() uint32 {
+	return s.Id
+}
+
+func (s *Server) Close() error {
+	if atomic.CompareAndSwapUint32(&s.state, 1, 0) {
+		err := s.Listener.Close()
+		for _, c := range s.GetAllConn() {
+			_ = c.Close()
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Server) StartKeepalive(ctx context.Context) {
+	if s.KeepaliveInterval <= 0 || s.KeepaliveTimeout <= 0 {
+		return
+	}
+	go func() {
+		if s.KeepaliveTimeoutClose < s.KeepaliveTimeout {
+			s.KeepaliveTimeoutClose = s.KeepaliveTimeout
+		}
+		tick := time.NewTicker(s.KeepaliveInterval)
+		go func() {
+			<-ctx.Done()
+			tick.Stop()
+		}()
+		defer tick.Stop()
+		var err error
+		var diff int64
+		for t := range tick.C {
+			if s.state == 0 {
+				return
+			}
+			for _, conn := range s.GetAllConn() {
+				diff = t.UnixNano() - int64(conn.Activate())
+				if diff > int64(s.KeepaliveTimeoutClose) {
+					_ = conn.Close()
+				} else if diff > int64(s.KeepaliveTimeout) {
+					if err = conn.SendType(message.MsgType_KeepaliveASK, nil); err != nil {
+						_ = conn.Close()
+					}
+				}
+			}
+		}
+	}()
+	return
+}
+
+func (s *Server) RouteHop() uint8 {
+	return s.MaxRouteHop
+}
+
+func (s *Server) GetRouter() router.Router {
+	return &s.Router
+}
+
+func (s *Server) CreateMessageId() uint32 {
+	return atomic.AddUint32(&s.idCounter, 1)
+}
+
+func (s *Server) CreateMessage(typ uint8, src uint32, dst uint32, data []byte) *message.Message {
+	return &message.Message{
+		Type:   typ,
+		Id:     atomic.AddUint32(&s.idCounter, 1),
+		SrcId:  src,
+		DestId: dst,
+		Data:   data,
 	}
 }

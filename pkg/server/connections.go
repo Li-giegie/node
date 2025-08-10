@@ -1,20 +1,20 @@
-package connmanager
+package server
 
 import (
 	"github.com/Li-giegie/node/pkg/conn"
 	"sync"
 )
 
-type ConnManager struct {
-	m map[uint32]conn.Conn
+type connections struct {
+	m map[uint32]*conn.Conn
 	l sync.RWMutex
 }
 
-func (s *ConnManager) AddConn(c conn.Conn) bool {
+func (s *connections) AddConn(c *conn.Conn) bool {
 	s.l.Lock()
 	defer s.l.Unlock()
 	if s.m == nil {
-		s.m = make(map[uint32]conn.Conn)
+		s.m = make(map[uint32]*conn.Conn)
 	}
 	_, exist := s.m[c.RemoteId()]
 	if !exist {
@@ -23,22 +23,22 @@ func (s *ConnManager) AddConn(c conn.Conn) bool {
 	return !exist
 }
 
-func (s *ConnManager) RemoveConn(id uint32) {
+func (s *connections) RemoveConn(id uint32) {
 	s.l.Lock()
 	delete(s.m, id)
 	s.l.Unlock()
 }
 
-func (s *ConnManager) GetConn(id uint32) (conn.Conn, bool) {
+func (s *connections) GetConn(id uint32) (*conn.Conn, bool) {
 	s.l.RLock()
 	v, ok := s.m[id]
 	s.l.RUnlock()
 	return v, ok
 }
 
-func (s *ConnManager) GetAllConn() []conn.Conn {
+func (s *connections) GetAllConn() []*conn.Conn {
 	s.l.RLock()
-	result := make([]conn.Conn, 0, len(s.m))
+	result := make([]*conn.Conn, 0, len(s.m))
 	for _, c := range s.m {
 		result = append(result, c)
 	}
@@ -46,7 +46,7 @@ func (s *ConnManager) GetAllConn() []conn.Conn {
 	return result
 }
 
-func (s *ConnManager) RangeConn(f func(conn conn.Conn) bool) {
+func (s *connections) RangeConn(f func(conn *conn.Conn) bool) {
 	s.l.RLock()
 	defer s.l.RUnlock()
 	for _, c := range s.m {
@@ -56,7 +56,7 @@ func (s *ConnManager) RangeConn(f func(conn conn.Conn) bool) {
 	}
 }
 
-func (s *ConnManager) LenConn() (n int) {
+func (s *connections) LenConn() (n int) {
 	s.l.RLock()
 	n = len(s.m)
 	s.l.RUnlock()

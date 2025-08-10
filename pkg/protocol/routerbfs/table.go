@@ -19,16 +19,16 @@ type nodeTable struct {
 }
 
 type NodeTableEmpty struct {
-	Cache map[uint32]conn.NodeType
+	Cache map[uint32]conn.Type
 }
 
-func (tab *nodeTable) AddNode(rootId uint32, subId uint32, subType conn.NodeType) bool {
+func (tab *nodeTable) AddNode(rootId uint32, subId uint32, subType conn.Type) bool {
 	tab.Lock()
 	defer tab.Unlock()
 	empty, ok := tab.cache[rootId]
 	if !ok {
 		tab.cache[rootId] = &NodeTableEmpty{
-			Cache: map[uint32]conn.NodeType{
+			Cache: map[uint32]conn.Type{
 				subId: subType,
 			},
 		}
@@ -51,7 +51,7 @@ func (tab *nodeTable) RemoveRootNode(rootId uint32) bool {
 	return ok
 }
 
-func (tab *nodeTable) RemoveNode(rootId uint32, subId uint32, subTyp conn.NodeType) bool {
+func (tab *nodeTable) RemoveNode(rootId uint32, subId uint32, subTyp conn.Type) bool {
 	tab.Lock()
 	defer tab.Unlock()
 	empty, ok := tab.cache[rootId]
@@ -66,11 +66,11 @@ func (tab *nodeTable) RemoveNode(rootId uint32, subId uint32, subTyp conn.NodeTy
 	if len(empty.Cache) == 0 {
 		delete(tab.cache, rootId)
 	}
-	if sType == conn.NodeTypeServer {
+	if sType == conn.TypeServer {
 		subEmpty := tab.cache[subId]
 		if subEmpty != nil {
 			for u, nodeType := range subEmpty.Cache {
-				if nodeType == conn.NodeTypeServer {
+				if nodeType == conn.TypeServer {
 					if v := tab.cache[u]; v != nil {
 						delete(v.Cache, subId)
 						if len(v.Cache) == 0 {
@@ -121,7 +121,7 @@ func (tab *nodeTable) RootList(filter ...uint32) *List {
 	return &list
 }
 
-func (tab *nodeTable) RangeSubNode(rootId uint32, callback func(map[uint32]conn.NodeType)) {
+func (tab *nodeTable) RangeSubNode(rootId uint32, callback func(map[uint32]conn.Type)) {
 	tab.RLock()
 	defer tab.RUnlock()
 	empty, rootExist := tab.cache[rootId]
@@ -148,26 +148,20 @@ func (tab *nodeTable) GetSubNodes(rootId uint32) []uint32 {
 
 func newNeighborTable() *neighborTable {
 	return &neighborTable{
-		cache: make(map[uint32]*Conn),
+		cache: make(map[uint32]*conn.Conn),
 	}
 }
 
 type neighborTable struct {
-	cache map[uint32]*Conn
+	cache map[uint32]*conn.Conn
 	l     sync.RWMutex
 }
 
-type Conn struct {
-	conn.Conn
-}
-
-func (p *neighborTable) AddNeighbor(id uint32, conn conn.Conn) bool {
+func (p *neighborTable) AddNeighbor(id uint32, conn *conn.Conn) bool {
 	p.l.Lock()
 	defer p.l.Unlock()
 	if p.cache[id] == nil {
-		p.cache[id] = &Conn{
-			Conn: conn,
-		}
+		p.cache[id] = conn
 		return true
 	}
 	return false
@@ -183,7 +177,7 @@ func (p *neighborTable) DeleteNeighbor(id uint32) bool {
 	return false
 }
 
-func (p *neighborTable) RangeNeighbor(callback func(id uint32, conn *Conn) bool) {
+func (p *neighborTable) RangeNeighbor(callback func(id uint32, conn *conn.Conn) bool) {
 	p.l.RLock()
 	defer p.l.RUnlock()
 	for u, c := range p.cache {

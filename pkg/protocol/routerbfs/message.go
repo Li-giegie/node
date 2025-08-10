@@ -155,7 +155,7 @@ type UpdateMsgEntry struct {
 	Action  UpdateAction
 	RootId  uint32
 	SubId   uint32
-	SubType conn.NodeType
+	SubType conn.Type
 }
 
 type List []uint32
@@ -204,5 +204,5 @@ func (p *PushMsgEntry) Decode(data []byte) error {
 
 type PushMsgSubEntry struct {
 	SubId   uint32
-	SubType conn.NodeType
+	SubType conn.Type
 }

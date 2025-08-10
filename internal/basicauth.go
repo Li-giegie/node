@@ -11,7 +11,7 @@ import (
 var DefaultAuthService = new(BaseAuthService)
 
 type BaseAuthRequest struct {
-	ConnType conn.NodeType
+	ConnType conn.Type
 	SrcId    uint32
 	DstId    uint32
 	Key      []byte
@@ -34,10 +34,7 @@ func (r *BaseAuthRequest) Decode(buf []byte) (err error) {
 	if len(buf) != r.Len() {
 		return errors.New("decode bad: request length invalid")
 	}
-	r.ConnType = conn.NodeType(buf[0])
-	if err = r.ConnType.Valid(); err != nil {
-		return err
-	}
+	r.ConnType = conn.Type(buf[0])
 	r.SrcId = binary.LittleEndian.Uint32(buf[1:5])
 	r.DstId = binary.LittleEndian.Uint32(buf[5:9])
 	r.Key = buf[9:]
@@ -61,7 +58,7 @@ func (s *BaseAuthService) ReadRequest(r io.Reader, timeout time.Duration) (req *
 	if err = req.Decode(buf); err != nil {
 		return nil, err
 	}
-	return req, req.ConnType.Valid()
+	return req, nil
 }
 
 type BaseAuthResponseCode uint8
@@ -99,7 +96,7 @@ func (b BaseAuthResponseCode) Valid() error {
 }
 
 type BaseAuthResponse struct {
-	ConnType              conn.NodeType
+	ConnType              conn.Type
 	Code                  BaseAuthResponseCode
 	MaxMsgLen             uint32
 	KeepaliveTimeout      time.Duration
@@ -124,10 +121,7 @@ func (r *BaseAuthResponse) Decode(buf []byte) (err error) {
 	if len(buf) != 22 {
 		return errors.New("decode bad: response length invalid")
 	}
-	r.ConnType = conn.NodeType(buf[0])
-	if err = r.ConnType.Valid(); err != nil {
-		return err
-	}
+	r.ConnType = conn.Type(buf[0])
 	r.Code = BaseAuthResponseCode(buf[1])
 	if err = r.Code.Valid(); err != nil {
 		return err

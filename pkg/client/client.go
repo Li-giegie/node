@@ -1,53 +1,24 @@
 package client
 
 import (
+	"context"
 	"crypto/tls"
-	"github.com/Li-giegie/node/pkg/client/implclient"
+	"github.com/Li-giegie/node/internal"
 	"github.com/Li-giegie/node/pkg/conn"
+	"github.com/Li-giegie/node/pkg/errors"
 	"github.com/Li-giegie/node/pkg/message"
-	"github.com/Li-giegie/node/pkg/responsewriter"
+	"github.com/Li-giegie/node/pkg/reply"
 	"net"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
-type Client interface {
-	NodeId() uint32
-	// Connect 连接并异步开启服务 address 支持url格式例如 tcp://127.0.0.1:5555 = 127.0.0.1:5555，缺省协议默认tcp，config参数只能接受0个或者1个
-	Connect(address string, config ...*tls.Config) (err error)
-	// Start 阻塞开启服务
-	Start(conn net.Conn) error
-	// OnMessage 注册全局OnMessage回调函数，OnConnect之后每次收到请求时的回调函数，同步调用
-	OnMessage(f func(r responsewriter.ResponseWriter, m *message.Message))
-	Register(typ uint8, handler func(w responsewriter.ResponseWriter, m *message.Message))
-	OnClose(f func(err error))
-	State() bool
-	conn.Conn
-}
-
-func NewClient(c *Config) Client {
-	return &implclient.Client{
-		Id:              c.Id,
-		RemoteID:        c.RemoteId,
-		RemoteKey:       c.RemoteKey,
-		AuthTimeout:     c.AuthTimeout,
-		WriterQueueSize: c.WriterQueueSize,
-		ReaderBufSize:   c.ReaderBufSize,
-		WriterBufSize:   c.WriterBufSize,
-	}
-}
-
-func NewClientOption(lid, rid uint32, opts ...Option) Client {
-	return NewClient(DefaultConfig(append([]Option{WithId(lid), WithRemoteId(rid)}, opts...)...))
-}
-
-type Option func(*Config)
-
-type Config struct {
-	// 当前节点Id
+type Client struct {
 	Id uint32
-	// 远程节点Id
-	RemoteId uint32
-	// 远程节点Key
+	// 远程节点ID
+	RemoteID uint32
+	// 认证密钥
 	RemoteKey []byte
 	// 认证超时时长
 	AuthTimeout time.Duration
@@ -57,54 +28,155 @@ type Config struct {
 	ReaderBufSize int
 	// 大于64时启用，从队列读取后进入缓冲区，缓冲区大小
 	WriterBufSize int
+	internalField
+}
+type State uint32
+
+const (
+	StateClosed State = iota
+	StateRunning
+)
+
+type internalField struct {
+	recvChan map[uint32]chan *message.Message
+	recvLock sync.Mutex
+	state    State
+	*conn.Conn
+	keepaliveInterval     time.Duration
+	keepaliveTimeout      time.Duration
+	keepaliveTimeoutClose time.Duration
+	Handler
 }
 
-func DefaultConfig(opts ...Option) *Config {
-	c := &Config{
-		AuthTimeout:     time.Second * 6,
-		WriterQueueSize: 1024,
-		ReaderBufSize:   4096,
-		WriterBufSize:   4096,
+// Connect address 支持url格式例如 tcp://127.0.0.1:5555 = 127.0.0.1:5555，缺省协议默认tcp，config参数只能接受0个或者1个
+func (c *Client) Connect(address string, h Handler, config ...*tls.Config) (err error) {
+	network, addr := internal.ParseAddr(address)
+	var native net.Conn
+	if n := len(config); n > 0 {
+		if n != 1 {
+			panic("only one config option is allowed")
+		}
+		native, err = tls.Dial(network, addr, config[0])
+	} else {
+		native, err = net.Dial(network, addr)
 	}
-	for _, opt := range opts {
-		opt(c)
+	if err != nil {
+		return err
 	}
-	return c
+	return c.Start(native, h)
 }
 
-func WithId(id uint32) Option {
-	return func(c *Config) {
-		c.Id = id
+func (c *Client) Start(native net.Conn, h Handler) (err error) {
+	defer func() {
+		if err != nil {
+			_ = native.Close()
+		}
+	}()
+	if h != nil {
+		c.Handler = h
+	} else {
+		c.Handler = &Default
 	}
-}
-func WithRemoteId(id uint32) Option {
-	return func(c *Config) {
-		c.RemoteId = id
+	err = internal.DefaultAuthService.Request(native, &internal.BaseAuthRequest{
+		ConnType: conn.TypeClient,
+		SrcId:    c.Id,
+		DstId:    c.RemoteID,
+		Key:      c.RemoteKey,
+	})
+	if err != nil {
+		return err
 	}
-}
-func WithRemoteKey(key []byte) Option {
-	return func(config *Config) {
-		config.RemoteKey = key
+	resp, err := internal.DefaultAuthService.ReadResponse(native, c.AuthTimeout)
+	if err != nil {
+		return err
 	}
+	if resp.Code != internal.BaseAuthResponseCodeSuccess {
+		return errors.New(resp.Code.String())
+	}
+	c.recvChan = make(map[uint32]chan *message.Message)
+	c.Conn = conn.NewConn(resp.ConnType, c.Id, c.RemoteID, native, c.recvChan, &c.recvLock, new(uint32), c.ReaderBufSize, c.WriterBufSize, c.WriterQueueSize, resp.MaxMsgLen)
+	c.keepaliveInterval = resp.KeepaliveTimeout / 2
+	c.keepaliveTimeout = resp.KeepaliveTimeout / 2
+	c.keepaliveTimeoutClose = resp.KeepaliveTimeoutClose
+	go c.Serve()
+	return nil
 }
-func WithAuthTimeout(timeout time.Duration) Option {
-	return func(config *Config) {
-		config.AuthTimeout = timeout
+
+func (c *Client) Serve() (err error) {
+	c.state = StateRunning
+	ctx, cancel := context.WithCancel(context.Background())
+	go c.StartKeepalive(ctx)
+	defer func() {
+		c.state = StateClosed
+		cancel()
+		_ = c.Conn.Close()
+		c.Handler.OnClose(c.Conn, err)
+	}()
+	for {
+		msg, err := c.Conn.ReadMessage()
+		if err != nil {
+			if c.state == StateRunning {
+				return err
+			}
+			return nil
+		}
+		msg.Hop++
+		if msg.DestId != c.Id {
+			continue
+		}
+		switch msg.Type {
+		case message.MsgType_KeepaliveASK:
+			_ = c.Conn.SendType(message.MsgType_KeepaliveACK, nil)
+		case message.MsgType_KeepaliveACK:
+		case message.MsgType_Response:
+			c.recvLock.Lock()
+			ch, ok := c.recvChan[msg.Id]
+			if ok {
+				ch <- msg
+				delete(c.recvChan, msg.Id)
+			}
+			c.recvLock.Unlock()
+		default:
+			c.Handler.OnMessage(reply.NewReply(c.Conn, msg.Id, msg.SrcId), msg)
+		}
 	}
 }
 
-func WithWriterQueueSize(writerQueueSize int) Option {
-	return func(config *Config) {
-		config.WriterQueueSize = writerQueueSize
+func (c *Client) NodeId() uint32 {
+	return c.Id
+}
+
+func (c *Client) Close() error {
+	if atomic.CompareAndSwapUint32((*uint32)(&c.state), uint32(StateRunning), uint32(StateClosed)) {
+		return c.Conn.Close()
+	}
+	return nil
+}
+
+func (c *Client) StartKeepalive(ctx context.Context) {
+	if c.keepaliveInterval < time.Millisecond*100 {
+		c.keepaliveInterval = time.Millisecond * 100
+	}
+	tick := time.NewTicker(c.keepaliveInterval)
+	defer tick.Stop()
+	go func() {
+		<-ctx.Done()
+		tick.Stop()
+	}()
+	var diff int64
+	var err error
+	for t := range tick.C {
+		diff = t.UnixNano() - int64(c.Conn.Activate())
+		if diff >= int64(c.keepaliveTimeoutClose) {
+			_ = c.Conn.Close()
+		} else if diff >= int64(c.keepaliveTimeout) {
+			if err = c.Conn.SendType(message.MsgType_KeepaliveASK, nil); err != nil {
+				_ = c.Conn.Close()
+			}
+		}
 	}
 }
-func WithReaderBufSize(bufferSize int) Option {
-	return func(config *Config) {
-		config.ReaderBufSize = bufferSize
-	}
-}
-func WithWriterBufSize(bufferSize int) Option {
-	return func(config *Config) {
-		config.WriterBufSize = bufferSize
-	}
+
+func (c *Client) State() State {
+	return c.state
 }
