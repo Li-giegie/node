@@ -11,12 +11,12 @@ node是一个Go（Golang）编写的轻量级TCP框架，node帮助您轻松、�
 ## 传输协议
 ```go
 type Message struct {
-	Type   uint8  //消息类型，不同的协议该值不同
-	Hop    uint8  //消息的跳数
-	Id     uint32 //消息唯一标识
-	SrcId  uint32 //源节点
-	DestId uint32 //目的节点
-	Data   []byte //消息内容
+Type   uint8  //消息类型，不同的协议该值不同
+Hop    uint8  //消息的跳数
+Id     uint32 //消息唯一标识
+SrcId  uint32 //源节点
+DestId uint32 //目的节点
+Data   []byte //消息内容
 }
 ```
 <table >
@@ -45,43 +45,41 @@ go get -u github.com/Li-giegie/node@latest
 ### Server
 [Server 完整的示例](example/base/server/main.go)
 ```go
+package main
+
+import (
+	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/pkg/conn"
+	"github.com/Li-giegie/node/pkg/message"
+	"github.com/Li-giegie/node/pkg/reply"
+	"github.com/Li-giegie/node/pkg/server"
+	"log"
+	"net"
+)
+
 func main() {
-	// 创建8000服务端节点
-	s := node.NewServerOption(8000)
-	// OnAccept 注册全局OnAccept回调函数，net.Listen.Accept之后第一个回调函数，同步调用
-	s.OnAccept(func(conn net.Conn) (next bool) {
-		log.Println("OnAccept", conn.RemoteAddr().String())
+	srv := node.NewServerOption(1)
+	server.OnAccept(func(conn net.Conn) (next bool) {
+		log.Println("OnAccept", conn.RemoteAddr())
 		return true
 	})
-	// OnConnect 注册全局OnConnect回调函数，OnAccept之后的回调函数，同步调用
-	s.OnConnect(func(conn conn.Conn) (next bool) {
-		log.Println("OnConnect", conn.RemoteAddr().String())
+	server.OnConnect(func(conn *conn.Conn) (next bool) {
+		log.Println("OnConnect", conn.RemoteAddr())
 		return true
 	})
-	// OnMessage 注册全局OnMessage回调函数，OnConnect之后每次收到请求时的回调函数，同步调用
-	s.OnMessage(func(r responsewriter.ResponseWriter, m *message.Message) (next bool) {
+	server.OnMessage(func(r *reply.Reply, m *message.Message) (next bool) {
 		log.Println("OnMessage", m.String())
+		r.String(message.StateCode_Success, "pong")
 		return true
 	})
-	// OnClose 注册OnClose回调函数，连接被关闭后的回调函数
-	s.OnClose(func(conn conn.Conn, err error) (next bool) {
-		log.Println("OnClose", conn.RemoteAddr().String())
+	server.OnClose(func(conn *conn.Conn, err error) (next bool) {
+		log.Println("OnClose", conn.RemoteAddr())
 		return true
 	})
-	// Register 注册实现了handler.Handler的处理接口，该接口的回调函数在OnAccept、OnConnect、OnMessage、OnClose之后被回调
-	s.Register(message.MsgType_Default, &handler.Default{
-		OnAcceptFunc:  nil,
-		OnConnectFunc: nil,
-		OnMessageFunc: func(r responsewriter.ResponseWriter, m *message.Message) {
-			log.Println("OnAcceptFunc")
-			r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", s.NodeId())))
-		},
-		OnCloseFunc: nil,
-	})
-	// 侦听并开启服务
-	err := s.ListenAndServe("0.0.0.0:8000")
+	log.Println("listen: 7890")
+	err := srv.ListenAndServe(":7890", nil)
 	if err != nil {
-		log.Println(err)
+		log.Fatal(err)
 	}
 }
 ```
@@ -89,49 +87,46 @@ func main() {
 ### Client
 [Client 完整的示例](example/base/client/main.go)
 ```go
+package main
+
+import (
+	"context"
+	"github.com/Li-giegie/node"
+	"github.com/Li-giegie/node/pkg/client"
+	"github.com/Li-giegie/node/pkg/conn"
+	"github.com/Li-giegie/node/pkg/message"
+	"github.com/Li-giegie/node/pkg/reply"
+	"log"
+)
+
 func main() {
-	// 创建一个节点为8081的节点
-	c := node.NewClientOption(8081, 8000)
-	// OnAccept 注册全局OnAccept回调函数，net.Listen.Accept之后第一个回调函数，同步调用
-	c.OnAccept(func(conn net.Conn) (next bool) {
-		log.Println("OnAccept", conn.RemoteAddr().String())
+	c := node.NewClientOption(2, 1)
+	client.OnMessage(func(r *reply.Reply, m *message.Message) (next bool) {
+		log.Println(m.String())
+		r.Write(message.StateCode_Success, m.Data)
 		return true
 	})
-	// OnConnect 注册全局OnConnect回调函数，OnAccept之后的回调函数，同步调用
-	c.OnConnect(func(conn conn.Conn) (next bool) {
-		log.Println("OnConnect", conn.RemoteAddr().String())
+	client.OnClose(func(conn *conn.Conn, err error) (next bool) {
+		log.Println("OnClose", err)
 		return true
 	})
-	// OnMessage 注册全局OnMessage回调函数，OnConnect之后每次收到请求时的回调函数，同步调用
-	c.OnMessage(func(r responsewriter.ResponseWriter, m *message.Message) (next bool) {
-		log.Println("OnMessage", m.String())
-		return true
-	})
-	// OnClose 注册OnClose回调函数，连接被关闭后的回调函数
-	exitChan := make(chan struct{}, 1)
-	c.OnClose(func(conn conn.Conn, err error) (next bool) {
-		log.Println("OnClose", conn.RemoteAddr().String())
-		exitChan <- struct{}{}
-		return true
-	})
-	// Register 注册实现了handler.Handler的处理接口，该接口的回调函数在OnAccept、OnConnect、OnMessage、OnClose之后被回调
-	c.Register(message.MsgType_Default, &handler.Default{
-		OnAcceptFunc:  nil,
-		OnConnectFunc: nil,
-		OnMessageFunc: func(r responsewriter.ResponseWriter, m *message.Message) {
-			log.Println("OnMessageFunc handle")
-			r.Response(message.StateCode_Success, []byte(fmt.Sprintf("response from %d: ok", c.NodeId())))
-		},
-		OnCloseFunc: nil,
-	})
-	err := c.Connect("0.0.0.0:8000")
+	err := c.Connect("tcp://127.0.0.1:7890", nil)
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatal("connect err:", err)
+		return
 	}
-	res, code, err := c.Request(context.Background(), []byte("hello"))
-	fmt.Println(code, string(res), err)
-	_ = c.Close()
-	<-exitChan
+	log.Println("connect: 7890")
+	defer c.Close()
+	if err = c.Send([]byte("hello")); err != nil {
+		log.Println("send err:", err)
+		return
+	}
+	code, data, err := c.Request(context.TODO(), []byte("world"))
+	if err != nil {
+		log.Println("request err:", err)
+		return
+	}
+	log.Println("code:", code, "data:", string(data))
 }
 ```
 
